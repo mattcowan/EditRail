@@ -1,0 +1,188 @@
+/**
+ * Editor Tool Rail.
+ *
+ * The rail region is inserted as the FIRST CHILD of
+ * .interface-interface-skeleton__body so it participates in the editor's own
+ * flex layout — the canvas shrinks beside it instead of being overlapped.
+ * The flyout is positioned from the region wrapper, OUTSIDE the toolbar's
+ * overflow-y, so it never clips.
+ */
+
+.toolrail-region {
+    position: relative;
+    flex: 0 0 52px;
+    display: flex;
+    z-index: 30;
+}
+
+#toolrail-rail {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 12px 4px;
+    background: #1e1e1e;
+    border-right: 1px solid #2f2f2f;
+    overflow-y: auto;
+}
+
+.toolrail-tool {
+    position: relative;
+    flex: 0 0 auto;
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    color: #e0e0e0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.toolrail-tool-icon {
+    display: grid;
+    place-items: center;
+}
+
+.toolrail-tool svg {
+    fill: currentColor;
+}
+
+.toolrail-tool:hover {
+    background: #2f2f2f;
+}
+
+.toolrail-tool:focus-visible {
+    outline: 2px solid #3858e9;
+    outline-offset: 2px;
+}
+
+/* Pressed = armed (or that tool's surface is open, for onActivate tools).
+   Never color alone: the pressed state also renders a left edge bar, and
+   aria-pressed carries it for assistive tech. */
+.toolrail-tool[aria-pressed="true"] {
+    background: #3858e9;
+    color: #fff;
+}
+
+.toolrail-tool[aria-pressed="true"]::before {
+    content: "";
+    position: absolute;
+    left: -4px;
+    top: 8px;
+    bottom: 8px;
+    width: 3px;
+    border-radius: 2px;
+    background: #7b90ff;
+}
+
+.toolrail-separator {
+    width: 28px;
+    height: 1px;
+    flex: 0 0 auto;
+    background: #3f3f3f;
+    margin: 4px 0;
+}
+
+/* Corner glyph marking a tool with a flyout. */
+.toolrail-flyout-glyph {
+    position: absolute;
+    right: 3px;
+    bottom: 3px;
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-bottom: 5px solid currentColor;
+}
+
+/* Flyout menu, floated to the right of the rail. */
+.toolrail-flyout {
+    position: absolute;
+    left: calc(100% + 4px);
+    min-width: 180px;
+    padding: 4px;
+    background: #1e1e1e;
+    border: 1px solid #3f3f3f;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    z-index: 31;
+}
+
+.toolrail-flyout-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 40px;
+    padding: 6px 10px;
+    color: #e0e0e0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 13px;
+    text-align: left;
+}
+
+.toolrail-flyout-item:hover {
+    background: #2f2f2f;
+}
+
+.toolrail-flyout-item:focus-visible {
+    outline: 2px solid #3858e9;
+    outline-offset: -2px;
+}
+
+.toolrail-flyout-icon {
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+}
+
+.toolrail-flyout-icon svg {
+    fill: currentColor;
+}
+
+/* Pinned quick slots: the × is pointer-only sugar (aria-hidden, not
+   focusable); the keyboard paths are the Delete key on the slot and the
+   block menu's Pin/Unpin item. */
+.toolrail-slot-remove {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    width: 16px;
+    height: 16px;
+    display: none;
+    place-items: center;
+    background: #cc1818;
+    color: #fff;
+    border-radius: 50%;
+    font-size: 12px;
+    line-height: 1;
+}
+
+.toolrail-tool--pinned:hover .toolrail-slot-remove,
+.toolrail-tool--pinned:focus-visible .toolrail-slot-remove {
+    display: grid;
+}
+
+/* Drop-target hint while a block drag hovers the rail. */
+.toolrail-region.is-drop-target #toolrail-rail {
+    outline: 2px dashed #3858e9;
+    outline-offset: -4px;
+}
+
+/* Dashicon glyphs for pinned slots whose block type declares one — the
+   editor always ships the dashicons stylesheet. */
+.toolrail-tool .dashicons {
+    color: inherit;
+}
+
+/* The admin small-screen breakpoint: below it the editor is already tight. */
+@media (max-width: 782px) {
+    .toolrail-region {
+        display: none;
+    }
+}

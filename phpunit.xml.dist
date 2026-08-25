@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit
+    bootstrap="tests/phpunit/bootstrap.php"
+    colors="true"
+    beStrictAboutOutputDuringTests="true"
+    failOnWarning="true"
+>
+    <testsuites>
+        <testsuite name="toolrail">
+            <directory prefix="Test_" suffix=".php">./tests/phpunit</directory>
+        </testsuite>
+    </testsuites>
+    <php>
+        <const name="TOOLRAIL_TESTING" value="true"/>
+    </php>
+    <coverage>
+        <include>
+            <directory suffix=".php">./includes</directory>
+        </include>
+    </coverage>
+</phpunit>
