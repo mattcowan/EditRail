@@ -39,6 +39,7 @@
   var sprintf = wp.i18n ? wp.i18n.sprintf : function (s) { return s; };
 
   var SLOTS_KEY = 'toolrail-quick-slots';
+  var CONFIGS_KEY = 'toolrail-slot-configs';
   var SHAPE_FILL = '#b9b9b9';
 
   // -------------------------------------------------------------------
@@ -52,8 +53,34 @@
     image: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M4 5h16a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6a1 1 0 011-1zm1 2v10h14V7H5zm3 2a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm-2 7l3.5-4 2.5 3 2-2.5L18 16H6z"/></svg>',
     shape: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M9 3a6 6 0 015.2 9H21v9h-9v-6.8A6 6 0 019 3zm5 11.7a6 6 0 01-2 .3v5h7v-5h-5zM9 5a4 4 0 100 8 4 4 0 000-8z"/></svg>',
     section: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M3 4h18v2H3V4zm2 4h14a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1V9a1 1 0 011-1zm1 2v4h12v-4H6zM3 18h18v2H3v-2z"/></svg>',
-    pin: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zm0 2.3L6 8.7v6.6l6 3.4 6-3.4V8.7l-6-3.4zM12 8l3.5 2v4L12 16l-3.5-2v-4L12 8z"/></svg>'
+    pin: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zm0 2.3L6 8.7v6.6l6 3.4 6-3.4V8.7l-6-3.4zM12 8l3.5 2v4L12 16l-3.5-2v-4L12 8z"/></svg>',
+    gear: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 9a3 3 0 110 6 3 3 0 010-6zm-1.7-6h3.4l.5 2.4c.6.2 1.1.5 1.6.9l2.3-.8 1.7 3-1.8 1.6a6.7 6.7 0 010 1.8l1.8 1.6-1.7 3-2.3-.8c-.5.4-1 .7-1.6.9l-.5 2.4h-3.4l-.5-2.4a6.6 6.6 0 01-1.6-.9l-2.3.8-1.7-3 1.8-1.6a6.7 6.7 0 010-1.8L4.2 8.5l1.7-3 2.3.8c.5-.4 1-.7 1.6-.9L10.3 3z"/></svg>'
   };
+
+  /**
+   * Paint a block type's icon into a span. Block icons come in three
+   * shapes: a dashicon slug string, {src: slug}, or {src: ReactElement/
+   * component} (inline-SVG block.json icons arrive as the last) — the
+   * React shapes render through wp.element so a pinned third-party block
+   * shows its real icon instead of a generic glyph.
+   */
+  function renderBlockIcon(span, icon) {
+    var src = icon && typeof icon === 'object' && 'src' in icon ? icon.src : icon;
+    if (typeof src === 'string' && src !== '') {
+      span.className += ' dashicons dashicons-' + src;
+      return;
+    }
+    if (src && wp.element && wp.element.createRoot) {
+      try {
+        var node = typeof src === 'function' ? wp.element.createElement(src) : src;
+        wp.element.createRoot(span).render(node);
+        return;
+      } catch (e) {
+        /* Fall through to the generic glyph. */
+      }
+    }
+    span.innerHTML = ICONS.pin;
+  }
 
   // -------------------------------------------------------------------
   // Shape output — PURE core serialization (the Phase 2 guardrail:
@@ -277,6 +304,73 @@
     return true;
   }
 
+  /** Move a pinned slot up (-1) or down (+1) in the rail order. */
+  function moveSlot(blockName, delta) {
+    var slots = loadSlots();
+    var idx = slots.indexOf(blockName);
+    var to = idx + delta;
+    if (idx === -1 || to < 0 || to >= slots.length) {
+      return false;
+    }
+    slots.splice(idx, 1);
+    slots.splice(to, 0, blockName);
+    saveSlots(slots);
+    window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
+    rerender();
+    return true;
+  }
+
+  // Named quick-slot configurations — a per-user browser preference like
+  // the slots themselves ({name: [blockNames]} in localStorage).
+  function loadConfigs() {
+    try {
+      var raw = window.localStorage.getItem(CONFIGS_KEY);
+      var parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function persistConfigs(map) {
+    try {
+      window.localStorage.setItem(CONFIGS_KEY, JSON.stringify(map));
+    } catch (e) {
+      /* Private windows etc. */
+    }
+  }
+
+  function saveConfig(name) {
+    if (typeof name !== 'string' || name.trim() === '') {
+      return false;
+    }
+    var map = loadConfigs();
+    map[name.trim()] = loadSlots();
+    persistConfigs(map);
+    return true;
+  }
+
+  function loadConfig(name) {
+    var map = loadConfigs();
+    if (!Object.prototype.hasOwnProperty.call(map, name) || !Array.isArray(map[name])) {
+      return false;
+    }
+    saveSlots(map[name].filter(function (n) { return typeof n === 'string'; }));
+    window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
+    rerender();
+    return true;
+  }
+
+  function deleteConfig(name) {
+    var map = loadConfigs();
+    if (!Object.prototype.hasOwnProperty.call(map, name)) {
+      return false;
+    }
+    delete map[name];
+    persistConfigs(map);
+    return true;
+  }
+
   /**
    * Pinned slots as tool descriptors. Unknown block types (their plugin is
    * deactivated) are SKIPPED, not deleted — reactivating restores them.
@@ -295,8 +389,7 @@
           type.title || name
         ),
         icon: '',
-        dashicon: typeof type.icon === 'string' ? type.icon
-          : (type.icon && typeof type.icon.src === 'string' ? type.icon.src : ''),
+        blockIcon: type.icon,
         insertBlock: name,
         pinnedBlock: name
       };
@@ -613,6 +706,310 @@
   }
 
   // -------------------------------------------------------------------
+  // Toolbar settings dialog — choose which blocks show as quick slots,
+  // reorder them, and save/load named sets. All of it is a per-user
+  // browser preference (localStorage), never site or post data.
+  // -------------------------------------------------------------------
+
+  var settingsOpen = false;
+
+  function insertableBlockTypes() {
+    return wp.blocks.getBlockTypes().filter(function (t) {
+      // Parent-restricted blocks (core/column etc.) can't insert at the
+      // document root, which is where armed insertion lands them.
+      return t && t.title && !t.parent && (!t.supports || t.supports.inserter !== false);
+    });
+  }
+
+  function settingsNode() {
+    return document.querySelector('.toolrail-settings');
+  }
+
+  function gearButton() {
+    var rail = document.getElementById('toolrail-rail');
+    return rail ? rail.querySelector('[data-tool="settings"]') : null;
+  }
+
+  /** Keep an open dialog truthful when slots change OUTSIDE it (a drag
+      onto the rail, the block menu's pin item). Its own buttons refresh
+      explicitly with a focus target, which runs after this and wins. */
+  function onToolsUpdatedWhileOpen() {
+    if (settingsOpen) {
+      refreshSettings();
+    }
+  }
+
+  function closeSettings(refocusGear) {
+    var node = settingsNode();
+    if (node) {
+      node.remove();
+    }
+    settingsOpen = false;
+    document.removeEventListener('mousedown', onSettingsMousedown, true);
+    window.removeEventListener('toolrail:tools-updated', onToolsUpdatedWhileOpen);
+    var gear = gearButton();
+    if (gear) {
+      gear.setAttribute('aria-expanded', 'false');
+      if (refocusGear) {
+        gear.focus();
+      }
+    }
+  }
+
+  function onSettingsMousedown(e) {
+    var node = settingsNode();
+    var gear = gearButton();
+    if (node && !node.contains(e.target) && e.target !== gear && !(gear && gear.contains(e.target))) {
+      closeSettings(false);
+    }
+  }
+
+  function settingsRow(tag, className) {
+    var el = document.createElement(tag);
+    if (className) {
+      el.className = className;
+    }
+    return el;
+  }
+
+  function settingsButton(label, onClick, className) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'toolrail-settings-btn' + (className ? ' ' + className : '');
+    btn.textContent = label;
+    btn.addEventListener('click', onClick);
+    return btn;
+  }
+
+  /** Rebuild the dialog's content; focusSelector restores focus after. */
+  function refreshSettings(focusSelector) {
+    var node = settingsNode();
+    if (!node) {
+      return;
+    }
+    var searchValue = '';
+    var existingSearch = node.querySelector('#toolrail-settings-search');
+    if (existingSearch) {
+      searchValue = existingSearch.value;
+    }
+    node.textContent = '';
+    buildSettingsContent(node, searchValue);
+    var target = focusSelector ? node.querySelector(focusSelector) : null;
+    (target || node.querySelector('#toolrail-settings-search')).focus();
+  }
+
+  function buildSettingsContent(node, searchValue) {
+    var head = settingsRow('div', 'toolrail-settings-head');
+    var title = settingsRow('h2', 'toolrail-settings-title');
+    title.textContent = __('Toolbar settings', 'toolrail');
+    title.id = 'toolrail-settings-title';
+    head.appendChild(title);
+    var close = settingsButton('×', function () { closeSettings(true); }, 'toolrail-settings-close');
+    close.setAttribute('aria-label', __('Close toolbar settings', 'toolrail'));
+    head.appendChild(close);
+    node.appendChild(head);
+
+    var note = settingsRow('p', 'toolrail-settings-note');
+    note.textContent = __('Pinned blocks appear on the toolbar as quick-insert tools. They are saved in this browser, for you only.', 'toolrail');
+    node.appendChild(note);
+
+    // --- Add a block ---
+    var searchLabel = settingsRow('label', 'toolrail-settings-label');
+    searchLabel.setAttribute('for', 'toolrail-settings-search');
+    searchLabel.textContent = __('Add a block', 'toolrail');
+    node.appendChild(searchLabel);
+
+    var search = document.createElement('input');
+    search.type = 'search';
+    search.id = 'toolrail-settings-search';
+    search.className = 'toolrail-settings-search';
+    search.placeholder = __('Search block types…', 'toolrail');
+    search.value = searchValue || '';
+    node.appendChild(search);
+
+    var results = settingsRow('div', 'toolrail-settings-results');
+    results.id = 'toolrail-settings-results';
+    node.appendChild(results);
+
+    function renderResults() {
+      results.textContent = '';
+      var term = search.value.trim().toLowerCase();
+      var pinned = loadSlots();
+      var matches = insertableBlockTypes().filter(function (t) {
+        if (pinned.indexOf(t.name) !== -1) {
+          return false;
+        }
+        if (!term) {
+          return false;
+        }
+        return t.title.toLowerCase().indexOf(term) !== -1 || t.name.toLowerCase().indexOf(term) !== -1;
+      }).slice(0, 12);
+
+      if (!term) {
+        var hint = settingsRow('p', 'toolrail-settings-empty');
+        hint.textContent = __('Type to search the available block types.', 'toolrail');
+        results.appendChild(hint);
+        return;
+      }
+      if (!matches.length) {
+        var none = settingsRow('p', 'toolrail-settings-empty');
+        none.textContent = __('No matching blocks.', 'toolrail');
+        results.appendChild(none);
+        return;
+      }
+      matches.forEach(function (t) {
+        var btn = settingsButton(t.title, function () {
+          pinBlock(t.name);
+          refreshSettings('#toolrail-settings-search');
+        }, 'toolrail-settings-result');
+        btn.setAttribute('aria-label', sprintf(
+          /* translators: %s: block title. */
+          __('Pin %s to the toolbar', 'toolrail'),
+          t.title
+        ));
+        btn.dataset.block = t.name;
+        results.appendChild(btn);
+      });
+    }
+    search.addEventListener('input', renderResults);
+    renderResults();
+
+    // --- Pinned blocks ---
+    var pinnedHead = settingsRow('h3', 'toolrail-settings-subtitle');
+    pinnedHead.textContent = __('Pinned blocks', 'toolrail');
+    node.appendChild(pinnedHead);
+
+    var pinnedList = settingsRow('ul', 'toolrail-settings-pinned');
+    var slots = loadSlots();
+    if (!slots.length) {
+      var empty = settingsRow('p', 'toolrail-settings-empty');
+      empty.textContent = __('Nothing pinned yet.', 'toolrail');
+      node.appendChild(empty);
+    }
+    slots.forEach(function (name, i) {
+      var type = wp.blocks.getBlockType(name);
+      var li = settingsRow('li', 'toolrail-settings-pinnedrow');
+      var label = settingsRow('span', 'toolrail-settings-pinnedname');
+      label.textContent = type ? type.title : name + ' ' + __('(inactive)', 'toolrail');
+      li.appendChild(label);
+
+      var up = settingsButton('↑', function () {
+        if (moveSlot(name, -1)) {
+          refreshSettings('.toolrail-settings-pinnedrow[data-block="' + name + '"] .toolrail-settings-up');
+        }
+      }, 'toolrail-settings-up');
+      up.setAttribute('aria-label', sprintf(__('Move %s up', 'toolrail'), label.textContent));
+      up.disabled = i === 0;
+      li.appendChild(up);
+
+      var down = settingsButton('↓', function () {
+        if (moveSlot(name, 1)) {
+          refreshSettings('.toolrail-settings-pinnedrow[data-block="' + name + '"] .toolrail-settings-down');
+        }
+      }, 'toolrail-settings-down');
+      down.setAttribute('aria-label', sprintf(__('Move %s down', 'toolrail'), label.textContent));
+      down.disabled = i === slots.length - 1;
+      li.appendChild(down);
+
+      var remove = settingsButton(__('Remove', 'toolrail'), function () {
+        unpinBlock(name);
+        refreshSettings('#toolrail-settings-search');
+      }, 'toolrail-settings-remove');
+      remove.setAttribute('aria-label', sprintf(__('Unpin %s', 'toolrail'), label.textContent));
+      li.appendChild(remove);
+
+      li.dataset.block = name;
+      pinnedList.appendChild(li);
+    });
+    if (slots.length) {
+      node.appendChild(pinnedList);
+    }
+
+    // --- Saved sets ---
+    var setsHead = settingsRow('h3', 'toolrail-settings-subtitle');
+    setsHead.textContent = __('Saved sets', 'toolrail');
+    node.appendChild(setsHead);
+
+    var saveRow = settingsRow('div', 'toolrail-settings-saverow');
+    var nameLabel = settingsRow('label', 'toolrail-settings-label');
+    nameLabel.setAttribute('for', 'toolrail-settings-setname');
+    nameLabel.textContent = __('Save the current set as', 'toolrail');
+    node.appendChild(nameLabel);
+
+    var nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.id = 'toolrail-settings-setname';
+    nameInput.className = 'toolrail-settings-search';
+    saveRow.appendChild(nameInput);
+    saveRow.appendChild(settingsButton(__('Save set', 'toolrail'), function () {
+      if (saveConfig(nameInput.value)) {
+        refreshSettings('#toolrail-settings-setname');
+      } else {
+        nameInput.focus();
+      }
+    }, 'toolrail-settings-saveset'));
+    node.appendChild(saveRow);
+
+    var configs = loadConfigs();
+    var configNames = Object.keys(configs);
+    if (configNames.length) {
+      var setList = settingsRow('ul', 'toolrail-settings-sets');
+      configNames.forEach(function (cfg) {
+        var li = settingsRow('li', 'toolrail-settings-setrow');
+        var label = settingsRow('span', 'toolrail-settings-pinnedname');
+        label.textContent = cfg;
+        li.appendChild(label);
+        var load = settingsButton(__('Load', 'toolrail'), function () {
+          loadConfig(cfg);
+          refreshSettings('#toolrail-settings-search');
+        }, 'toolrail-settings-load');
+        load.setAttribute('aria-label', sprintf(__('Load the set %s', 'toolrail'), cfg));
+        li.appendChild(load);
+        var del = settingsButton(__('Delete', 'toolrail'), function () {
+          deleteConfig(cfg);
+          refreshSettings('#toolrail-settings-setname');
+        }, 'toolrail-settings-delset');
+        del.setAttribute('aria-label', sprintf(__('Delete the set %s', 'toolrail'), cfg));
+        li.appendChild(del);
+        li.dataset.config = cfg;
+        setList.appendChild(li);
+      });
+      node.appendChild(setList);
+    }
+  }
+
+  function openSettings(wrapper) {
+    if (settingsOpen) {
+      closeSettings(true);
+      return;
+    }
+    closeFlyout(false);
+
+    var node = settingsRow('div', 'toolrail-settings');
+    node.setAttribute('role', 'dialog');
+    node.setAttribute('aria-labelledby', 'toolrail-settings-title');
+    node.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeSettings(true);
+      }
+    });
+
+    buildSettingsContent(node, '');
+    wrapper.appendChild(node);
+    settingsOpen = true;
+
+    var gear = gearButton();
+    if (gear) {
+      gear.setAttribute('aria-expanded', 'true');
+    }
+    document.addEventListener('mousedown', onSettingsMousedown, true);
+    window.addEventListener('toolrail:tools-updated', onToolsUpdatedWhileOpen);
+    node.querySelector('#toolrail-settings-search').focus();
+  }
+
+  // -------------------------------------------------------------------
   // DOM
   // -------------------------------------------------------------------
 
@@ -632,8 +1029,8 @@
 
     var icon = document.createElement('span');
     icon.className = 'toolrail-tool-icon';
-    if (tool.dashicon) {
-      icon.className += ' dashicons dashicons-' + tool.dashicon;
+    if (tool.pinnedBlock) {
+      renderBlockIcon(icon, tool.blockIcon);
     } else if (tool.icon) {
       icon.innerHTML = tool.icon;
     } else {
@@ -737,6 +1134,27 @@
         rail.appendChild(buildToolButton(slot, wrapper));
       });
     }
+
+    // The settings gear is always the rail's last control.
+    rail.appendChild(buildSeparator());
+    var gear = document.createElement('button');
+    gear.type = 'button';
+    gear.className = 'toolrail-tool toolrail-tool--settings';
+    gear.dataset.tool = 'settings';
+    gear.setAttribute('aria-label', __('Toolbar settings — choose which blocks show as quick-insert tools', 'toolrail'));
+    gear.title = __('Toolbar settings', 'toolrail');
+    gear.setAttribute('aria-haspopup', 'dialog');
+    gear.setAttribute('aria-expanded', settingsOpen ? 'true' : 'false');
+    gear.tabIndex = -1;
+    var gearIcon = document.createElement('span');
+    gearIcon.className = 'toolrail-tool-icon';
+    gearIcon.innerHTML = ICONS.gear;
+    gearIcon.setAttribute('aria-hidden', 'true');
+    gear.appendChild(gearIcon);
+    gear.addEventListener('click', function () {
+      openSettings(wrapper);
+    });
+    rail.appendChild(gear);
 
     // Roving tabindex: the first button is the single tab stop.
     var firstBtn = rail.querySelector('.toolrail-tool');
@@ -977,6 +1395,11 @@
     pinBlock: pinBlock,
     unpinBlock: unpinBlock,
     isPinned: isPinned,
+    moveSlot: moveSlot,
+    saveConfig: saveConfig,
+    loadConfig: loadConfig,
+    deleteConfig: deleteConfig,
+    getConfigs: loadConfigs,
     getActiveTool: function () { return activeTool; },
     setActiveTool: setActiveTool
   };
