@@ -4,20 +4,21 @@ Tags: block editor, toolbar, tools, accessibility
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.2.0
+Stable tag: 0.3.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-A Photoshop-familiar left toolbar for the block editor. Tools insert ordinary core blocks; other plugins register their own tools through a small provider API.
+A movable, Photoshop-familiar toolbar for the block editor — dock it to any edge or float it. Tools insert ordinary core blocks; other plugins register their own tools through a small provider API.
 
 == Description ==
 
-Editor Tool Rail adds a vertical toolbar to the post editor's left edge. Selecting a tool arms it: the next click in the canvas inserts that tool's block at the click point, then the rail returns to Select (Shift-click keeps the tool armed).
+Editor Tool Rail adds a toolbar to the post editor — docked to the left edge by default, movable to any edge or floating as a palette. Selecting a tool arms it: the next click in the canvas inserts that tool's block at the click point, then the rail returns to Select (Shift-click keeps the tool armed).
 
 Everything the rail inserts is an ordinary core block — deactivating this plugin changes nothing about how authored content renders or stays editable.
 
-* Baseline tools: Select, Text, Heading, Image, Shape (circle, rounded rectangle, hexagon, star), Section.
-* Pin any block type as a quick-insert tool: drag it from the inserter onto the rail, or use "Pin to toolbar" in the block's options menu. Pins are a per-user browser preference.
+* Built-in tools: Select, Shape (circle, rounded rectangle, hexagon, star), Section. Text, Heading and Image ship as ordinary pinned blocks, so you can reorder or remove them like anything else you pin.
+* Pin any block type as a quick-insert tool: search for it in Toolbar settings, drag it from the inserter onto the rail, or use "Pin to toolbar" in the block's options menu. Pins are a per-user browser preference.
+* Save pinned arrangements as named sets, and move them between browsers or sites as small JSON files (Export/Import in Toolbar settings). A set may name blocks a site doesn't have — those stay in the set and appear when their plugin or theme is active.
 * Move the toolbar where you want it: it starts on the left edge, and can dock to the right edge (past the settings side panel), to a full-width bar across the top or the bottom, or float free as a Photoshop-style palette. Drag it by the grip and release near an edge to snap it there, or pick a position in Toolbar settings. Flyouts and panels open away from the docked edge — a top toolbar opens downward, a bottom one upward.
 * Full keyboard operability: one tab stop, arrow keys, Home/End, Escape disarms. Arrow keys follow the toolbar's orientation — Up/Down along a vertical rail with ArrowRight opening a tool's flyout, Left/Right along a horizontal one with ArrowDown opening the flyout. Repositioning has a keyboard path of its own in Toolbar settings, so it never depends on dragging.
 * Provider API for themes and plugins: PHP filter `toolrail_tool_providers` + JS `window.toolrail.registerTool()`.
@@ -33,6 +34,12 @@ In your browser, for you only — the same as pinned blocks and saved sets. It i
 Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a position under "Toolbar position".
 
 == Changelog ==
+
+= 0.3.0 =
+* Text, Heading and Image are now ordinary pinned blocks (reorder, remove, re-pin them like any other) instead of fixed built-ins. They seed as defaults the first time; removing them sticks.
+* Export any saved set as a JSON file and import set files, including sets from other sites — blocks a site doesn't register are kept in the set and appear when their plugin or theme is active, with the outcome reported in text.
+* Fix: a pinned core block (Cover, for example) showed an empty button — core block icons are viewBox-only SVGs with no intrinsic size, and nothing sized them.
+* Tool flyouts now attach to pinned blocks too: a registered tool may name `parent: 'text'` (aliases the pinned Paragraph slot), a block name like `'core/paragraph'`, or a slot id.
 
 = 0.2.0 =
 * Add toolbar positioning: dock left (default), right, top or bottom, or float the toolbar. Drag by the grip to snap to an edge, or choose a position in Toolbar settings.

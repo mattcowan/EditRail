@@ -289,33 +289,16 @@
   // renders a flyout. Registered tools are merged in by railModel().
   // -------------------------------------------------------------------
 
+  // Text, Heading and Image are NOT built-ins — they ship as DEFAULT_SLOTS
+  // (see loadSlots), so authors can reorder, remove and re-pin them like
+  // any other block. Built-ins are only the tools no block type expresses:
+  // Select, the Shape flyout, and Section.
   var BUILTIN_TOOLS = [
     {
       id: 'select',
       label: __('Select', 'toolrail'),
       icon: ICONS.select,
       select: true
-    },
-    {
-      id: 'text',
-      label: __('Text', 'toolrail'),
-      hint: __('click in the canvas to insert a paragraph; Shift-click keeps the tool active', 'toolrail'),
-      icon: ICONS.text,
-      insertBlock: 'core/paragraph'
-    },
-    {
-      id: 'heading',
-      label: __('Heading', 'toolrail'),
-      hint: __('click in the canvas to insert a heading; Shift-click keeps the tool active', 'toolrail'),
-      icon: ICONS.heading,
-      insertBlock: 'core/heading'
-    },
-    {
-      id: 'image',
-      label: __('Image', 'toolrail'),
-      hint: __('click in the canvas to insert an image placeholder with its media library controls', 'toolrail'),
-      icon: ICONS.image,
-      insertBlock: 'core/image'
     },
     {
       id: 'shape',
@@ -418,13 +401,25 @@
     return true;
   }
 
+  /**
+   * The out-of-the-box quick slots. Text, Heading and Image are ORDINARY
+   * pinned blocks (owner decision 2026-08-26) — reorderable, removable,
+   * and saved-set–able like anything the author pins. They seed only while
+   * the storage key has never been written: an author who removes all
+   * three stays at an empty set, not a resurrected default.
+   */
+  var DEFAULT_SLOTS = ['core/paragraph', 'core/heading', 'core/image'];
+
   function loadSlots() {
     try {
       var raw = window.localStorage.getItem(SLOTS_KEY);
-      var parsed = raw ? JSON.parse(raw) : [];
+      if (null === raw) {
+        return DEFAULT_SLOTS.slice();
+      }
+      var parsed = JSON.parse(raw);
       return Array.isArray(parsed) ? parsed.filter(function (n) { return typeof n === 'string'; }) : [];
     } catch (e) {
-      return [];
+      return DEFAULT_SLOTS.slice();
     }
   }
 
@@ -568,9 +563,38 @@
         icon: '',
         blockIcon: type.icon,
         insertBlock: name,
-        pinnedBlock: name
+        pinnedBlock: name,
+        children: []
       };
     }).filter(Boolean);
+  }
+
+  /**
+   * Where a registered tool's `parent` may land besides a built-in id.
+   * 'text'/'heading'/'image' were top-level built-ins before those became
+   * default slots (2026-08-26); the aliases keep every published
+   * integration (the Typography Stylist handoff uses parent: 'text')
+   * working against the slot that replaced them. Block names and full
+   * slot ids are accepted too, so a provider can nest under ANY pinned
+   * block: parent: 'core/paragraph' or parent: 'pin:core/paragraph'.
+   */
+  var PARENT_SLOT_ALIASES = {
+    text: 'core/paragraph',
+    heading: 'core/heading',
+    image: 'core/image'
+  };
+
+  function slotForParent(slots, parent) {
+    var wanted = Object.prototype.hasOwnProperty.call(PARENT_SLOT_ALIASES, parent)
+      ? PARENT_SLOT_ALIASES[parent]
+      : parent;
+    var found = null;
+    slots.forEach(function (slot) {
+      if (slot.pinnedBlock === wanted || slot.id === wanted) {
+        found = slot;
+      }
+    });
+    return found;
   }
 
   /**
@@ -595,6 +619,8 @@
       };
     });
 
+    var slots = slotTools();
+
     registered.forEach(function (t) {
       if (t.parent) {
         var host = null;
@@ -603,6 +629,11 @@
             host = candidate;
           }
         });
+        // Slots host children too — by alias ('text'), block name
+        // ('core/paragraph') or slot id ('pin:core/paragraph').
+        if (!host) {
+          host = slotForParent(slots, t.parent);
+        }
         if (host) {
           host.children.push(t);
           return;
@@ -623,7 +654,7 @@
       });
     });
 
-    return { tools: topLevel, slots: slotTools() };
+    return { tools: topLevel, slots: slots };
   }
 
   function findTool(id) {
@@ -1116,6 +1147,112 @@
     return fieldset;
   }
 
+  // -------------------------------------------------------------------
+  // Saved-set import/export. Sets travel as small JSON files so a set
+  // built on one site works on another — including a site whose theme or
+  // plugins don't register some of the blocks. Unavailable blocks are
+  // KEPT in the set and simply don't render until their provider is
+  // active (the same skip-not-delete rule the rail applies to slots).
+  // -------------------------------------------------------------------
+
+  /** WP block-name grammar: namespace/name, lowercase alnum + dashes. */
+  var BLOCK_NAME_PATTERN = /^[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*$/;
+
+  /** One transient line for the settings dialog's role="status" region. */
+  var settingsStatus = '';
+
+  function missingBlockCount(blocks) {
+    return blocks.filter(function (name) {
+      return !wp.blocks.getBlockType(name);
+    }).length;
+  }
+
+  function exportConfig(name) {
+    var map = loadConfigs();
+    if (!Object.prototype.hasOwnProperty.call(map, name)) {
+      return false;
+    }
+    var payload = {
+      format: 'toolrail-set',
+      version: 1,
+      name: name,
+      blocks: map[name]
+    };
+    var slug = name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'set';
+    var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'toolrail-set-' + slug + '.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    return true;
+  }
+
+  /**
+   * Validate + store a parsed import. Returns a result object; never
+   * throws. Invalid block-name entries are dropped (they could not be
+   * looked up or rendered anyway); a name collision gets a " (2)" suffix
+   * rather than silently overwriting the author's existing set.
+   */
+  function importConfigPayload(parsed) {
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.blocks)) {
+      return { ok: false, error: __('Not a Toolrail set file — expected JSON with a "blocks" array.', 'toolrail') };
+    }
+    var blocks = parsed.blocks.filter(function (n) {
+      return typeof n === 'string' && BLOCK_NAME_PATTERN.test(n);
+    });
+    var dropped = parsed.blocks.length - blocks.length;
+
+    var base = typeof parsed.name === 'string' && parsed.name.trim() !== ''
+      ? parsed.name.trim()
+      : __('Imported set', 'toolrail');
+    var map = loadConfigs();
+    var name = base;
+    var n = 2;
+    while (Object.prototype.hasOwnProperty.call(map, name)) {
+      name = base + ' (' + n + ')';
+      n++;
+    }
+
+    map[name] = blocks;
+    persistConfigs(map);
+
+    return {
+      ok: true,
+      name: name,
+      total: blocks.length,
+      missing: missingBlockCount(blocks),
+      dropped: dropped
+    };
+  }
+
+  function importStatusMessage(result) {
+    var msg = sprintf(
+      /* translators: 1: set name, 2: block count. */
+      __('Imported "%1$s" (%2$d blocks).', 'toolrail'),
+      result.name,
+      result.total
+    );
+    if (result.missing > 0) {
+      msg += ' ' + sprintf(
+        /* translators: %d: count of blocks not registered on this site. */
+        __('%d of them are not available on this site — they stay in the set and appear when their plugin or theme is active.', 'toolrail'),
+        result.missing
+      );
+    }
+    if (result.dropped > 0) {
+      msg += ' ' + sprintf(
+        /* translators: %d: count of invalid entries. */
+        __('%d invalid entries were ignored.', 'toolrail'),
+        result.dropped
+      );
+    }
+    return msg;
+  }
+
   function buildSettingsContent(node, searchValue) {
     var head = settingsRow('div', 'toolrail-settings-head');
     var title = settingsRow('h2', 'toolrail-settings-title');
@@ -1255,6 +1392,16 @@
     setsHead.textContent = __('Saved sets', 'toolrail');
     node.appendChild(setsHead);
 
+    // Import/load outcomes land here in TEXT (never color/glyph alone).
+    // Rendered on every build so the region exists before it speaks;
+    // the message itself is transient — shown once, cleared on render.
+    var status = settingsRow('p', 'toolrail-settings-status');
+    status.setAttribute('role', 'status');
+    status.id = 'toolrail-settings-status';
+    status.textContent = settingsStatus;
+    settingsStatus = '';
+    node.appendChild(status);
+
     var saveRow = settingsRow('div', 'toolrail-settings-saverow');
     var nameLabel = settingsRow('label', 'toolrail-settings-label');
     nameLabel.setAttribute('for', 'toolrail-settings-setname');
@@ -1286,10 +1433,24 @@
         li.appendChild(label);
         var load = settingsButton(__('Load', 'toolrail'), function () {
           loadConfig(cfg);
+          var missing = missingBlockCount(loadSlots());
+          if (missing > 0) {
+            settingsStatus = sprintf(
+              /* translators: 1: set name, 2: count of unavailable blocks. */
+              __('Loaded "%1$s". %2$d pinned blocks are not available on this site and stay hidden until their plugin or theme is active.', 'toolrail'),
+              cfg,
+              missing
+            );
+          }
           refreshSettings('#toolrail-settings-search');
         }, 'toolrail-settings-load');
         load.setAttribute('aria-label', sprintf(__('Load the set %s', 'toolrail'), cfg));
         li.appendChild(load);
+        var exp = settingsButton(__('Export', 'toolrail'), function () {
+          exportConfig(cfg);
+        }, 'toolrail-settings-export');
+        exp.setAttribute('aria-label', sprintf(__('Export the set %s as a file', 'toolrail'), cfg));
+        li.appendChild(exp);
         var del = settingsButton(__('Delete', 'toolrail'), function () {
           deleteConfig(cfg);
           refreshSettings('#toolrail-settings-setname');
@@ -1301,6 +1462,39 @@
       });
       node.appendChild(setList);
     }
+
+    // --- Import ---
+    var importLabel = settingsRow('label', 'toolrail-settings-label');
+    importLabel.setAttribute('for', 'toolrail-settings-import');
+    importLabel.textContent = __('Import a set file', 'toolrail');
+    node.appendChild(importLabel);
+
+    var importInput = document.createElement('input');
+    importInput.type = 'file';
+    importInput.id = 'toolrail-settings-import';
+    importInput.className = 'toolrail-settings-import';
+    importInput.accept = 'application/json,.json';
+    importInput.setAttribute('aria-describedby', 'toolrail-settings-status');
+    importInput.addEventListener('change', function () {
+      var file = importInput.files && importInput.files[0];
+      if (!file) {
+        return;
+      }
+      file.text().then(function (text) {
+        var result;
+        try {
+          result = importConfigPayload(JSON.parse(text));
+        } catch (e) {
+          result = { ok: false, error: __('That file is not valid JSON.', 'toolrail') };
+        }
+        settingsStatus = result.ok ? importStatusMessage(result) : result.error;
+        refreshSettings('#toolrail-settings-import');
+      }).catch(function () {
+        settingsStatus = __('The file could not be read.', 'toolrail');
+        refreshSettings('#toolrail-settings-import');
+      });
+    });
+    node.appendChild(importInput);
   }
 
   /**
@@ -1823,18 +2017,26 @@
 
     var model = railModel();
 
-    model.tools.forEach(function (tool, i) {
-      // Separate the built-in set from registered top-level tools.
-      if (i === BUILTIN_TOOLS.length && registered.length) {
-        rail.appendChild(buildSeparator());
-      }
+    // Order: Select, then the pinned slots (Text/Heading/Image ship as
+    // defaults there), then the remaining built-ins (Shape, Section), then
+    // registered top-level tools — so the default rail reads select · text
+    // · heading · image exactly as it did when those were built-ins.
+    rail.appendChild(buildToolButton(model.tools[0], wrapper));
+
+    model.slots.forEach(function (slot) {
+      rail.appendChild(buildToolButton(slot, wrapper));
+    });
+
+    rail.appendChild(buildSeparator());
+    model.tools.slice(1, BUILTIN_TOOLS.length).forEach(function (tool) {
       rail.appendChild(buildToolButton(tool, wrapper));
     });
 
-    if (model.slots.length) {
+    var registeredTop = model.tools.slice(BUILTIN_TOOLS.length);
+    if (registeredTop.length) {
       rail.appendChild(buildSeparator());
-      model.slots.forEach(function (slot) {
-        rail.appendChild(buildToolButton(slot, wrapper));
+      registeredTop.forEach(function (tool) {
+        rail.appendChild(buildToolButton(tool, wrapper));
       });
     }
 
@@ -2135,6 +2337,8 @@
     loadConfig: loadConfig,
     deleteConfig: deleteConfig,
     getConfigs: loadConfigs,
+    exportConfig: exportConfig,
+    importConfig: importConfigPayload,
     getActiveTool: function () { return activeTool; },
     setActiveTool: setActiveTool,
     getDock: function () { return position.dock; },

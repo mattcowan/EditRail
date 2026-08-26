@@ -210,6 +210,21 @@ body.toolrail-dragging * {
     fill: currentColor;
 }
 
+/* Core block icons (@wordpress/icons) ship viewBox-only SVGs with NO
+   width/height attributes — no intrinsic size, so they measured 0×0 and
+   a pinned Cover block showed an empty button (found live 2026-08-26;
+   same trap as an SVG logo without dimensions). Sizing here covers every
+   icon; the hand-drawn built-ins carry matching 24px attributes anyway. */
+.toolrail-tool-icon svg {
+    width: 24px;
+    height: 24px;
+}
+
+.toolrail-flyout-icon svg {
+    width: 20px;
+    height: 20px;
+}
+
 .toolrail-tool:hover {
     background: #2f2f2f;
 }
@@ -524,6 +539,39 @@ body.toolrail-dragging * {
     display: flex;
     gap: 6px;
     align-items: stretch;
+}
+
+/* Live region for import/load outcomes. Reserves no space when empty. */
+.toolrail-settings-status {
+    color: #9ec1ff;
+    margin: 6px 0 0;
+}
+
+.toolrail-settings-status:empty {
+    display: none;
+}
+
+.toolrail-settings-import {
+    width: 100%;
+    margin-top: 4px;
+    color: #e0e0e0;
+    font-size: 12px;
+}
+
+.toolrail-settings-import::file-selector-button {
+    min-height: 32px;
+    margin-right: 8px;
+    padding: 4px 10px;
+    background: #2a2a2a;
+    color: #e0e0e0;
+    border: 1px solid #4f4f4f;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.toolrail-settings-import:focus-visible {
+    outline: 2px solid #3858e9;
+    outline-offset: 1px;
 }
 
 .toolrail-settings-saverow .toolrail-settings-search {

@@ -18,15 +18,18 @@ test.use({ storageState: AUTH });
 async function openNewPost(page) {
   await page.goto('/wp-admin/post-new.php');
 
-  // The dock is a per-user browser preference, so a spec that moves the
-  // rail would otherwise leak its position into every later spec. Only
-  // pay for a reload when something was actually left behind.
-  const hadPosition = await page.evaluate(() => {
-    const stored = window.localStorage.getItem('toolrail-position');
-    window.localStorage.removeItem('toolrail-position');
-    return stored !== null;
+  // Dock, pins and saved sets are per-user browser preferences, so a spec
+  // that changes any of them would otherwise leak state into every later
+  // spec. Clearing the keys also restores the DEFAULT pinned slots
+  // (Text/Heading/Image), which several tests rely on. Only pay for a
+  // reload when something was actually left behind.
+  const hadState = await page.evaluate(() => {
+    const keys = ['toolrail-position', 'toolrail-quick-slots', 'toolrail-slot-configs'];
+    const had = keys.some((k) => window.localStorage.getItem(k) !== null);
+    keys.forEach((k) => window.localStorage.removeItem(k));
+    return had;
   });
-  if (hadPosition) {
+  if (hadState) {
     await page.reload();
   }
 
@@ -66,7 +69,7 @@ test.describe('rail chrome + APG toolbar', () => {
 
     // Select is the default armed tool.
     await expect(page.locator('#toolrail-rail [data-tool="select"]')).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.locator('#toolrail-rail [data-tool="text"]')).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveAttribute('aria-pressed', 'false');
   });
 
   test('one tab stop; arrows, Home and End move focus', async ({ page }) => {
@@ -80,7 +83,7 @@ test.describe('rail chrome + APG toolbar', () => {
 
     await page.locator('#toolrail-rail [data-tool="select"]').focus();
     await page.keyboard.press('ArrowDown');
-    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('text');
+    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('pin:core/paragraph');
     await page.keyboard.press('End');
     const last = await page.evaluate(() => document.activeElement.dataset.tool);
     expect(last).toBeTruthy();
@@ -110,23 +113,23 @@ test.describe('armed-tool insertion', () => {
   test('arm Text, click canvas: paragraph inserted, tool returns to Select', async ({ page }) => {
     await openNewPost(page);
 
-    await page.locator('#toolrail-rail [data-tool="text"]').click();
-    await expect(page.locator('#toolrail-rail [data-tool="text"]')).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').click();
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('#toolrail-rail [data-tool="select"]')).toHaveAttribute('aria-pressed', 'false');
 
     await canvas(page).locator('body').click({ position: { x: 300, y: 400 } });
 
     expect(await blockNames(page)).toContain('core/paragraph');
     await expect(page.locator('#toolrail-rail [data-tool="select"]')).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.locator('#toolrail-rail [data-tool="text"]')).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveAttribute('aria-pressed', 'false');
   });
 
   test('Shift-click keeps the tool armed for repeat inserts', async ({ page }) => {
     await openNewPost(page);
 
-    await page.locator('#toolrail-rail [data-tool="heading"]').click();
+    await page.locator('#toolrail-rail [data-tool="pin:core/heading"]').click();
     await canvas(page).locator('body').click({ position: { x: 300, y: 400 }, modifiers: ['Shift'] });
-    await expect(page.locator('#toolrail-rail [data-tool="heading"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/heading"]')).toHaveAttribute('aria-pressed', 'true');
 
     await canvas(page).locator('body').click({ position: { x: 300, y: 450 } });
     const names = await blockNames(page);
@@ -169,11 +172,30 @@ test.describe('shape flyout', () => {
 });
 
 test.describe('quick slots', () => {
-  test('pin via the block menu, persist across reload, Delete unpins', async ({ page }) => {
+  test('Text, Heading and Image ship as default, reorderable pinned slots', async ({ page }) => {
     await openNewPost(page);
 
-    // Insert a paragraph to have a block to pin.
-    await page.locator('#toolrail-rail [data-tool="text"]').click();
+    // Fresh state (openNewPost cleared the key): the three defaults render
+    // as slots between Select and the remaining built-ins, in order.
+    const order = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#toolrail-rail .toolrail-tool')).map((b) => b.dataset.tool)
+    );
+    expect(order.slice(0, 4)).toEqual(['select', 'pin:core/paragraph', 'pin:core/heading', 'pin:core/image']);
+    expect(order).toContain('shape');
+
+    // Defaults are ordinary slots: reorder Heading above Text.
+    await page.evaluate(() => window.toolrail.moveSlot('core/heading', -1));
+    const reordered = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#toolrail-rail .toolrail-tool')).map((b) => b.dataset.tool)
+    );
+    expect(reordered.slice(1, 3)).toEqual(['pin:core/heading', 'pin:core/paragraph']);
+  });
+
+  test('unpin and re-pin via the block menu, persist across reload, Delete unpins', async ({ page }) => {
+    await openNewPost(page);
+
+    // Insert a paragraph to have a block whose menu we can open.
+    await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').click();
     await canvas(page).locator('body').click({ position: { x: 300, y: 400 } });
 
     // A dispatched selectBlock() gives no DOM focus, and Gutenberg hides the
@@ -184,15 +206,21 @@ test.describe('quick slots', () => {
     await page.keyboard.type('Pin me');
     await page.keyboard.press('Escape');
 
-    // Keyboard path: Pin to toolbar in the block options menu.
+    // Paragraph is DEFAULT-pinned, so the menu offers Unpin first — the
+    // keyboard path works in both directions.
+    await page.locator('.block-editor-block-toolbar button[aria-label="Options"]').click();
+    await page.locator('.components-menu-item__button, .components-menu-item__item', { hasText: 'Unpin from toolbar' }).first().click();
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveCount(0);
+
+    await page.keyboard.press('Escape');
     await page.locator('.block-editor-block-toolbar button[aria-label="Options"]').click();
     await page.locator('.components-menu-item__button, .components-menu-item__item', { hasText: 'Pin to toolbar' }).first().click();
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toBeVisible();
 
-    const slot = page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]');
-    await expect(slot).toBeVisible();
-
-    // Persists (localStorage) across a reload.
-    await openNewPost(page);
+    // Persists (localStorage) across a PLAIN reload — openNewPost would
+    // deliberately wipe the state this assertion exists to observe.
+    await page.reload();
+    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toBeVisible();
 
     // Delete on the focused slot unpins it.
@@ -200,6 +228,103 @@ test.describe('quick slots', () => {
     await page.keyboard.press('Delete');
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveCount(0);
     expect(await page.evaluate(() => window.localStorage.getItem('toolrail-quick-slots'))).not.toContain('core/paragraph');
+  });
+
+  test('a pinned core block renders a visible icon (viewBox-only SVGs get sized)', async ({ page }) => {
+    await openNewPost(page);
+
+    // core/cover's @wordpress/icons SVG has NO width/height attributes —
+    // it measured 0×0 and the slot looked empty until the CSS sized it.
+    await page.evaluate(() => window.toolrail.pinBlock('core/cover'));
+    const size = await page.evaluate(() => {
+      const svg = document.querySelector('#toolrail-rail [data-tool="pin:core/cover"] .toolrail-tool-icon svg');
+      if (!svg) { return null; }
+      const r = svg.getBoundingClientRect();
+      return { w: Math.round(r.width), h: Math.round(r.height) };
+    });
+    expect(size).toEqual({ w: 24, h: 24 });
+  });
+});
+
+test.describe('saved-set import/export', () => {
+  test('export downloads the set as JSON; import restores it, name-deduped', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('#toolrail-settings-setname').fill('travel kit');
+    await page.locator('.toolrail-settings-saveset').click();
+
+    const downloadPromise = page.waitForEvent('download');
+    await page.locator('.toolrail-settings-setrow[data-config="travel kit"] .toolrail-settings-export').click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe('toolrail-set-travel-kit.json');
+
+    const fs = require('fs');
+    const tmp = path.join(__dirname, '.auth', 'exported-set.json');
+    await download.saveAs(tmp);
+    const payload = JSON.parse(fs.readFileSync(tmp, 'utf8'));
+    fs.unlinkSync(tmp);
+    expect(payload.format).toBe('toolrail-set');
+    expect(payload.name).toBe('travel kit');
+    expect(payload.blocks).toEqual(['core/paragraph', 'core/heading', 'core/image']);
+
+    // Import the same payload back: the existing name gets a suffix
+    // instead of silently overwriting.
+    await page.locator('#toolrail-settings-import').setInputFiles({
+      name: 'toolrail-set-travel-kit.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify(payload)),
+    });
+    await expect(page.locator('.toolrail-settings-setrow[data-config="travel kit (2)"]')).toBeVisible();
+    await expect(page.locator('#toolrail-settings-status')).toContainText('Imported "travel kit (2)" (3 blocks).');
+  });
+
+  test('a set with blocks this site does not register imports and loads gracefully', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('#toolrail-settings-import').setInputFiles({
+      name: 'other-theme-set.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify({
+        format: 'toolrail-set',
+        version: 1,
+        name: 'other theme',
+        blocks: ['core/quote', 'othertheme/fancy-hero', 'not a block name'],
+      })),
+    });
+
+    // 1 kept-but-unavailable block, 1 invalid entry dropped, both said in text.
+    const status = page.locator('#toolrail-settings-status');
+    await expect(status).toContainText('Imported "other theme" (2 blocks).');
+    await expect(status).toContainText('1 of them are not available on this site');
+    await expect(status).toContainText('1 invalid entries were ignored');
+
+    // Loading it: the unknown block is KEPT in storage but not rendered.
+    await page.locator('.toolrail-settings-setrow[data-config="other theme"] .toolrail-settings-load').click();
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/quote"]')).toBeVisible();
+    await expect(page.locator('#toolrail-rail [data-tool="pin:othertheme/fancy-hero"]')).toHaveCount(0);
+    expect(await page.evaluate(() => window.localStorage.getItem('toolrail-quick-slots'))).toContain('othertheme/fancy-hero');
+    await expect(status).toContainText('not available on this site');
+  });
+
+  test('a malformed file is refused with a message, not a throw', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('#toolrail-settings-import').setInputFiles({
+      name: 'not-json.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from('this is not json'),
+    });
+    await expect(page.locator('#toolrail-settings-status')).toContainText('not valid JSON');
+
+    await page.locator('#toolrail-settings-import').setInputFiles({
+      name: 'wrong-shape.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify({ hello: 'world' })),
+    });
+    await expect(page.locator('#toolrail-settings-status')).toContainText('expected JSON with a "blocks" array');
   });
 });
 
@@ -338,7 +463,7 @@ test.describe('rail position', () => {
 
     // Still a vertical toolbar, and still fully operable.
     await expect(page.locator('#toolrail-rail')).toHaveAttribute('aria-orientation', 'vertical');
-    await page.locator('#toolrail-rail [data-tool="text"]').click();
+    await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').click();
     await canvas(page).locator('body').click({ position: { x: 300, y: 400 } });
     expect(await blockNames(page)).toContain('core/paragraph');
   });
@@ -361,7 +486,7 @@ test.describe('rail position', () => {
     // APG: a horizontal toolbar moves on Left/Right, not Up/Down.
     await page.locator('#toolrail-rail [data-tool="select"]').focus();
     await page.keyboard.press('ArrowRight');
-    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('text');
+    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('pin:core/paragraph');
     await page.keyboard.press('ArrowLeft');
     expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('select');
   });
@@ -673,7 +798,7 @@ test.describe('registration API', () => {
       });
     });
 
-    await page.locator('#toolrail-rail [data-tool="text"]').focus();
+    await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').focus();
     await page.keyboard.press('ArrowRight');
     await expect(page.locator('.toolrail-flyout [data-tool="e2e-child"]')).toBeVisible();
 
@@ -719,7 +844,7 @@ test.describe('registration API', () => {
     await expect(page.locator('#toolrail-rail [data-tool="clean-id"]')).toBeVisible();
 
     // The rail is still painting pressed state — the sweep survived.
-    await page.locator('#toolrail-rail [data-tool="text"]').click();
-    await expect(page.locator('#toolrail-rail [data-tool="text"]')).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').click();
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveAttribute('aria-pressed', 'true');
   });
 });

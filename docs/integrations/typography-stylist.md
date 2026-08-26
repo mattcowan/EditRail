@@ -5,6 +5,23 @@ Typography Stylist (session boundary); this doc + snippet is everything TS needs
 its side. Degradation is graceful in both directions: TS without Toolrail changes nothing,
 Toolrail without TS simply never shows the button.
 
+## The zero-code lane already works — read this before writing anything
+
+**Any user can put a Typography Stylist button on the rail today, with no TS-side code at
+all**, because quick slots pin arbitrary block types: open **Toolbar settings** (the gear
+at the end of the rail), search "Typography", and pin it — or drag it from the inserter
+onto the rail, or use "Pin to toolbar" in the block's options menu. The pinned slot renders
+the block's own icon, armed-inserts `typost/block` on canvas click, and rides the saved-sets
+feature (named per-user configurations). Verified live on mnc4 2026-08-25: pin → slot with
+the real TS icon → canvas click → a `typost/block` in the document.
+
+So the `registerTool` integration below is **optional polish**, not a prerequisite. Ship it
+only if TS wants something pinning can't give: a button present for every user by default
+(pins are per-user browser preferences), nesting under the Text flyout, an `onActivate`
+that opens TS UI instead of inserting, or a block preconfigured via `createBlock` attrs.
+A separate "bridge" plugin between the two is not needed in either case — the provider API
+below IS the bridge, and it lives in whichever plugin registers.
+
 ## What you get
 
 A "Typography Stylist" tool nested in the rail's **Text** tool flyout (open with
@@ -32,6 +49,12 @@ window.toolrail.registerTool({
 Descriptors, not React nodes — the rail owns the roving tabindex (deliberately the same
 shape as your own `typost_editor_toolbar_buttons` filter). The registry fires
 `toolrail:tools-updated` on `window` after each successful registration.
+
+**About `parent` since 0.3.0:** Text/Heading/Image are pinned slots rather than fixed
+built-ins, and `'text'` is an alias for the pinned Paragraph slot. A block name
+(`'core/paragraph'`) or a slot id (`'pin:core/paragraph'`) also works — against ANY
+pinned block, `typost/block` included. If the author has unpinned the parent, the tool
+renders at top level instead of vanishing.
 
 **PHP** — declare yourself a provider so Toolrail enqueues your script on post-editor
 screens, ordered after the rail:
