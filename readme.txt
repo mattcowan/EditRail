@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools, accessibility
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.3.0
+Stable tag: 0.1.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -20,7 +20,7 @@ Everything the rail inserts is an ordinary core block — deactivating this plug
 * Pin any block type as a quick-insert tool: search for it in Toolbar settings, drag it from the inserter onto the rail, or use "Pin to toolbar" in the block's options menu. Pins are a per-user browser preference.
 * Save pinned arrangements as named sets, and move them between browsers or sites as small JSON files (Export/Import in Toolbar settings). A set may name blocks a site doesn't have — those stay in the set and appear when their plugin or theme is active.
 * Move the toolbar where you want it: it starts on the left edge, and can dock to the right edge (past the settings side panel), to a full-width bar across the top or the bottom, or float free as a Photoshop-style palette. Drag it by the grip and release near an edge to snap it there, or pick a position in Toolbar settings. Flyouts and panels open away from the docked edge — a top toolbar opens downward, a bottom one upward.
-* Full keyboard operability: one tab stop, arrow keys, Home/End, Escape disarms. Arrow keys follow the toolbar's orientation — Up/Down along a vertical rail with ArrowRight opening a tool's flyout, Left/Right along a horizontal one with ArrowDown opening the flyout. Repositioning has a keyboard path of its own in Toolbar settings, so it never depends on dragging.
+* Full keyboard operability: one tab stop, arrow keys, Home/End, Escape disarms. Toolbar settings and the tool flyouts close on Escape and when you tab past them, so they never sit open behind you. Arrow keys follow the toolbar's orientation — Up/Down along a vertical rail with ArrowRight opening a tool's flyout, Left/Right along a horizontal one with ArrowDown opening the flyout. Repositioning has a keyboard path of its own in Toolbar settings, so it never depends on dragging.
 * Provider API for themes and plugins: PHP filter `toolrail_tool_providers` + JS `window.toolrail.registerTool()`.
 
 == Frequently Asked Questions ==
@@ -35,13 +35,33 @@ Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a 
 
 == Changelog ==
 
-= 0.3.0 =
+= 0.1.4 =
+* Fix: the focus outline on controls inside Toolbar settings still failed the contrast minimum after 0.1.3 — that panel was treated as a light surface when it is the same dark one as the toolbar. Every focus outline in the plugin now uses a single colour, checked against the surface it is actually drawn on.
+* Fix: inserting two blocks in quick succession (the Shift-click repeat workflow) could delete the second one a moment after it appeared.
+* Fix: switching back to Select immediately after an insert could delete the paragraph the click was meant to start.
+* Fix: if browser storage started failing part-way through a session, pinned tools and saved sets could disappear until the page was reloaded.
+* Fix: the upgrade step re-pinned Text, Heading and Image for authors who had deliberately removed all three.
+
+= 0.1.3 =
+* Fix: on upgrade, Text, Heading and Image silently disappeared from the toolbar for anyone who had already pinned a block or loaded a saved set. They are restored once, ahead of your own pins; removing them still sticks.
+* Fix: clicking empty space below the content with a tool armed inserted the block you asked for AND left an empty paragraph above it.
+* Fix: Tab moved out of the Toolbar settings panel and the flyout menus while they stayed open, and Escape then could not close them.
+* Fix: import and saved-set results were shown on screen but never announced to screen readers.
+* Fix: a set file listing the same block twice produced two toolbar buttons that could not be told apart.
+* Fix: an import message could appear later, out of context, the next time Toolbar settings was opened.
+* Fix: with browser storage unavailable (a private window, or site data blocked), unpinning appeared to work and the tool came straight back.
+* Accessibility: the keyboard focus outline on the toolbar and flyouts now meets the WCAG contrast minimum for non-text (it measured 2.97:1 against the required 3:1). Controls inside Toolbar settings were missed and are fixed in 0.1.4.
+* Accessibility: the "Remove" button under Pinned blocks is now labelled "Unpin", matching the name assistive tech reads out (WCAG 2.5.3 Label in Name).
+* Accessibility: the toolbar keeps its pressed, focused and panel states visible in Windows High Contrast mode.
+* Counts in messages now read correctly in the singular.
+
+= 0.1.2 =
 * Text, Heading and Image are now ordinary pinned blocks (reorder, remove, re-pin them like any other) instead of fixed built-ins. They seed as defaults the first time; removing them sticks.
 * Export any saved set as a JSON file and import set files, including sets from other sites — blocks a site doesn't register are kept in the set and appear when their plugin or theme is active, with the outcome reported in text.
 * Fix: a pinned core block (Cover, for example) showed an empty button — core block icons are viewBox-only SVGs with no intrinsic size, and nothing sized them.
 * Tool flyouts now attach to pinned blocks too: a registered tool may name `parent: 'text'` (aliases the pinned Paragraph slot), a block name like `'core/paragraph'`, or a slot id.
 
-= 0.2.0 =
+= 0.1.1 =
 * Add toolbar positioning: dock left (default), right, top or bottom, or float the toolbar. Drag by the grip to snap to an edge, or choose a position in Toolbar settings.
 * Flyouts and the settings dialog now open away from the docked edge instead of always to the right.
 * Toolbar arrow keys follow the toolbar's orientation, per the ARIA Authoring Practices for toolbars.

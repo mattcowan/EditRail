@@ -44,12 +44,88 @@
   }
 
   var __ = wp.i18n ? wp.i18n.__ : function (s) { return s; };
+  var _n = wp.i18n ? wp.i18n._n : function (s, p, n) { return n === 1 ? s : p; };
   var sprintf = wp.i18n ? wp.i18n.sprintf : function (s) { return s; };
+
+  /**
+   * Announce a transient message to assistive technology.
+   *
+   * Deliberately core's regions, not ours: wp.a11y.speak() keeps two
+   * live regions that persist for the life of the page, so a message
+   * announces even when the UI that produced it is being rebuilt around
+   * it. A role="status" element that we create and destroy per render
+   * cannot — AT has to be observing the region BEFORE its text changes.
+   *
+   * @param {string} message Plain text.
+   * @return {void}
+   */
+  function speak(message) {
+    if (message && window.wp && wp.a11y && typeof wp.a11y.speak === 'function') {
+      wp.a11y.speak(message);
+    }
+  }
 
   var SLOTS_KEY = 'toolrail-quick-slots';
   var CONFIGS_KEY = 'toolrail-slot-configs';
   var POSITION_KEY = 'toolrail-position';
+  var MIGRATED_KEY = 'toolrail-slots-migrated';
   var SHAPE_FILL = '#b9b9b9';
+
+  // -------------------------------------------------------------------
+  // Storage
+  //
+  // Every preference goes through this pair rather than touching
+  // localStorage directly, because a session where storage THROWS (a
+  // private window, "block site data", some enterprise policies) has to
+  // stay coherent for its lifetime.
+  //
+  // The failure this fixes: reads and writes used to disagree. Each
+  // reader had its own catch returning some default while every writer
+  // swallowed its exception and reported success, so unpinning a default
+  // slot appeared to work and the slot came straight back on the next
+  // read — permanently, with no way for the author to tell why.
+  //
+  // With an in-memory mirror the session behaves normally end to end;
+  // only persistence across a reload is lost. `storageBroken` latches on
+  // the first throw so a hard-failing browser is not re-probed on every
+  // single read.
+  // -------------------------------------------------------------------
+
+  var storageBroken = false;
+  var memoryStore = Object.create(null);
+
+  function readKey(key) {
+    if (!storageBroken) {
+      try {
+        var value = window.localStorage.getItem(key);
+        // Mirror every SUCCESSFUL read, not just writes. Storage can start
+        // throwing part-way through a session (a quota hit, a private-mode
+        // edge case), and once storageBroken latches, this mirror is the
+        // only copy left. Without the backfill, a key that had been read
+        // but never written — saved sets are the obvious one, since
+        // CONFIGS_KEY is not written until the author saves a set — read
+        // back as null, and the rail silently emptied itself of pins and
+        // sets until the next reload.
+        memoryStore[key] = value;
+        return value;
+      } catch (e) {
+        storageBroken = true;
+      }
+    }
+    return key in memoryStore ? memoryStore[key] : null;
+  }
+
+  function writeKey(key, value) {
+    memoryStore[key] = value;
+    if (storageBroken) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (e) {
+      storageBroken = true;
+    }
+  }
 
   // -------------------------------------------------------------------
   // Rail position — docked to an edge, or floating like a Photoshop
@@ -91,7 +167,7 @@
   function loadPosition() {
     var pos = { dock: DEFAULT_DOCK, x: 24, y: 24 };
     try {
-      var raw = window.localStorage.getItem(POSITION_KEY);
+      var raw = readKey(POSITION_KEY);
       var parsed = raw ? JSON.parse(raw) : null;
       if (parsed && typeof parsed === 'object') {
         if (DOCKS.indexOf(parsed.dock) !== -1) {
@@ -113,11 +189,7 @@
   var position = loadPosition();
 
   function savePosition() {
-    try {
-      window.localStorage.setItem(POSITION_KEY, JSON.stringify(position));
-    } catch (e) {
-      /* Position just won't persist. */
-    }
+    writeKey(POSITION_KEY, JSON.stringify(position));
   }
 
   /** Top and bottom docks lay the rail out as a horizontal bar. */
@@ -404,31 +476,120 @@
   /**
    * The out-of-the-box quick slots. Text, Heading and Image are ORDINARY
    * pinned blocks (owner decision 2026-08-26) — reorderable, removable,
-   * and saved-set–able like anything the author pins. They seed only while
-   * the storage key has never been written: an author who removes all
-   * three stays at an empty set, not a resurrected default.
+   * and saved-set–able like anything the author pins.
+   *
+   * These seed exactly once, from migrateSlots(), and never again: an
+   * author who removes all three stays at an empty rail rather than
+   * having them resurrected on the next load.
    */
   var DEFAULT_SLOTS = ['core/paragraph', 'core/heading', 'core/image'];
 
-  function loadSlots() {
-    try {
-      var raw = window.localStorage.getItem(SLOTS_KEY);
-      if (null === raw) {
-        return DEFAULT_SLOTS.slice();
+  /**
+   * The single gate for what may sit in the slot list: strings only, no
+   * duplicates, order preserved.
+   *
+   * Deduping lives HERE rather than in each caller because a duplicate is
+   * not merely untidy — two slots share one `data-tool="pin:<name>"` id,
+   * so syncPressed's querySelector paints only the first, one Delete
+   * removes only one, and the settings dialog's `[data-block=…]` focus
+   * restore matches both. pinBlock guarded against it; import and
+   * loadConfig did not, which is how a hand-edited or hand-written set
+   * file could put the rail into that state.
+   *
+   * @param {*} list Candidate slot list, from storage or a set file.
+   * @return {string[]} Clean list, safe to render and store.
+   */
+  function normalizeSlots(list) {
+    if (!Array.isArray(list)) {
+      return [];
+    }
+    var seen = Object.create(null);
+    return list.filter(function (name) {
+      if (typeof name !== 'string' || name === '' || name in seen) {
+        return false;
       }
-      var parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed.filter(function (n) { return typeof n === 'string'; }) : [];
+      seen[name] = true;
+      return true;
+    });
+  }
+
+  /**
+   * One-time upgrade to the pinned-slot model, run once per browser.
+   *
+   * Text, Heading and Image used to be BUILT-IN rail tools; they are now
+   * ordinary pinned slots seeded from DEFAULT_SLOTS. Seeding on "the slot
+   * key has never been written" alone silently deleted all three for
+   * every existing author, because pinning even one block (or loading a
+   * saved set) had already written that key under the old build.
+   *
+   * So a separate STAMP decides, not the presence of the slot list:
+   *
+   *   no stamp + no slot key      → fresh install, seed the defaults
+   *   no stamp + a non-empty list → existing author, restore the three
+   *                                 ahead of their own pins
+   *   no stamp + an EMPTY list    → they unpinned everything on purpose;
+   *                                 stamp it and leave the rail empty
+   *   stamp                       → nothing to do, ever again
+   *
+   * @return {void}
+   */
+  function migrateSlots() {
+    if (null !== readKey(MIGRATED_KEY)) {
+      return;
+    }
+    var raw = readKey(SLOTS_KEY);
+    if (null === raw) {
+      writeKey(SLOTS_KEY, JSON.stringify(DEFAULT_SLOTS));
+      writeKey(MIGRATED_KEY, '1');
+      return;
+    }
+    var existing;
+    try {
+      existing = normalizeSlots(JSON.parse(raw));
     } catch (e) {
-      return DEFAULT_SLOTS.slice();
+      existing = [];
+    }
+
+    // An EXPLICITLY empty list is a decision, not an absence. The author
+    // unpinned everything, and readme.txt promises that sticks — so stamp
+    // and leave it alone. Only "the key was never written at all" (handled
+    // above) counts as a fresh install.
+    //
+    // The cost, accepted: someone who pinned and then unpinned everything
+    // BEFORE this migration existed also holds "[]", and back then the
+    // three were built-in tools they never chose to lose. They will have
+    // to re-pin. Overriding a stated preference is the worse failure, and
+    // the plugin has not shipped.
+    if (existing.length) {
+      var restored = DEFAULT_SLOTS.filter(function (name) {
+        return existing.indexOf(name) === -1;
+      }).concat(existing);
+      writeKey(SLOTS_KEY, JSON.stringify(restored));
+    }
+    writeKey(MIGRATED_KEY, '1');
+  }
+
+  migrateSlots();
+
+  function loadSlots() {
+    var raw = readKey(SLOTS_KEY);
+    if (null === raw) {
+      // Post-migration this means the author emptied the rail, which is a
+      // legitimate state — never re-seed the defaults here.
+      return [];
+    }
+    try {
+      return normalizeSlots(JSON.parse(raw));
+    } catch (e) {
+      // Corrupt JSON. An empty rail is recoverable (the settings dialog
+      // still pins); replaying DEFAULT_SLOTS would fight the author on
+      // every read without ever sticking.
+      return [];
     }
   }
 
   function saveSlots(slots) {
-    try {
-      window.localStorage.setItem(SLOTS_KEY, JSON.stringify(slots));
-    } catch (e) {
-      /* Private windows etc. — pinning just won't persist. */
-    }
+    writeKey(SLOTS_KEY, JSON.stringify(normalizeSlots(slots)));
   }
 
   function isPinned(blockName) {
@@ -489,7 +650,7 @@
   function loadConfigs() {
     var out = Object.create(null);
     try {
-      var raw = window.localStorage.getItem(CONFIGS_KEY);
+      var raw = readKey(CONFIGS_KEY);
       var parsed = raw ? JSON.parse(raw) : null;
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         Object.keys(parsed).forEach(function (key) {
@@ -505,11 +666,7 @@
   }
 
   function persistConfigs(map) {
-    try {
-      window.localStorage.setItem(CONFIGS_KEY, JSON.stringify(map));
-    } catch (e) {
-      /* Private windows etc. */
-    }
+    writeKey(CONFIGS_KEY, JSON.stringify(map));
   }
 
   function saveConfig(name) {
@@ -527,7 +684,9 @@
     if (!Object.prototype.hasOwnProperty.call(map, name) || !Array.isArray(map[name])) {
       return false;
     }
-    saveSlots(map[name].filter(function (n) { return typeof n === 'string'; }));
+    // saveSlots normalizes: a set stored by an older build, hand-edited,
+    // or imported from a file can carry duplicates and non-strings.
+    saveSlots(map[name]);
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
     rerender();
     return true;
@@ -709,6 +868,41 @@
    * inserts after; empty canvas space appends at the end of the document.
    * (Flow-document position — x/y freeform layout is a later phase.)
    */
+  /**
+   * clientIds present at pointerdown, before core has reacted to the
+   * gesture at all. handleCanvasClick uses this to tell the block core
+   * appended during THIS click from one the author already had.
+   *
+   * @type {Object|null}
+   */
+  var preGestureIds = null;
+
+  /**
+   * Bumped on every canvas gesture. sweepStrayDefaultBlock captures it and
+   * its delayed passes bail once it moves, so a sweep can only ever act on
+   * the gesture that scheduled it.
+   *
+   * @type {number}
+   */
+  var gestureGeneration = 0;
+
+  function handleCanvasPointerdown() {
+    // Bump FIRST and unconditionally: a gesture with Select active still
+    // has to invalidate a pending sweep from the previous armed click,
+    // because core's append is the author's intent under Select.
+    gestureGeneration++;
+
+    if (activeTool === 'select') {
+      preGestureIds = null;
+      return;
+    }
+    var ids = Object.create(null);
+    wp.data.select('core/block-editor').getBlocks().forEach(function (b) {
+      ids[b.clientId] = true;
+    });
+    preGestureIds = ids;
+  }
+
   function handleCanvasClick(e) {
     if (activeTool === 'select') {
       return;
@@ -744,11 +938,109 @@
       }
     }
 
+    // preGestureIds is captured at POINTERDOWN, not here. Core has
+    // already appended its default block by the time this click handler
+    // runs (measured: count 1 at pointerdown, 3 by the time a listener
+    // registered after ours sees the click), so a snapshot taken here
+    // would include the stray and the sweep would never match it.
+    var knownIds = preGestureIds || (function () {
+      var ids = Object.create(null);
+      sel.getBlocks().forEach(function (b) { ids[b.clientId] = true; });
+      return ids;
+    }());
+    preGestureIds = null;
+
     dispatch.insertBlocks(block, index, rootClientId);
+    sweepStrayDefaultBlock(knownIds, block.clientId);
 
     if (!e.shiftKey) {
       setActiveTool('select');
     }
+  }
+
+  /**
+   * Drop the empty default block core appends on a canvas click.
+   *
+   * Clicking the empty space below the content is core's "start a new
+   * paragraph here" gesture, and it fires whatever the rail is doing —
+   * preventDefault() and stopPropagation() on this click do NOT suppress
+   * it (measured: with Heading armed on a one-paragraph document, one
+   * click yields paragraph, EMPTY PARAGRAPH, heading; the same click with
+   * Select armed yields paragraph, empty paragraph, which is core's own
+   * behaviour and correct there). So every insert made by clicking empty
+   * space left a stray empty paragraph above the block the author asked
+   * for.
+   *
+   * Rather than race core for the event, let it run and reclaim the block
+   * afterwards. The sweep is scoped as tightly as it can be: a block has
+   * to have appeared during THIS click, not be the one the tool inserted,
+   * be the site's default block type, and still be unmodified. Anything
+   * pre-existing, and anything the author has typed into, is out of
+   * scope.
+   *
+   * Two passes because core's append can land either synchronously in the
+   * same event or on the next React flush; the second pass is a no-op
+   * whenever the first already caught it.
+   *
+   * @param {Object} knownIds   clientIds present before the insert.
+   * @param {string} insertedId clientId of the tool's own block.
+   * @return {void}
+   */
+  function sweepStrayDefaultBlock(knownIds, insertedId) {
+    // Only the CURRENT gesture may sweep. Both passes below are scheduled
+    // against one click's knownIds, and that snapshot goes stale the
+    // moment another canvas gesture starts — at which point a delayed
+    // pass would be judging blocks it has no business judging:
+    //
+    //   shift-click to repeat  a second insert 40ms later is absent from
+    //                          this call's knownIds, so an unmodified
+    //                          default paragraph the author just asked
+    //                          for looked exactly like a stray
+    //   switch to Select       core's append is then the author's INTENT,
+    //                          and a pending pass would delete it
+    //
+    // handleCanvasPointerdown bumps the generation on every canvas
+    // gesture, armed or not, so both stale passes simply bail.
+    var generation = gestureGeneration;
+
+    var run = function () {
+      if (generation !== gestureGeneration) {
+        return;
+      }
+      var sel = wp.data.select('core/block-editor');
+      if (!sel
+        || typeof wp.blocks.getDefaultBlockName !== 'function'
+        || typeof wp.blocks.isUnmodifiedDefaultBlock !== 'function') {
+        return;
+      }
+      var defaultName = wp.blocks.getDefaultBlockName();
+      if (!defaultName) {
+        return;
+      }
+      var strays = sel.getBlocks().filter(function (b) {
+        return b.clientId !== insertedId
+          && !knownIds[b.clientId]
+          && b.name === defaultName
+          && wp.blocks.isUnmodifiedDefaultBlock(b);
+      }).map(function (b) { return b.clientId; });
+
+      if (!strays.length) {
+        return;
+      }
+      // selectPrevious=false: removing the stray must not move the caret
+      // off the block the tool just inserted.
+      wp.data.dispatch('core/block-editor').removeBlocks(strays, false);
+      if (sel.getBlock(insertedId)) {
+        wp.data.dispatch('core/block-editor').selectBlock(insertedId);
+      }
+    };
+    // The t=0 pass is the one that does the work in practice (measured:
+    // core has already appended by the time our click handler runs). The
+    // 80ms pass is a backstop for a slower machine where React batches the
+    // append into a later flush; the generation guard is what makes
+    // keeping it safe.
+    window.setTimeout(run, 0);
+    window.setTimeout(run, 80);
   }
 
   function handleCanvasKeydown(e) {
@@ -785,6 +1077,7 @@
       return;
     }
     boundDoc = doc;
+    doc.addEventListener('pointerdown', handleCanvasPointerdown, true);
     doc.addEventListener('click', handleCanvasClick, true);
     doc.addEventListener('keydown', handleCanvasKeydown, true);
 
@@ -819,6 +1112,8 @@
     var parentBtn = openFlyout.parentBtn;
     openFlyout.node.remove();
     document.removeEventListener('mousedown', onDocMousedown, true);
+    document.removeEventListener('keydown', onFlyoutKeydown, true);
+    document.removeEventListener('focusin', onFlyoutFocusin, true);
     parentBtn.setAttribute('aria-expanded', 'false');
     openFlyout = null;
     syncLayer();
@@ -831,6 +1126,30 @@
     if (openFlyout && !openFlyout.node.contains(e.target) && e.target !== openFlyout.parentBtn) {
       closeFlyout(false);
     }
+  }
+
+  // Same contract as the settings dialog, for the same reason: menu items
+  // are tabIndex -1, so one Tab walked out of the flyout and left it open
+  // with the parent still reporting aria-expanded="true" — and Escape,
+  // bound to the menu node, could no longer reach it. Both listeners sit
+  // on the document for as long as the flyout is open.
+  function onFlyoutKeydown(e) {
+    if (e.key !== 'Escape' || !openFlyout) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    closeFlyout(true);
+  }
+
+  function onFlyoutFocusin(e) {
+    if (!openFlyout) {
+      return;
+    }
+    if (openFlyout.node.contains(e.target) || e.target === openFlyout.parentBtn) {
+      return;
+    }
+    closeFlyout(false);
   }
 
   function activateChild(child) {
@@ -933,12 +1252,6 @@
     menu.addEventListener('keydown', function (e) {
       var items = Array.prototype.slice.call(menu.querySelectorAll('.toolrail-flyout-item'));
       var idx = items.indexOf(document.activeElement);
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        closeFlyout(true);
-        return;
-      }
       if (['ArrowDown', 'ArrowUp', 'Home', 'End'].indexOf(e.key) === -1) {
         return;
       }
@@ -955,6 +1268,8 @@
     openFlyout = { node: menu, parentBtn: btn };
     syncLayer();
     document.addEventListener('mousedown', onDocMousedown, true);
+    document.addEventListener('keydown', onFlyoutKeydown, true);
+    document.addEventListener('focusin', onFlyoutFocusin, true);
 
     var first = menu.querySelector('.toolrail-flyout-item');
     if (first) {
@@ -1003,7 +1318,13 @@
     }
     settingsOpen = false;
     syncLayer();
+    // Drop any message that never got rendered — closing the dialog
+    // before an in-flight file read resolves used to strand it here, and
+    // it then surfaced out of context the NEXT time settings was opened.
+    settingsStatus = '';
     document.removeEventListener('mousedown', onSettingsMousedown, true);
+    document.removeEventListener('keydown', onSettingsKeydown, true);
+    document.removeEventListener('focusin', onSettingsFocusin, true);
     window.removeEventListener('toolrail:tools-updated', onToolsUpdatedWhileOpen);
     var gear = gearButton();
     if (gear) {
@@ -1020,6 +1341,42 @@
     if (node && !node.contains(e.target) && e.target !== gear && !(gear && gear.contains(e.target))) {
       closeSettings(false);
     }
+  }
+
+  // The dialog is a POPOVER, not a modal: the editor behind it stays
+  // usable, so it gets no focus trap and no aria-modal. What it does need
+  // is for the keyboard and the pointer to agree. An outside click always
+  // dismissed it; leaving by Tab now dismisses it too.
+  //
+  // The bug this closes: Escape was bound to the dialog NODE, so one Tab
+  // put focus in the editor canvas and the dialog was left open, still
+  // claiming aria-expanded="true", with no keyboard route back to close
+  // it. Both listeners now sit on the document for the dialog's lifetime.
+  var refreshingSettings = false;
+
+  function onSettingsKeydown(e) {
+    if (e.key !== 'Escape' || !settingsOpen) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    closeSettings(true);
+  }
+
+  function onSettingsFocusin(e) {
+    // refreshSettings empties and rebuilds the body; the focus churn in
+    // between is ours, not the author leaving.
+    if (!settingsOpen || refreshingSettings) {
+      return;
+    }
+    var node = settingsNode();
+    var gear = gearButton();
+    if (!node || node.contains(e.target) || e.target === gear || (gear && gear.contains(e.target))) {
+      return;
+    }
+    // Focus has genuinely moved on. Close, but do NOT pull it back — the
+    // author is going somewhere on purpose.
+    closeSettings(false);
   }
 
   function settingsRow(tag, className) {
@@ -1078,6 +1435,7 @@
       }
     });
 
+    refreshingSettings = true;
     node.textContent = '';
     buildSettingsContent(node, preserved['#toolrail-settings-search'] || '');
 
@@ -1096,6 +1454,7 @@
     if (target) {
       target.focus();
     }
+    refreshingSettings = false;
   }
 
   /**
@@ -1158,7 +1517,11 @@
   /** WP block-name grammar: namespace/name, lowercase alnum + dashes. */
   var BLOCK_NAME_PATTERN = /^[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*$/;
 
-  /** One transient line for the settings dialog's role="status" region. */
+  /**
+   * One transient outcome line, consumed by the next settings render: it
+   * is painted as visible text in the dialog and announced via speak().
+   * Cleared on close so it cannot surface out of context later.
+   */
   var settingsStatus = '';
 
   function missingBlockCount(blocks) {
@@ -1201,10 +1564,16 @@
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.blocks)) {
       return { ok: false, error: __('Not a Toolrail set file — expected JSON with a "blocks" array.', 'toolrail') };
     }
-    var blocks = parsed.blocks.filter(function (n) {
+    var valid = parsed.blocks.filter(function (n) {
       return typeof n === 'string' && BLOCK_NAME_PATTERN.test(n);
     });
-    var dropped = parsed.blocks.length - blocks.length;
+    var dropped = parsed.blocks.length - valid.length;
+    // A set file is hand-editable and hand-writable, so it can repeat a
+    // block name. Two slots sharing one `pin:<name>` tool id break the
+    // rail (see normalizeSlots), so collapse them here and report the
+    // collapse separately from genuinely invalid entries.
+    var blocks = normalizeSlots(valid);
+    var duplicates = valid.length - blocks.length;
 
     var base = typeof parsed.name === 'string' && parsed.name.trim() !== ''
       ? parsed.name.trim()
@@ -1225,28 +1594,41 @@
       name: name,
       total: blocks.length,
       missing: missingBlockCount(blocks),
-      dropped: dropped
+      dropped: dropped,
+      duplicates: duplicates
     };
   }
 
   function importStatusMessage(result) {
     var msg = sprintf(
       /* translators: 1: set name, 2: block count. */
-      __('Imported "%1$s" (%2$d blocks).', 'toolrail'),
+      _n('Imported "%1$s" (%2$d block).', 'Imported "%1$s" (%2$d blocks).', result.total, 'toolrail'),
       result.name,
       result.total
     );
     if (result.missing > 0) {
       msg += ' ' + sprintf(
         /* translators: %d: count of blocks not registered on this site. */
-        __('%d of them are not available on this site — they stay in the set and appear when their plugin or theme is active.', 'toolrail'),
+        _n(
+          '%d of them is not available on this site — it stays in the set and appears when its plugin or theme is active.',
+          '%d of them are not available on this site — they stay in the set and appear when their plugin or theme is active.',
+          result.missing,
+          'toolrail'
+        ),
         result.missing
+      );
+    }
+    if (result.duplicates > 0) {
+      msg += ' ' + sprintf(
+        /* translators: %d: count of repeated block names collapsed to one. */
+        _n('%d repeated block was listed once.', '%d repeated blocks were listed once.', result.duplicates, 'toolrail'),
+        result.duplicates
       );
     }
     if (result.dropped > 0) {
       msg += ' ' + sprintf(
         /* translators: %d: count of invalid entries. */
-        __('%d invalid entries were ignored.', 'toolrail'),
+        _n('%d invalid entry was ignored.', '%d invalid entries were ignored.', result.dropped, 'toolrail'),
         result.dropped
       );
     }
@@ -1373,7 +1755,12 @@
       down.disabled = i === slots.length - 1;
       li.appendChild(down);
 
-      var remove = settingsButton(__('Remove', 'toolrail'), function () {
+      // Visible text is "Unpin", not "Remove", so that it is contained in
+      // the accessible name "Unpin <block>" (WCAG 2.5.3 Label in Name).
+      // With "Remove" on screen and "Unpin Paragraph" as the name, a
+      // speech-input user saying "click Remove" matched nothing. It also
+      // matches the wording of the block menu's own Unpin item.
+      var remove = settingsButton(__('Unpin', 'toolrail'), function () {
         unpinBlock(name);
         refreshSettings('#toolrail-settings-search');
       }, 'toolrail-settings-remove');
@@ -1393,14 +1780,21 @@
     node.appendChild(setsHead);
 
     // Import/load outcomes land here in TEXT (never color/glyph alone).
-    // Rendered on every build so the region exists before it speaks;
-    // the message itself is transient — shown once, cleared on render.
+    //
+    // This node is NOT the live region. refreshSettings rebuilds the whole
+    // dialog body, so a role="status" here was destroyed and recreated on
+    // every render, and a live region that enters the DOM with its text
+    // already in it does not announce — the message was visual-only. The
+    // announcement goes through wp.a11y.speak() instead, which owns
+    // persistent regions that outlive any rebuild of ours.
     var status = settingsRow('p', 'toolrail-settings-status');
-    status.setAttribute('role', 'status');
     status.id = 'toolrail-settings-status';
     status.textContent = settingsStatus;
-    settingsStatus = '';
     node.appendChild(status);
+    if (settingsStatus) {
+      speak(settingsStatus);
+    }
+    settingsStatus = '';
 
     var saveRow = settingsRow('div', 'toolrail-settings-saverow');
     var nameLabel = settingsRow('label', 'toolrail-settings-label');
@@ -1437,9 +1831,23 @@
           if (missing > 0) {
             settingsStatus = sprintf(
               /* translators: 1: set name, 2: count of unavailable blocks. */
-              __('Loaded "%1$s". %2$d pinned blocks are not available on this site and stay hidden until their plugin or theme is active.', 'toolrail'),
+              _n(
+                'Loaded "%1$s". %2$d pinned block is not available on this site and stays hidden until its plugin or theme is active.',
+                'Loaded "%1$s". %2$d pinned blocks are not available on this site and stay hidden until their plugin or theme is active.',
+                missing,
+                'toolrail'
+              ),
               cfg,
               missing
+            );
+          } else {
+            // Announce the ordinary success too. The rail rebuilding is a
+            // visual-only cue, so without this a screen-reader user got
+            // no confirmation that Load had done anything at all.
+            settingsStatus = sprintf(
+              /* translators: %s: set name. */
+              __('Loaded "%s".', 'toolrail'),
+              cfg
             );
           }
           refreshSettings('#toolrail-settings-search');
@@ -1475,6 +1883,28 @@
     importInput.className = 'toolrail-settings-import';
     importInput.accept = 'application/json,.json';
     importInput.setAttribute('aria-describedby', 'toolrail-settings-status');
+    /**
+     * Deliver the outcome of a file read.
+     *
+     * Reading a file is async, so the dialog can be gone by the time the
+     * promise settles. Parking the message in `settingsStatus` regardless
+     * stranded it there — closeSettings had already run and cleared the
+     * slot, so the message survived to be rendered, out of context, the
+     * NEXT time settings was opened. When there is no dialog left to
+     * render into, speak the result and drop it.
+     *
+     * @param {string} message Outcome text.
+     * @return {void}
+     */
+    function reportImport(message) {
+      if (!settingsOpen || !settingsNode()) {
+        speak(message);
+        return;
+      }
+      settingsStatus = message;
+      refreshSettings('#toolrail-settings-import');
+    }
+
     importInput.addEventListener('change', function () {
       var file = importInput.files && importInput.files[0];
       if (!file) {
@@ -1487,11 +1917,9 @@
         } catch (e) {
           result = { ok: false, error: __('That file is not valid JSON.', 'toolrail') };
         }
-        settingsStatus = result.ok ? importStatusMessage(result) : result.error;
-        refreshSettings('#toolrail-settings-import');
+        reportImport(result.ok ? importStatusMessage(result) : result.error);
       }).catch(function () {
-        settingsStatus = __('The file could not be read.', 'toolrail');
-        refreshSettings('#toolrail-settings-import');
+        reportImport(__('The file could not be read.', 'toolrail'));
       });
     });
     node.appendChild(importInput);
@@ -1514,13 +1942,6 @@
     var node = settingsRow('div', 'toolrail-settings');
     node.setAttribute('role', 'dialog');
     node.setAttribute('aria-labelledby', 'toolrail-settings-title');
-    node.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        closeSettings(true);
-      }
-    });
 
     buildSettingsContent(node, '');
     wrapper.appendChild(node);
@@ -1533,6 +1954,8 @@
     }
     placeSurface(node, gear, wrapper);
     document.addEventListener('mousedown', onSettingsMousedown, true);
+    document.addEventListener('keydown', onSettingsKeydown, true);
+    document.addEventListener('focusin', onSettingsFocusin, true);
     window.addEventListener('toolrail:tools-updated', onToolsUpdatedWhileOpen);
 
     if (focusSelector) {

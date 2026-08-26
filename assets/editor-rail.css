@@ -16,9 +16,22 @@
  * Surfaces (flyouts, the settings dialog) get their top/left/right/bottom
  * offsets inline from placeSurface() in the JS, which opens them away from
  * whichever edge the rail is docked to.
+ *
+ * ONE focus-ring colour, because there is only one surface tone. The rail,
+ * the flyouts and the settings dialog are all #1e1e1e — an earlier pass
+ * split this into a "dark" and a "light" token on the false premise that
+ * the settings dialog was light, which left the dialog's own controls on
+ * #3858e9 at 2.99:1 while the header claimed 5.61:1. Every focus indicator
+ * now uses --toolrail-focus-ring (#7b90ff, 5.78:1 on #1e1e1e), which
+ * clears the 3:1 that WCAG 1.4.11 Non-text Contrast requires.
+ *
+ * Anything that reads as a focus or state indicator ON the rail belongs on
+ * this token. #3858e9 survives only where it sits on the EDITOR canvas,
+ * not on the rail: the pressed-tool fill and the drag snap-preview.
  */
 
 .toolrail-region {
+    --toolrail-focus-ring: #7b90ff;
     position: relative;
     display: flex;
     z-index: 30;
@@ -230,7 +243,7 @@ body.toolrail-dragging * {
 }
 
 .toolrail-tool:focus-visible {
-    outline: 2px solid #3858e9;
+    outline: 2px solid var(--toolrail-focus-ring);
     outline-offset: 2px;
 }
 
@@ -350,7 +363,7 @@ body.toolrail-dragging * {
 }
 
 .toolrail-flyout-item:focus-visible {
-    outline: 2px solid #3858e9;
+    outline: 2px solid var(--toolrail-focus-ring);
     outline-offset: -2px;
 }
 
@@ -448,7 +461,7 @@ body.toolrail-dragging * {
 }
 
 .toolrail-settings-search:focus-visible {
-    outline: 2px solid #3858e9;
+    outline: 2px solid var(--toolrail-focus-ring);
     outline-offset: 1px;
 }
 
@@ -468,7 +481,7 @@ body.toolrail-dragging * {
 }
 
 .toolrail-settings-btn:focus-visible {
-    outline: 2px solid #3858e9;
+    outline: 2px solid var(--toolrail-focus-ring);
     outline-offset: 1px;
 }
 
@@ -541,7 +554,10 @@ body.toolrail-dragging * {
     align-items: stretch;
 }
 
-/* Live region for import/load outcomes. Reserves no space when empty. */
+/* VISIBLE text for import/load outcomes. Not a live region — the dialog
+   body is rebuilt on every render, so announcing is wp.a11y.speak()'s job
+   (see the speak() helper in editor-rail.js). Reserves no space when
+   empty. #9ec1ff on #1e1e1e measures 9.15:1. */
 .toolrail-settings-status {
     color: #9ec1ff;
     margin: 6px 0 0;
@@ -570,7 +586,7 @@ body.toolrail-dragging * {
 }
 
 .toolrail-settings-import:focus-visible {
-    outline: 2px solid #3858e9;
+    outline: 2px solid var(--toolrail-focus-ring);
     outline-offset: 1px;
 }
 
@@ -605,13 +621,13 @@ body.toolrail-dragging * {
 }
 
 .toolrail-settings-positionrow input:focus-visible {
-    outline: 2px solid #3858e9;
+    outline: 2px solid var(--toolrail-focus-ring);
     outline-offset: 2px;
 }
 
 /* Drop-target hint while a block drag hovers the rail. */
 .toolrail-region.is-drop-target #toolrail-rail {
-    outline: 2px dashed #3858e9;
+    outline: 2px dashed var(--toolrail-focus-ring);
     outline-offset: -4px;
 }
 
@@ -625,5 +641,53 @@ body.toolrail-dragging * {
 @media (max-width: 782px) {
     .toolrail-region {
         display: none;
+    }
+}
+
+/* Windows High Contrast / forced-colors.
+   The OS replaces every colour declared above, which costs the rail the
+   two cues that carry state visually: the pressed button's #3858e9 fill
+   and its #7b90ff edge bar both flatten to the system palette, leaving
+   armed and unarmed tools identical on screen. (aria-pressed still
+   carries the state to assistive tech either way; this is for the sighted
+   high-contrast user.)
+   Restoring it in system colours: `forced-color-adjust: none` is NOT used
+   — the point is to cooperate with the user's palette, not opt out of it.
+   Instead the state is re-expressed with a border, which forced-colors
+   keeps. */
+@media (forced-colors: active) {
+    /* .toolrail-tool already carries `border: 1px solid transparent`, so
+       only the pressed state needs restating here. */
+    .toolrail-tool[aria-pressed="true"] {
+        border-color: Highlight;
+        background: Highlight;
+        color: HighlightText;
+    }
+
+    /* The ::before edge bar is a background-painted sliver, which forced
+       colors erase. The border above replaces it, so hide the remnant
+       rather than leave an invisible gap in the layout. */
+    .toolrail-tool[aria-pressed="true"]::before {
+        display: none;
+    }
+
+    .toolrail-tool:focus-visible,
+    .toolrail-flyout-item:focus-visible,
+    .toolrail-settings-btn:focus-visible,
+    .toolrail-settings-search:focus-visible,
+    .toolrail-settings-import:focus-visible,
+    .toolrail-settings-positionrow input:focus-visible {
+        outline: 2px solid Highlight;
+    }
+
+    .toolrail-flyout,
+    .toolrail-settings {
+        border: 1px solid CanvasText;
+    }
+
+    /* The grip is a radial-gradient dot pattern; gradients do not survive
+       forced colors, so give it an outline that does. */
+    .toolrail-grip {
+        border: 1px solid CanvasText;
     }
 }

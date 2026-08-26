@@ -23,8 +23,18 @@ async function openNewPost(page) {
   // spec. Clearing the keys also restores the DEFAULT pinned slots
   // (Text/Heading/Image), which several tests rely on. Only pay for a
   // reload when something was actually left behind.
+  //
+  // `toolrail-slots-migrated` MUST be cleared with the rest. It is the
+  // stamp that stops the one-time 0.1.x slot migration from re-running,
+  // and the migration is what seeds the defaults — leave it set with the
+  // slot list wiped and the rail comes back empty instead of default.
   const hadState = await page.evaluate(() => {
-    const keys = ['toolrail-position', 'toolrail-quick-slots', 'toolrail-slot-configs'];
+    const keys = [
+      'toolrail-position',
+      'toolrail-quick-slots',
+      'toolrail-slot-configs',
+      'toolrail-slots-migrated',
+    ];
     const had = keys.some((k) => window.localStorage.getItem(k) !== null);
     keys.forEach((k) => window.localStorage.removeItem(k));
     return had;
@@ -119,7 +129,12 @@ test.describe('armed-tool insertion', () => {
 
     await canvas(page).locator('body').click({ position: { x: 300, y: 400 } });
 
-    expect(await blockNames(page)).toContain('core/paragraph');
+    // EXACTLY one block. `toContain` used to pass here while core's own
+    // "click empty space to start a paragraph" behaviour quietly added a
+    // second, empty one alongside the inserted block — the assertion could
+    // not tell the stray from the real insert because both were paragraphs.
+    await expect.poll(async () => (await blockNames(page)).length).toBe(1);
+    expect(await blockNames(page)).toEqual(['core/paragraph']);
     await expect(page.locator('#toolrail-rail [data-tool="select"]')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveAttribute('aria-pressed', 'false');
   });
@@ -132,8 +147,10 @@ test.describe('armed-tool insertion', () => {
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/heading"]')).toHaveAttribute('aria-pressed', 'true');
 
     await canvas(page).locator('body').click({ position: { x: 300, y: 450 } });
-    const names = await blockNames(page);
-    expect(names.filter((n) => n === 'core/heading').length).toBe(2);
+    // Two headings and NOTHING else: filtering to core/heading before
+    // counting used to hide any stray core added on the way.
+    await expect.poll(async () => (await blockNames(page)).length).toBe(2);
+    expect(await blockNames(page)).toEqual(['core/heading', 'core/heading']);
     await expect(page.locator('#toolrail-rail [data-tool="select"]')).toHaveAttribute('aria-pressed', 'true');
   });
 
@@ -297,8 +314,8 @@ test.describe('saved-set import/export', () => {
     // 1 kept-but-unavailable block, 1 invalid entry dropped, both said in text.
     const status = page.locator('#toolrail-settings-status');
     await expect(status).toContainText('Imported "other theme" (2 blocks).');
-    await expect(status).toContainText('1 of them are not available on this site');
-    await expect(status).toContainText('1 invalid entries were ignored');
+    await expect(status).toContainText('1 of them is not available on this site');
+    await expect(status).toContainText('1 invalid entry was ignored');
 
     // Loading it: the unknown block is KEPT in storage but not rendered.
     await page.locator('.toolrail-settings-setrow[data-config="other theme"] .toolrail-settings-load').click();
@@ -846,5 +863,505 @@ test.describe('registration API', () => {
     // The rail is still painting pressed state — the sweep survived.
     await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').click();
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveAttribute('aria-pressed', 'true');
+  });
+});
+
+/**
+ * Regressions found by driving the editor by hand (2026-08-26). Each test
+ * here failed before its fix; the block-count assertions in
+ * 'armed-tool insertion' were tightened in the same pass, because the
+ * originals could not see the stray-block bug at all.
+ */
+test.describe('regressions', () => {
+  test('an armed insert into empty space leaves no stray empty paragraph', async ({ page }) => {
+    await openNewPost(page);
+
+    // A known one-block document, so the count after the click is exact.
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data
+        .dispatch('core/block-editor')
+        .resetBlocks([createBlock('core/paragraph', { content: 'ALPHA' })]);
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(1);
+
+    await page.locator('#toolrail-rail [data-tool="pin:core/heading"]').click();
+    await canvas(page).locator('body').click({ position: { x: 300, y: 500 } });
+
+    // Before the fix: ['core/paragraph', 'core/paragraph', 'core/heading'].
+    // Core appends its default block on a click below the content, and the
+    // preventDefault/stopPropagation in handleCanvasClick does not stop it.
+    await expect.poll(async () => await blockNames(page)).toEqual([
+      'core/paragraph',
+      'core/heading',
+    ]);
+  });
+
+  test('an insert ON an existing block still lands at the click point', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks([
+        createBlock('core/paragraph', { content: 'ALPHA' }),
+        createBlock('core/paragraph', { content: 'BETA' }),
+      ]);
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(2);
+
+    await page.locator('#toolrail-rail [data-tool="pin:core/heading"]').click();
+    // Top half of BETA inserts before it. The stray sweep must not disturb
+    // a click that landed on a real block.
+    await canvas(page).locator('p:has-text("BETA")').click({ position: { x: 20, y: 3 } });
+
+    await expect.poll(async () => await blockNames(page)).toEqual([
+      'core/paragraph',
+      'core/heading',
+      'core/paragraph',
+    ]);
+  });
+
+  test('Tab out of the settings dialog closes it', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    const dialog = page.locator('.toolrail-settings');
+    await expect(dialog).toBeVisible();
+
+    // Walk to the last control in the dialog, then one Tab past it.
+    await page.evaluate(() => {
+      const dlg = document.querySelector('.toolrail-settings');
+      const sel =
+        'a[href],button:not([disabled]),input:not([disabled]),select,textarea,[tabindex]:not([tabindex="-1"])';
+      const items = dlg.querySelectorAll(sel);
+      items[items.length - 1].focus();
+    });
+    await page.keyboard.press('Tab');
+
+    // Was: focus landed in the editor canvas with the dialog still open and
+    // the gear still claiming aria-expanded="true" — and Escape, bound to
+    // the dialog node, could no longer reach it.
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator('#toolrail-rail [data-tool="settings"]')).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    );
+  });
+
+  test('Escape from inside the dialog closes it and returns focus to the gear', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await expect(page.locator('.toolrail-settings')).toBeVisible();
+
+    // Focus starts on the search field inside the dialog. Escape now
+    // reaches a listener on the DOCUMENT rather than one bound to the
+    // dialog node, which is what makes it survive focus moving around
+    // inside the dialog.
+    await page.keyboard.press('Escape');
+
+    await expect(page.locator('.toolrail-settings')).toHaveCount(0);
+    await expect(page.locator('#toolrail-rail [data-tool="settings"]')).toHaveAttribute('aria-expanded', 'false');
+    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('settings');
+  });
+
+  test('Tab out of a flyout closes it', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.locator('#toolrail-rail [data-tool="shape"]').focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(page.locator('.toolrail-flyout')).toBeVisible();
+
+    await page.keyboard.press('Tab');
+
+    await expect(page.locator('.toolrail-flyout')).toHaveCount(0);
+    await expect(page.locator('#toolrail-rail [data-tool="shape"]')).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    );
+  });
+
+  test('a pre-migration author keeps Text, Heading and Image on upgrade', async ({ page }) => {
+    await openNewPost(page);
+
+    // Reproduce pre-migration storage: a slot list written by the old build
+    // (which held none of the three, because they were built-in tools then)
+    // and NO migration stamp.
+    await page.evaluate(() => {
+      window.localStorage.setItem('toolrail-quick-slots', JSON.stringify(['core/quote']));
+      window.localStorage.removeItem('toolrail-slots-migrated');
+    });
+    await page.reload();
+    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+
+    // The three return, ahead of the author's own pin, which survives.
+    const slots = await page.evaluate(() =>
+      JSON.parse(window.localStorage.getItem('toolrail-quick-slots'))
+    );
+    expect(slots).toEqual(['core/paragraph', 'core/heading', 'core/image', 'core/quote']);
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/quote"]')).toHaveCount(1);
+  });
+
+  test('an emptied rail is not re-seeded on the next load', async ({ page }) => {
+    await openNewPost(page);
+
+    // Post-migration, an author who unpins everything means it.
+    await page.evaluate(() => {
+      window.localStorage.setItem('toolrail-quick-slots', JSON.stringify([]));
+      window.localStorage.setItem('toolrail-slots-migrated', '1');
+    });
+    await page.reload();
+    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+
+    await expect(page.locator('#toolrail-rail [data-tool^="pin:"]')).toHaveCount(0);
+  });
+
+  test('a set file listing the same block twice yields one button', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('#toolrail-settings-import').setInputFiles({
+      name: 'dupes.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from(
+        JSON.stringify({
+          format: 'toolrail-set',
+          version: 1,
+          name: 'dupes',
+          blocks: ['core/quote', 'core/quote', 'core/separator'],
+        })
+      ),
+    });
+
+    const status = page.locator('#toolrail-settings-status');
+    await expect(status).toContainText('Imported "dupes" (2 blocks).');
+    await expect(status).toContainText('1 repeated block was listed once.');
+
+    // Load it: the rail must render one button per block, not two sharing a
+    // data-tool id.
+    await page.locator('.toolrail-settings-load').first().click();
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/quote"]')).toHaveCount(1);
+  });
+
+  test('the Unpin button reads the same on screen as it does to AT', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    const unpin = page.locator('.toolrail-settings-remove').first();
+
+    // WCAG 2.5.3 Label in Name: the accessible name must contain the visible
+    // label, so "click Unpin" works for speech input. It read "Remove" on
+    // screen and "Unpin Paragraph" to AT before.
+    await expect(unpin).toHaveText('Unpin');
+    expect(await unpin.getAttribute('aria-label')).toContain('Unpin');
+  });
+
+  test('every declared focus ring clears 3:1 against its own surface', async ({ page }) => {
+    await openNewPost(page);
+
+    // Each surface has to be LIVE to be measured, and the two cannot be
+    // open at once: opening the gear runs closeFlyout(), and clicking a
+    // rail tool closes the dialog via the outside-mousedown handler. So
+    // sweep once per surface and merge.
+    //
+    // The bug this replaces a weaker test for lived in the settings
+    // dialog, not on the rail: the dialog was assumed to be a light
+    // surface and its four controls were left on #3858e9, which is 2.99:1
+    // on the #1e1e1e it actually is. A sweep that only ever looked at the
+    // rail could not see that.
+    const sweep = () => page.evaluate(() => {
+      const lum = (rgb) => {
+        const [r, g, b] = rgb.map((v) => {
+          v /= 255;
+          return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const parse = (c) => {
+        const m = c && c.match(/rgba?\(([^)]+)\)/);
+        if (!m) return null;
+        const p = m[1].split(',').map(parseFloat);
+        return { rgb: p.slice(0, 3), a: p.length > 3 ? p[3] : 1 };
+      };
+      // Nearest ancestor painting an opaque background.
+      const surfaceFrom = (el) => {
+        let n = el;
+        while (n && n !== document.documentElement) {
+          const c = parse(getComputedStyle(n).backgroundColor);
+          if (c && c.a > 0.95) return c.rgb;
+          n = n.parentElement;
+        }
+        return [255, 255, 255];
+      };
+      const ratio = (a, b) => {
+        const l1 = lum(a);
+        const l2 = lum(b);
+        return +((Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05)).toFixed(2);
+      };
+
+      const region = document.getElementById('toolrail-region');
+      const token = getComputedStyle(region).getPropertyValue('--toolrail-focus-ring').trim();
+      const probe = document.createElement('div');
+      probe.style.color = token;
+      document.body.appendChild(probe);
+      const ring = parse(getComputedStyle(probe).color);
+      probe.remove();
+
+      const results = [];
+      for (const sheet of Array.from(document.styleSheets)) {
+        if (!sheet.href || sheet.href.indexOf('toolrail') === -1) continue;
+        let rules;
+        try {
+          rules = Array.from(sheet.cssRules);
+        } catch (e) {
+          continue;
+        }
+        for (const rule of rules) {
+          if (!rule.selectorText || rule.selectorText.indexOf(':focus-visible') === -1) continue;
+          const declared = rule.style.getPropertyValue('outline');
+          if (!declared) continue;
+          // Every focus ring must go through the shared token, or it is
+          // not covered by the measurement below.
+          const usesToken = declared.indexOf('var(--toolrail-focus-ring)') !== -1;
+          const offset = parseFloat(rule.style.getPropertyValue('outline-offset')) || 0;
+          for (const sel of rule.selectorText.split(',')) {
+            const base = sel.trim().replace(/:focus-visible/g, '');
+            const el = document.querySelector(base);
+            if (!el) {
+              results.push({ selector: sel.trim(), found: false });
+              continue;
+            }
+            // A non-negative offset draws the ring OUTSIDE the border box,
+            // so the colour behind it is the parent's, not the element's.
+            // Measuring the element's own background instead reads a
+            // pressed tool's blue fill and reports a false failure.
+            const surface = surfaceFrom(offset >= 0 ? el.parentElement : el);
+            results.push({
+              selector: sel.trim(),
+              found: true,
+              usesToken,
+              ratio: ratio(ring.rgb, surface),
+            });
+          }
+        }
+      }
+      return { token, results };
+    });
+
+    await page.locator('#toolrail-rail [data-tool="shape"]').click();
+    await expect(page.locator('.toolrail-flyout')).toBeVisible();
+    const withFlyout = await sweep();
+
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await expect(page.locator('.toolrail-settings')).toBeVisible();
+    const withDialog = await sweep();
+
+    // Merge: keep the pass in which each selector actually resolved.
+    const bySelector = new Map();
+    for (const r of withFlyout.results.concat(withDialog.results)) {
+      if (!bySelector.has(r.selector) || (!bySelector.get(r.selector).found && r.found)) {
+        bySelector.set(r.selector, r);
+      }
+    }
+    const results = Array.from(bySelector.values());
+
+    // Guard against a vacuous pass: the sweep must have found the rules and
+    // resolved a real colour.
+    expect(withFlyout.token).toBeTruthy();
+    expect(results.length).toBeGreaterThanOrEqual(6);
+    const missing = results.filter((r) => !r.found);
+    expect(missing, `no live element for — ${JSON.stringify(missing)}`).toEqual([]);
+    expect(results.filter((r) => !r.usesToken)).toEqual([]);
+
+    const failing = results.filter((r) => r.ratio < 3);
+    expect(failing, `focus rings below 3:1 — ${JSON.stringify(failing)}`).toEqual([]);
+  });
+
+  test('keyboard focus genuinely matches :focus-visible on the rail', async ({ page }) => {
+    await openNewPost(page);
+
+    // The previous version used programmatic .focus(), which does not
+    // reliably match :focus-visible in Chromium — and because the base
+    // .toolrail-tool declares no outline of its own, getComputedStyle fell
+    // back to currentColor (#e0e0e0, 12.6:1) and the assertion passed no
+    // matter what the ring was actually set to.
+    await page.locator('#toolrail-rail [data-tool="select"]').focus();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowUp');
+
+    const state = await page.evaluate(() => {
+      const btn = document.querySelector('#toolrail-rail [data-tool="select"]');
+      return {
+        isActive: document.activeElement === btn,
+        matchesFocusVisible: btn.matches(':focus-visible'),
+        outlineColor: getComputedStyle(btn).outlineColor,
+        outlineWidth: getComputedStyle(btn).outlineWidth,
+      };
+    });
+
+    expect(state.isActive).toBe(true);
+    expect(state.matchesFocusVisible).toBe(true);
+    // Exact colour, so a regression to #3858e9 fails loudly rather than
+    // sliding through on a fallback.
+    expect(state.outlineColor).toBe('rgb(123, 144, 255)');
+    expect(state.outlineWidth).toBe('2px');
+  });
+
+  test('rapid repeat inserts are not swept away by a stale pass', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data
+        .dispatch('core/block-editor')
+        .resetBlocks([createBlock('core/paragraph', { content: 'ALPHA' })]);
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(1);
+
+    // Paragraph is the DEFAULT block type, so every block this inserts is
+    // an unmodified default paragraph — indistinguishable, by shape alone,
+    // from the stray the sweep exists to remove. Two inserts inside the
+    // 80ms backstop window is the shift-click-to-repeat workflow, and the
+    // first click's delayed pass used to run against a knownIds snapshot
+    // that predated the second block and delete it.
+    await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').click();
+    await page.evaluate(async () => {
+      const doc = document.querySelector('iframe[name="editor-canvas"]').contentDocument;
+      const fire = (shift) => {
+        const opts = {
+          bubbles: true,
+          cancelable: true,
+          clientX: 300,
+          clientY: 500,
+          view: doc.defaultView,
+          button: 0,
+          shiftKey: shift,
+        };
+        doc.body.dispatchEvent(new PointerEvent('pointerdown', opts));
+        doc.body.dispatchEvent(new MouseEvent('click', opts));
+      };
+      fire(true); // keeps the tool armed
+      await new Promise((r) => setTimeout(r, 30)); // inside the 80ms window
+      fire(false);
+    });
+
+    // Wait past both sweep passes before judging.
+    await page.waitForTimeout(400);
+    expect(await blockNames(page)).toEqual([
+      'core/paragraph',
+      'core/paragraph',
+      'core/paragraph',
+    ]);
+  });
+
+  test('a later gesture invalidates a pending sweep', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data
+        .dispatch('core/block-editor')
+        .resetBlocks([createBlock('core/paragraph', { content: 'ALPHA' })]);
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(1);
+
+    // Arm a tool, insert, then start a NEW gesture and create an unmodified
+    // default paragraph inside the 80ms backstop window. Under Select that
+    // paragraph is core's click-to-write, which is the author's intent — a
+    // pending pass from the armed click must not reach it.
+    //
+    // Asserted by clientId rather than by block count: the block is an
+    // unmodified default paragraph (the only shape the sweep can mistake
+    // for a stray), so counting paragraphs is ambiguous, and whatever else
+    // the editor does to the document is irrelevant to the question.
+    await page.locator('#toolrail-rail [data-tool="pin:core/heading"]').click();
+    const survivorId = await page.evaluate(async () => {
+      const doc = document.querySelector('iframe[name="editor-canvas"]').contentDocument;
+      const opts = {
+        bubbles: true,
+        cancelable: true,
+        clientX: 300,
+        clientY: 500,
+        view: doc.defaultView,
+        button: 0,
+      };
+      doc.body.dispatchEvent(new PointerEvent('pointerdown', opts));
+      doc.body.dispatchEvent(new MouseEvent('click', opts));
+
+      await new Promise((r) => setTimeout(r, 30));
+
+      // A fresh gesture. This bumps the generation, retiring the armed
+      // click's pending passes.
+      doc.body.dispatchEvent(new PointerEvent('pointerdown', opts));
+      const { createBlock } = window.wp.blocks;
+      const block = createBlock('core/paragraph');
+      window.wp.data.dispatch('core/block-editor').insertBlocks(block);
+      return block.clientId;
+    });
+
+    // Past both sweep passes.
+    await page.waitForTimeout(400);
+    const survived = await page.evaluate(
+      (id) => !!window.wp.data.select('core/block-editor').getBlock(id),
+      survivorId
+    );
+    expect(survived).toBe(true);
+  });
+
+  test('an empty slot list from before the migration stays empty', async ({ page }) => {
+    await openNewPost(page);
+
+    // The finding-4 case: an author who unpinned everything has an EMPTY
+    // list and no stamp, which used to be indistinguishable from a fresh
+    // install — so migration re-pinned all three, against readme.txt's
+    // promise that removing them sticks. (Distinct from the already-
+    // stamped case tested above.)
+    await page.evaluate(() => {
+      window.localStorage.setItem('toolrail-quick-slots', JSON.stringify([]));
+      window.localStorage.removeItem('toolrail-slots-migrated');
+    });
+    await page.reload();
+    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+
+    await expect(page.locator('#toolrail-rail [data-tool^="pin:"]')).toHaveCount(0);
+    // Still stamped, so it is not re-evaluated on every load.
+    expect(await page.evaluate(() => window.localStorage.getItem('toolrail-slots-migrated'))).toBe('1');
+  });
+
+  test('saved sets survive storage failing part-way through a session', async ({ page }) => {
+    await openNewPost(page);
+
+    // Save a set the normal way, so it is genuinely in localStorage.
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('#toolrail-settings-setname').fill('kit');
+    await page.locator('.toolrail-settings-saveset').click();
+    await expect(page.locator('.toolrail-settings-setrow')).toHaveCount(1);
+    await page.keyboard.press('Escape');
+
+    // Now make storage start throwing mid-session, the way a quota hit
+    // would. readKey must already have mirrored what it read, or the rail
+    // and the saved sets vanish until reload.
+    await page.evaluate(() => {
+      const proto = window.Storage.prototype;
+      proto.setItem = function () {
+        throw new Error('QuotaExceededError');
+      };
+      proto.getItem = function () {
+        throw new Error('SecurityError');
+      };
+    });
+
+    // Force a re-read through the plugin's own paths.
+    await page.evaluate(() => window.toolrail.moveSlot('core/heading', -1));
+
+    const state = await page.evaluate(() => ({
+      slots: Array.from(document.querySelectorAll('#toolrail-rail [data-tool^="pin:"]')).map(
+        (b) => b.dataset.tool
+      ),
+    }));
+    expect(state.slots.length).toBe(3);
+
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await expect(page.locator('.toolrail-settings-setrow')).toHaveCount(1);
   });
 });

@@ -50,7 +50,7 @@ Descriptors, not React nodes — the rail owns the roving tabindex (deliberately
 shape as your own `typost_editor_toolbar_buttons` filter). The registry fires
 `toolrail:tools-updated` on `window` after each successful registration.
 
-**About `parent` since 0.3.0:** Text/Heading/Image are pinned slots rather than fixed
+**About `parent` since 0.1.2:** Text/Heading/Image are pinned slots rather than fixed
 built-ins, and `'text'` is an alias for the pinned Paragraph slot. A block name
 (`'core/paragraph'`) or a slot id (`'pin:core/paragraph'`) also works — against ANY
 pinned block, `typost/block` included. If the author has unpinned the parent, the tool

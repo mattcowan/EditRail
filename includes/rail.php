@@ -56,7 +56,7 @@ function toolrail_register_rail_assets() {
     wp_register_script(
         'toolrail-editor-rail',
         TOOLRAIL_PLUGIN_URL . 'assets/editor-rail.js',
-        ['wp-data', 'wp-blocks', 'wp-i18n', 'wp-element', 'wp-components', 'wp-plugins', 'wp-block-editor'],
+        ['wp-data', 'wp-blocks', 'wp-i18n', 'wp-a11y', 'wp-element', 'wp-components', 'wp-plugins', 'wp-block-editor'],
         toolrail_asset_version('assets/editor-rail.js'),
         true
     );
