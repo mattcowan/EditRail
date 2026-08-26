@@ -69,7 +69,6 @@
   var CONFIGS_KEY = 'toolrail-slot-configs';
   var POSITION_KEY = 'toolrail-position';
   var MIGRATED_KEY = 'toolrail-slots-migrated';
-  var LS_MIGRATED_KEY = 'toolrail-ls-migrated';
   var PREFS_SCOPE = 'toolrail';
   var SHAPE_FILL = '#b9b9b9';
 
@@ -89,11 +88,16 @@
   // Every preference goes through readKey/writeKey (string values, null
   // = never written — migration semantics depend on that distinction).
   // The localStorage machinery below survives as the FALLBACK for any
-  // context where the preferences store is unavailable, keeping the
-  // 0.1.4 resilience contract there: a session where Storage THROWS (a
-  // private window, "block site data") stays coherent for its lifetime
-  // via the in-memory mirror; `storageBroken` latches on the first throw
-  // so a hard-failing browser is not re-probed on every read.
+  // context where the preferences store is unavailable, OR — per KEY —
+  // has proven unreliable this session, keeping the 0.1.4 resilience
+  // contract there: a session where Storage THROWS (a private window,
+  // "block site data", quota hit) stays coherent for its lifetime via
+  // the in-memory mirror; `storageBroken` and `brokenPrefKeys` each
+  // latch on their first throw so a hard-failing browser is not
+  // re-probed on every read, and — critically — reads and writes agree
+  // on which source is authoritative for a given key once it has
+  // latched (see writeKey), without dragging every OTHER key still
+  // working fine in the store down with it.
   // -------------------------------------------------------------------
 
   function prefsSelect() {
@@ -144,50 +148,70 @@
     }
   }
 
+  // Per-KEY latch: set when disp.set() has thrown once for that key — see
+  // writeKey. Reads must honor it too, and only for that key: core's own
+  // reducer never applies a failed write, so sel.get() would keep
+  // returning the stale pre-write value forever for THIS key, while the
+  // fallback write landed in memoryStore/localStorage instead — but every
+  // OTHER key the store already holds is untouched by that failure and
+  // must keep reading from the store, or a single bad write would wrongly
+  // orphan everything else already saved there this session.
+  var brokenPrefKeys = Object.create(null);
+
   function readKey(key) {
-    var sel = prefsSelect();
-    if (sel) {
-      var value = sel.get(PREFS_SCOPE, key);
-      return value === undefined || value === null ? null : String(value);
+    if (!brokenPrefKeys[key]) {
+      var sel = prefsSelect();
+      if (sel) {
+        var value = sel.get(PREFS_SCOPE, key);
+        return value === undefined || value === null ? null : String(value);
+      }
     }
     return readLocalKey(key);
   }
 
   function writeKey(key, value) {
-    var disp = prefsDispatch();
-    if (disp) {
-      try {
-        disp.set(PREFS_SCOPE, key, value);
-      } catch (e) {
-        // Core's persistence layer writes its localStorage cache
-        // SYNCHRONOUSLY inside the dispatch, unguarded — a browser whose
-        // Storage throws (quota hit, private mode) surfaces that throw
-        // here. The redux state has already updated by the time the
-        // persistence listener runs, so the in-session value is intact;
-        // only cross-reload persistence is at risk — the same contract
-        // the localStorage fallback keeps via its memory mirror.
+    if (!brokenPrefKeys[key]) {
+      var disp = prefsDispatch();
+      if (disp) {
+        try {
+          disp.set(PREFS_SCOPE, key, value);
+          return;
+        } catch (e) {
+          // Core's persistence layer writes its localStorage cache
+          // SYNCHRONOUSLY inside the reducer, BEFORE the reducer returns
+          // the next state — a browser whose Storage throws (quota hit,
+          // private mode) surfaces that throw here, and it aborts the
+          // whole dispatch: the in-session redux value never updates
+          // either, so a swallow-and-return here would silently drop
+          // the write. Once THIS key has proven unreliable, stop
+          // trusting the store for it (reads included, above) and fall
+          // through to the same local fallback a missing store uses.
+          brokenPrefKeys[key] = true;
+        }
       }
-      return;
     }
     writeLocalKey(key, value);
   }
 
   /**
-   * One-time lift of this browser's localStorage state into the account
-   * preferences, run at boot (after the editor attaches the persistence
-   * layer — a module-scope write could be clobbered when it attaches).
+   * Lift this browser's localStorage state into the account preferences,
+   * run at boot (and re-run by the boot-race guard below if the
+   * persistence layer's attach lands after boot() and wipes what boot()
+   * just wrote).
    *
-   * The stamp lives IN the preferences, so it syncs with the account:
-   * once any browser has established the account state, another
-   * browser's stale localStorage is deliberately NOT merged over it —
-   * per-key, an existing account value always wins.
+   * No global stamp gates this — a per-key check is the whole gate:
+   * `sel.get(PREFS_SCOPE, key) !== undefined` skips any key the account
+   * already has, so once any browser has established a key, another
+   * browser's stale localStorage never overwrites it. Re-running this on
+   * every boot is deliberate, not just tolerated: a global stamp here
+   * previously let the FIRST browser to boot (even one with nothing to
+   * migrate) block every later browser's real local state from ever
+   * being lifted. The per-key check alone is idempotent and cheap enough
+   * to run unconditionally.
    */
   function migrateLocalToPrefs() {
     var sel = prefsSelect();
     if (!sel || !prefsDispatch()) {
-      return;
-    }
-    if (sel.get(PREFS_SCOPE, LS_MIGRATED_KEY) !== undefined) {
       return;
     }
     // writeKey, not a raw dispatch: it owns the throwing-Storage guard.
@@ -200,7 +224,6 @@
         writeKey(key, local);
       }
     });
-    writeKey(LS_MIGRATED_KEY, '1');
   }
 
   // -------------------------------------------------------------------
@@ -645,8 +668,9 @@
     writeKey(MIGRATED_KEY, '1');
   }
 
-  // migrateSlots() runs from boot(), after migrateLocalToPrefs() — both
-  // must wait for the editor's preferences persistence layer.
+  // migrateSlots() runs from boot(), after migrateLocalToPrefs() — and
+  // may run again from watchPersistenceAttach() if the persistence
+  // layer's own attach lands late and wipes this pass.
 
   function loadSlots() {
     var raw = readKey(SLOTS_KEY);
@@ -2864,6 +2888,67 @@
     });
   }
 
+  /**
+   * Self-heals the boot-order race between boot()'s migration writes and
+   * the editor's own async attach of the preferences persistence layer.
+   *
+   * `wp-preferences` being a script dependency only guarantees the
+   * `core/preferences` store is REGISTERED, and that core's attach
+   * (SET_PERSISTENCE_LAYER) has been dispatched, before this file runs —
+   * not that it has RESOLVED. That dispatch is an async thunk which, for
+   * an author with no saved preferences yet (no user-meta, no matching
+   * localStorage), awaits a real REST fetch before resolving. If that
+   * resolution lands after boot()'s migration has already written into
+   * the pre-attach state, core's reducer replaces the WHOLE
+   * `core/preferences` state wholesale — silently wiping those writes.
+   *
+   * SET_PERSISTENCE_LAYER is the only action that can make an
+   * already-set stamp read back as unset, and WordPress dispatches it at
+   * most once per page load. So rather than guess at timing, watch for
+   * exactly that: a dispatch against `core/preferences` that leaves
+   * migrateSlots()'s stamp missing again means a wipe happened. Redo the
+   * migration (idempotent, and this time nothing is racing it) and
+   * repaint. Once the stamp is confirmed to have survived a dispatch,
+   * there is nothing left that could ever wipe it again this page load,
+   * so the watcher unsubscribes itself.
+   */
+  function watchPersistenceAttach() {
+    if (!wp.data || typeof wp.data.subscribe !== 'function' || !prefsSelect()) {
+      return;
+    }
+
+    var repairing = false;
+
+    var unsubscribe = wp.data.subscribe(function () {
+      if (repairing) {
+        return;
+      }
+      if (readKey(MIGRATED_KEY) !== null) {
+        unsubscribe();
+        return;
+      }
+      repairing = true;
+      try {
+        migrateLocalToPrefs();
+        migrateSlots();
+        var restored = loadPosition();
+        position.dock = restored.dock;
+        position.x = restored.x;
+        position.y = restored.y;
+        var existingRegion = document.getElementById('toolrail-region');
+        if (existingRegion) {
+          existingRegion.remove();
+        }
+        mount();
+      } finally {
+        repairing = false;
+      }
+      if (readKey(MIGRATED_KEY) !== null) {
+        unsubscribe();
+      }
+    }, 'core/preferences');
+  }
+
   // -------------------------------------------------------------------
   // Boot. _wpLoadBlockEditor resolves when the editor has actually
   // initialized (more precise than domReady — the Phase 0 spike used it);
@@ -2877,6 +2962,10 @@
     migrateLocalToPrefs();
     position = loadPosition();
     migrateSlots();
+    // These writes can still lose a race with the preferences store's
+    // own async attach — watchPersistenceAttach() catches and repairs
+    // that if it happens.
+    watchPersistenceAttach();
     registerPinMenuItem();
     start();
   }

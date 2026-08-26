@@ -25,17 +25,17 @@ async function openNewPost(page) {
   // through the shared admin account. Clearing also restores the DEFAULT
   // pinned slots (Text/Heading/Image), which several tests rely on.
   //
-  // The two migration stamps MUST be cleared with the rest: they stop the
-  // one-time migrations from re-running, and the slot migration is what
-  // seeds the defaults — leave a stamp set with the data wiped and the
-  // rail comes back empty instead of default.
+  // The slot-migration stamp MUST be cleared with the rest: it stops the
+  // one-time slot migration from re-running, which is what seeds the
+  // defaults — leave it set with the data wiped and the rail comes back
+  // empty instead of default. (The local-to-account lift has no stamp of
+  // its own — it's a per-key check against the account, safe to re-run.)
   const hadState = await page.evaluate(() => {
     const keys = [
       'toolrail-position',
       'toolrail-quick-slots',
       'toolrail-slot-configs',
       'toolrail-slots-migrated',
-      'toolrail-ls-migrated',
     ];
     let had = false;
     keys.forEach((k) => {
@@ -1029,7 +1029,7 @@ test.describe('regressions', () => {
       window.localStorage.setItem('toolrail-quick-slots', JSON.stringify(['core/quote']));
       window.localStorage.removeItem('toolrail-slots-migrated');
       const disp = window.wp.data.dispatch('core/preferences');
-      ['toolrail-quick-slots', 'toolrail-slots-migrated', 'toolrail-ls-migrated']
+      ['toolrail-quick-slots', 'toolrail-slots-migrated']
         .forEach((k) => disp.set('toolrail', k, undefined));
     });
     await page.reload();
@@ -1362,7 +1362,7 @@ test.describe('regressions', () => {
       window.localStorage.setItem('toolrail-quick-slots', JSON.stringify([]));
       window.localStorage.removeItem('toolrail-slots-migrated');
       const disp = window.wp.data.dispatch('core/preferences');
-      ['toolrail-quick-slots', 'toolrail-slots-migrated', 'toolrail-ls-migrated']
+      ['toolrail-quick-slots', 'toolrail-slots-migrated']
         .forEach((k) => disp.set('toolrail', k, undefined));
     });
     await page.reload();
@@ -1416,6 +1416,66 @@ test.describe('regressions', () => {
     await page.locator('#toolrail-rail [data-tool="settings"]').click();
     await expect(page.locator('.toolrail-settings-setrow')).toHaveCount(1);
   });
+
+  test('unpinning actually sticks when the account store write throws', async ({ page }) => {
+    await openNewPost(page);
+
+    // The account store's own persistence layer writes its localStorage
+    // cache SYNCHRONOUSLY inside disp.set() (quota hit, private mode) —
+    // that throw must not be swallowed as if the write had landed.
+    await page.evaluate(() => {
+      window.Storage.prototype.setItem = function () {
+        throw new Error('QuotaExceededError');
+      };
+    });
+
+    await page.evaluate(() => window.toolrail.unpinBlock('core/heading'));
+
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/heading"]')).toHaveCount(0);
+    expect(await page.evaluate(() => window.toolrail.isPinned('core/heading'))).toBe(false);
+
+    // A key that never failed to write must keep reading from the store
+    // as normal — one broken key must not orphan every other key.
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/image"]')).toHaveCount(1);
+  });
+
+  test('boot migration self-heals if the account attach lands late and wipes it', async ({ page }) => {
+    await openNewPost(page);
+    await expect(page.locator('#toolrail-rail [data-tool^="pin:"]')).toHaveCount(3);
+
+    // Simulate the real WordPress attach (SET_PERSISTENCE_LAYER) landing
+    // AFTER boot()'s migration has already written — core replaces the
+    // WHOLE core/preferences state wholesale when this fires, which is
+    // exactly what can wipe an early write. A no-op set() keeps this
+    // synthetic layer from touching the real account.
+    await page.evaluate(() => window.wp.data.dispatch('core/preferences').setPersistenceLayer({
+      get: () => Promise.resolve({}),
+      set: () => {},
+    }));
+
+    // No reload: the watcher must catch the wipe from this same dispatch
+    // and repair it live.
+    await expect(page.locator('#toolrail-rail [data-tool^="pin:"]')).toHaveCount(3, { timeout: 5000 });
+    expect(await getPref(page, 'toolrail-slots-migrated')).toBe('1');
+  });
+
+  test('a second browser\'s real position is not blocked by an earlier empty-handed migration pass', async ({ page }) => {
+    await openNewPost(page); // "browser A": nothing local, migration already ran once
+
+    // "browser B": local position from before this account ever had one.
+    // A global migration stamp previously blocked this from ever being
+    // lifted once ANY browser — even one with nothing to migrate — had
+    // already booted once.
+    await page.evaluate(() => {
+      window.localStorage.setItem('toolrail-position', JSON.stringify({ dock: 'right', x: 40, y: 60 }));
+    });
+    await page.reload();
+    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+
+    await expect(page.locator('#toolrail-region')).toHaveAttribute('data-dock', 'right');
+    const lifted = JSON.parse(await getPref(page, 'toolrail-position'));
+    expect(lifted).toEqual({ dock: 'right', x: 40, y: 60 });
+  });
 });
 
 test.describe('account persistence', () => {
@@ -1434,6 +1494,18 @@ test.describe('account persistence', () => {
     const ctx = await browser.newContext({ storageState: AUTH });
     const fresh = await ctx.newPage();
     await fresh.goto(new URL('/wp-admin/post-new.php', page.url()).href);
+
+    // Prove the precondition this test actually rests on, rather than
+    // assuming it: a fresh profile has no local copy of preferences to
+    // fall back on, so whatever shows up next can only have come from
+    // the account. AUTH is captured by auth.setup.js, which only visits
+    // wp-login.php and wp-admin — never the editor — so this should
+    // always be empty; check it instead of trusting that.
+    const localPrefsKeys = await fresh.evaluate(() =>
+      Object.keys(window.localStorage).filter((k) => k.startsWith('WP_PREFERENCES_USER_'))
+    );
+    expect(localPrefsKeys).toEqual([]);
+
     await expect(fresh.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
 
     await expect(fresh.locator('#toolrail-region')).toHaveAttribute('data-dock', 'bottom');
