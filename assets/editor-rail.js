@@ -69,43 +69,60 @@
   var CONFIGS_KEY = 'toolrail-slot-configs';
   var POSITION_KEY = 'toolrail-position';
   var MIGRATED_KEY = 'toolrail-slots-migrated';
+  var LS_MIGRATED_KEY = 'toolrail-ls-migrated';
+  var PREFS_SCOPE = 'toolrail';
   var SHAPE_FILL = '#b9b9b9';
 
   // -------------------------------------------------------------------
   // Storage
   //
-  // Every preference goes through this pair rather than touching
-  // localStorage directly, because a session where storage THROWS (a
-  // private window, "block site data", some enterprise policies) has to
-  // stay coherent for its lifetime.
+  // Preferences live in wp.data's `core/preferences` store (owner
+  // decision 2026-08-26): core persists that store to the CURRENT USER's
+  // account (the wp_persisted_preferences user meta, debounced REST
+  // writes, preloaded into every editor page) — so the toolbar position,
+  // pins and saved sets follow the author across browsers and devices on
+  // this site instead of resetting per browser profile. It is the same
+  // mechanism core uses for its own editor preferences. User meta is
+  // per-site; moving state between SITES stays the job of set
+  // export/import.
   //
-  // The failure this fixes: reads and writes used to disagree. Each
-  // reader had its own catch returning some default while every writer
-  // swallowed its exception and reported success, so unpinning a default
-  // slot appeared to work and the slot came straight back on the next
-  // read — permanently, with no way for the author to tell why.
-  //
-  // With an in-memory mirror the session behaves normally end to end;
-  // only persistence across a reload is lost. `storageBroken` latches on
-  // the first throw so a hard-failing browser is not re-probed on every
-  // single read.
+  // Every preference goes through readKey/writeKey (string values, null
+  // = never written — migration semantics depend on that distinction).
+  // The localStorage machinery below survives as the FALLBACK for any
+  // context where the preferences store is unavailable, keeping the
+  // 0.1.4 resilience contract there: a session where Storage THROWS (a
+  // private window, "block site data") stays coherent for its lifetime
+  // via the in-memory mirror; `storageBroken` latches on the first throw
+  // so a hard-failing browser is not re-probed on every read.
   // -------------------------------------------------------------------
+
+  function prefsSelect() {
+    try {
+      return wp.data && wp.data.select ? (wp.data.select('core/preferences') || null) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function prefsDispatch() {
+    try {
+      return wp.data && wp.data.dispatch ? (wp.data.dispatch('core/preferences') || null) : null;
+    } catch (e) {
+      return null;
+    }
+  }
 
   var storageBroken = false;
   var memoryStore = Object.create(null);
 
-  function readKey(key) {
+  function readLocalKey(key) {
     if (!storageBroken) {
       try {
         var value = window.localStorage.getItem(key);
-        // Mirror every SUCCESSFUL read, not just writes. Storage can start
-        // throwing part-way through a session (a quota hit, a private-mode
-        // edge case), and once storageBroken latches, this mirror is the
-        // only copy left. Without the backfill, a key that had been read
-        // but never written — saved sets are the obvious one, since
-        // CONFIGS_KEY is not written until the author saves a set — read
-        // back as null, and the rail silently emptied itself of pins and
-        // sets until the next reload.
+        // Mirror every SUCCESSFUL read, not just writes — once
+        // storageBroken latches this mirror is the only copy left (the
+        // 0.1.4 lesson: an unmirrored key read back as null and the rail
+        // silently emptied itself of pins and sets until reload).
         memoryStore[key] = value;
         return value;
       } catch (e) {
@@ -115,7 +132,7 @@
     return key in memoryStore ? memoryStore[key] : null;
   }
 
-  function writeKey(key, value) {
+  function writeLocalKey(key, value) {
     memoryStore[key] = value;
     if (storageBroken) {
       return;
@@ -125,6 +142,65 @@
     } catch (e) {
       storageBroken = true;
     }
+  }
+
+  function readKey(key) {
+    var sel = prefsSelect();
+    if (sel) {
+      var value = sel.get(PREFS_SCOPE, key);
+      return value === undefined || value === null ? null : String(value);
+    }
+    return readLocalKey(key);
+  }
+
+  function writeKey(key, value) {
+    var disp = prefsDispatch();
+    if (disp) {
+      try {
+        disp.set(PREFS_SCOPE, key, value);
+      } catch (e) {
+        // Core's persistence layer writes its localStorage cache
+        // SYNCHRONOUSLY inside the dispatch, unguarded — a browser whose
+        // Storage throws (quota hit, private mode) surfaces that throw
+        // here. The redux state has already updated by the time the
+        // persistence listener runs, so the in-session value is intact;
+        // only cross-reload persistence is at risk — the same contract
+        // the localStorage fallback keeps via its memory mirror.
+      }
+      return;
+    }
+    writeLocalKey(key, value);
+  }
+
+  /**
+   * One-time lift of this browser's localStorage state into the account
+   * preferences, run at boot (after the editor attaches the persistence
+   * layer — a module-scope write could be clobbered when it attaches).
+   *
+   * The stamp lives IN the preferences, so it syncs with the account:
+   * once any browser has established the account state, another
+   * browser's stale localStorage is deliberately NOT merged over it —
+   * per-key, an existing account value always wins.
+   */
+  function migrateLocalToPrefs() {
+    var sel = prefsSelect();
+    if (!sel || !prefsDispatch()) {
+      return;
+    }
+    if (sel.get(PREFS_SCOPE, LS_MIGRATED_KEY) !== undefined) {
+      return;
+    }
+    // writeKey, not a raw dispatch: it owns the throwing-Storage guard.
+    [POSITION_KEY, SLOTS_KEY, CONFIGS_KEY, MIGRATED_KEY].forEach(function (key) {
+      if (sel.get(PREFS_SCOPE, key) !== undefined) {
+        return;
+      }
+      var local = readLocalKey(key);
+      if (local !== null) {
+        writeKey(key, local);
+      }
+    });
+    writeKey(LS_MIGRATED_KEY, '1');
   }
 
   // -------------------------------------------------------------------
@@ -186,7 +262,10 @@
     return pos;
   }
 
-  var position = loadPosition();
+  // Defaults until boot() re-loads from storage — reads must wait for the
+  // editor to attach the preferences persistence layer, and nothing
+  // consumes `position` before mount anyway.
+  var position = { dock: DEFAULT_DOCK, x: 24, y: 24 };
 
   function savePosition() {
     writeKey(POSITION_KEY, JSON.stringify(position));
@@ -566,7 +645,8 @@
     writeKey(MIGRATED_KEY, '1');
   }
 
-  migrateSlots();
+  // migrateSlots() runs from boot(), after migrateLocalToPrefs() — both
+  // must wait for the editor's preferences persistence layer.
 
   function loadSlots() {
     var raw = readKey(SLOTS_KEY);
@@ -2791,6 +2871,12 @@
   // -------------------------------------------------------------------
 
   function boot() {
+    // Storage order is load-bearing: lift any old localStorage state into
+    // the account preferences FIRST, then read position and run the slot
+    // migration against the lifted state.
+    migrateLocalToPrefs();
+    position = loadPosition();
+    migrateSlots();
     registerPinMenuItem();
     start();
   }

@@ -18,25 +18,44 @@ test.use({ storageState: AUTH });
 async function openNewPost(page) {
   await page.goto('/wp-admin/post-new.php');
 
-  // Dock, pins and saved sets are per-user browser preferences, so a spec
-  // that changes any of them would otherwise leak state into every later
-  // spec. Clearing the keys also restores the DEFAULT pinned slots
-  // (Text/Heading/Image), which several tests rely on. Only pay for a
-  // reload when something was actually left behind.
+  // Dock, pins and saved sets are per-user preferences — since the
+  // account-persistence change they live in the core/preferences store
+  // (synced to user meta), with localStorage as the migration source and
+  // fallback. Clear BOTH, or a spec's changes leak into every later spec
+  // through the shared admin account. Clearing also restores the DEFAULT
+  // pinned slots (Text/Heading/Image), which several tests rely on.
   //
-  // `toolrail-slots-migrated` MUST be cleared with the rest. It is the
-  // stamp that stops the one-time 0.1.x slot migration from re-running,
-  // and the migration is what seeds the defaults — leave it set with the
-  // slot list wiped and the rail comes back empty instead of default.
+  // The two migration stamps MUST be cleared with the rest: they stop the
+  // one-time migrations from re-running, and the slot migration is what
+  // seeds the defaults — leave a stamp set with the data wiped and the
+  // rail comes back empty instead of default.
   const hadState = await page.evaluate(() => {
     const keys = [
       'toolrail-position',
       'toolrail-quick-slots',
       'toolrail-slot-configs',
       'toolrail-slots-migrated',
+      'toolrail-ls-migrated',
     ];
-    const had = keys.some((k) => window.localStorage.getItem(k) !== null);
-    keys.forEach((k) => window.localStorage.removeItem(k));
+    let had = false;
+    keys.forEach((k) => {
+      if (window.localStorage.getItem(k) !== null) {
+        had = true;
+      }
+      window.localStorage.removeItem(k);
+    });
+    try {
+      const sel = window.wp.data.select('core/preferences');
+      const disp = window.wp.data.dispatch('core/preferences');
+      keys.forEach((k) => {
+        if (sel.get('toolrail', k) !== undefined) {
+          had = true;
+          disp.set('toolrail', k, undefined);
+        }
+      });
+    } catch (e) {
+      /* Store not ready — nothing stored there either, then. */
+    }
     return had;
   });
   if (hadState) {
@@ -57,6 +76,14 @@ async function openNewPost(page) {
 
 function canvas(page) {
   return page.frameLocator('iframe[name="editor-canvas"]');
+}
+
+/** Read one rail preference from the core/preferences store (null = unset). */
+async function getPref(page, key) {
+  return page.evaluate((k) => {
+    const v = window.wp.data.select('core/preferences').get('toolrail', k);
+    return v === undefined ? null : v;
+  }, key);
 }
 
 async function blockNames(page) {
@@ -253,7 +280,7 @@ test.describe('quick slots', () => {
     await page.locator('#toolrail-rail [data-tool="settings"]').click();
     await page.locator('.toolrail-settings-pinnedrow[data-block="core/paragraph"] .toolrail-settings-remove').click();
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveCount(0);
-    expect(await page.evaluate(() => window.localStorage.getItem('toolrail-quick-slots'))).not.toContain('core/paragraph');
+    expect(await getPref(page, 'toolrail-quick-slots')).not.toContain('core/paragraph');
   });
 
   test('a pinned core block renders a visible icon (viewBox-only SVGs get sized)', async ({ page }) => {
@@ -330,7 +357,7 @@ test.describe('saved-set import/export', () => {
     await page.locator('.toolrail-settings-setrow[data-config="other theme"] .toolrail-settings-load').click();
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/quote"]')).toBeVisible();
     await expect(page.locator('#toolrail-rail [data-tool="pin:othertheme/fancy-hero"]')).toHaveCount(0);
-    expect(await page.evaluate(() => window.localStorage.getItem('toolrail-quick-slots'))).toContain('othertheme/fancy-hero');
+    expect(await getPref(page, 'toolrail-quick-slots')).toContain('othertheme/fancy-hero');
     await expect(status).toContainText('not available on this site');
   });
 
@@ -993,20 +1020,24 @@ test.describe('regressions', () => {
   test('a pre-migration author keeps Text, Heading and Image on upgrade', async ({ page }) => {
     await openNewPost(page);
 
-    // Reproduce pre-migration storage: a slot list written by the old build
-    // (which held none of the three, because they were built-in tools then)
-    // and NO migration stamp.
+    // Reproduce pre-migration storage: a LOCALSTORAGE slot list written by
+    // an old build (which held none of the three — they were built-in
+    // tools then), no stamps, and NOTHING in the account preferences (the
+    // just-booted rail wrote there, so clear it again). Boot must chain
+    // both migrations: localStorage → preferences, then the slot seeding.
     await page.evaluate(() => {
       window.localStorage.setItem('toolrail-quick-slots', JSON.stringify(['core/quote']));
       window.localStorage.removeItem('toolrail-slots-migrated');
+      const disp = window.wp.data.dispatch('core/preferences');
+      ['toolrail-quick-slots', 'toolrail-slots-migrated', 'toolrail-ls-migrated']
+        .forEach((k) => disp.set('toolrail', k, undefined));
     });
     await page.reload();
     await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
 
-    // The three return, ahead of the author's own pin, which survives.
-    const slots = await page.evaluate(() =>
-      JSON.parse(window.localStorage.getItem('toolrail-quick-slots'))
-    );
+    // The three return, ahead of the author's own pin, which survives —
+    // and the lifted state now lives in the account preferences.
+    const slots = JSON.parse(await getPref(page, 'toolrail-quick-slots'));
     expect(slots).toEqual(['core/paragraph', 'core/heading', 'core/image', 'core/quote']);
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/quote"]')).toHaveCount(1);
   });
@@ -1014,10 +1045,12 @@ test.describe('regressions', () => {
   test('an emptied rail is not re-seeded on the next load', async ({ page }) => {
     await openNewPost(page);
 
-    // Post-migration, an author who unpins everything means it.
+    // Post-migration, an author who unpins everything means it. The
+    // post-migration home is the account preferences.
     await page.evaluate(() => {
-      window.localStorage.setItem('toolrail-quick-slots', JSON.stringify([]));
-      window.localStorage.setItem('toolrail-slots-migrated', '1');
+      const disp = window.wp.data.dispatch('core/preferences');
+      disp.set('toolrail', 'toolrail-quick-slots', JSON.stringify([]));
+      disp.set('toolrail', 'toolrail-slots-migrated', '1');
     });
     await page.reload();
     await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
@@ -1322,22 +1355,25 @@ test.describe('regressions', () => {
 
     // Owner decision 2026-08-26 (reversing the earlier accepted-cost
     // call): under pre-migration builds Text/Heading/Image were built-in
-    // tools, so an old "[]" never meant "I chose an empty rail" — the
-    // migration seeds the defaults for it. Only POST-stamp emptiness is a
-    // decision that sticks.
+    // tools, so an old localStorage "[]" never meant "I chose an empty
+    // rail" — the migration seeds the defaults for it. Only POST-stamp
+    // emptiness (in the account preferences) is a decision that sticks.
     await page.evaluate(() => {
       window.localStorage.setItem('toolrail-quick-slots', JSON.stringify([]));
       window.localStorage.removeItem('toolrail-slots-migrated');
+      const disp = window.wp.data.dispatch('core/preferences');
+      ['toolrail-quick-slots', 'toolrail-slots-migrated', 'toolrail-ls-migrated']
+        .forEach((k) => disp.set('toolrail', k, undefined));
     });
     await page.reload();
     await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
 
     await expect(page.locator('#toolrail-rail [data-tool^="pin:"]')).toHaveCount(3);
-    expect(await page.evaluate(() => window.localStorage.getItem('toolrail-slots-migrated'))).toBe('1');
+    expect(await getPref(page, 'toolrail-slots-migrated')).toBe('1');
 
     // Post-stamp: the author empties the rail and it MUST stay empty.
     await page.evaluate(() => {
-      window.localStorage.setItem('toolrail-quick-slots', JSON.stringify([]));
+      window.wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-quick-slots', JSON.stringify([]));
     });
     await page.reload();
     await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
@@ -1379,5 +1415,30 @@ test.describe('regressions', () => {
 
     await page.locator('#toolrail-rail [data-tool="settings"]').click();
     await expect(page.locator('.toolrail-settings-setrow')).toHaveCount(1);
+  });
+});
+
+test.describe('account persistence', () => {
+  test('position and pins follow the account into a fresh browser profile', async ({ page, browser }) => {
+    await openNewPost(page);
+
+    await page.evaluate(() => window.toolrail.pinBlock('core/quote'));
+    await page.evaluate(() => window.toolrail.setDock('bottom'));
+
+    // The preferences store persists to user meta on a debounce — let it
+    // flush before the fresh profile loads from the server.
+    await page.waitForTimeout(3500);
+
+    // Same login, EMPTY localStorage: everything the fresh profile shows
+    // came from the account, which is the whole point of the feature.
+    const ctx = await browser.newContext({ storageState: AUTH });
+    const fresh = await ctx.newPage();
+    await fresh.goto(new URL('/wp-admin/post-new.php', page.url()).href);
+    await expect(fresh.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+
+    await expect(fresh.locator('#toolrail-region')).toHaveAttribute('data-dock', 'bottom');
+    await expect(fresh.locator('#toolrail-rail [data-tool="pin:core/quote"]')).toBeVisible();
+
+    await ctx.close();
   });
 });
