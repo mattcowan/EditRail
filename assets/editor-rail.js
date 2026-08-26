@@ -550,22 +550,18 @@
       existing = [];
     }
 
-    // An EXPLICITLY empty list is a decision, not an absence. The author
-    // unpinned everything, and readme.txt promises that sticks — so stamp
-    // and leave it alone. Only "the key was never written at all" (handled
-    // above) counts as a fresh install.
-    //
-    // The cost, accepted: someone who pinned and then unpinned everything
-    // BEFORE this migration existed also holds "[]", and back then the
-    // three were built-in tools they never chose to lose. They will have
-    // to re-pin. Overriding a stated preference is the worse failure, and
-    // the plugin has not shipped.
-    if (existing.length) {
-      var restored = DEFAULT_SLOTS.filter(function (name) {
-        return existing.indexOf(name) === -1;
-      }).concat(existing);
-      writeKey(SLOTS_KEY, JSON.stringify(restored));
-    }
+    // A PRE-STAMP empty list is treated as an absence, not a decision
+    // (owner decision 2026-08-26, reversing the earlier accepted-cost
+    // call): under the old builds Text/Heading/Image were built-in tools,
+    // so "[]" back then never meant "I chose an empty rail" — it usually
+    // meant a test drive of unpinning whatever HAD been pinned. The
+    // plugin has not shipped, so nobody's real preference predates the
+    // stamp. POST-stamp emptiness is a decision and sticks (loadSlots
+    // never re-seeds; readme.txt promises removing the defaults sticks).
+    var restored = DEFAULT_SLOTS.filter(function (name) {
+      return existing.indexOf(name) === -1;
+    }).concat(existing);
+    writeKey(SLOTS_KEY, JSON.stringify(restored));
     writeKey(MIGRATED_KEY, '1');
   }
 
@@ -716,9 +712,10 @@
         id: 'pin:' + name,
         label: sprintf(
           /* translators: %s: block title. */
-          __('%s (pinned) — click in the canvas to insert; Delete unpins', 'toolrail'),
+          __('%s (pinned block)', 'toolrail'),
           type.title || name
         ),
+        hint: __('click in the canvas to insert; manage pinned blocks in Toolbar settings', 'toolrail'),
         icon: '',
         blockIcon: type.icon,
         insertBlock: name,
@@ -2321,7 +2318,13 @@
     btn.type = 'button';
     btn.className = 'toolrail-tool';
     btn.dataset.tool = tool.id;
-    btn.setAttribute('aria-label', toolTitle(tool));
+    // The accessible NAME is the label alone; the how-to hint rides only
+    // the pointer tooltip. Baking hints into aria-label made every button
+    // read a wall of repeated instruction ("— click in the canvas to
+    // insert…" a dozen times down the rail) to screen-reader users (owner
+    // feedback 2026-08-26). Instructional copy belongs in the planned
+    // help panel (private/roadmap.md), not in each button's name.
+    btn.setAttribute('aria-label', tool.label);
     btn.setAttribute('aria-pressed', 'false');
     btn.title = toolTitle(tool);
     btn.tabIndex = -1;
@@ -2371,33 +2374,12 @@
     });
 
     if (tool.pinnedBlock) {
+      // Removal is DELIBERATE-only: the settings dialog's Remove button
+      // and the block menu's "Unpin from toolbar" item. The old on-rail
+      // paths — a hover × and the Delete key — put accidental removal one
+      // slip away, with recovery buried in settings (owner decision
+      // 2026-08-26).
       btn.classList.add('toolrail-tool--pinned');
-      btn.addEventListener('keydown', function (e) {
-        if (e.key === 'Delete' || e.key === 'Backspace') {
-          e.preventDefault();
-          var prev = btn.previousElementSibling;
-          unpinBlock(tool.pinnedBlock);
-          // rerender() replaced the rail; move focus somewhere sensible.
-          var rail = document.getElementById('toolrail-rail');
-          var fallback = rail && rail.querySelector('.toolrail-tool');
-          var target = prev && prev.dataset && prev.dataset.tool && rail
-            ? rail.querySelector(toolSelector(prev.dataset.tool)) : null;
-          (target || fallback || btn).focus();
-        }
-      });
-
-      // Pointer-only sugar; the keyboard paths are the Delete key here and
-      // the block menu's Pin/Unpin item.
-      var remove = document.createElement('span');
-      remove.className = 'toolrail-slot-remove';
-      remove.setAttribute('aria-hidden', 'true');
-      remove.textContent = '×';
-      remove.addEventListener('mousedown', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        unpinBlock(tool.pinnedBlock);
-      });
-      btn.appendChild(remove);
     }
 
     return btn;

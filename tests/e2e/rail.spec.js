@@ -208,7 +208,7 @@ test.describe('quick slots', () => {
     expect(reordered.slice(1, 3)).toEqual(['pin:core/heading', 'pin:core/paragraph']);
   });
 
-  test('unpin and re-pin via the block menu, persist across reload, Delete unpins', async ({ page }) => {
+  test('unpin and re-pin via the block menu, persist across reload, settings Remove unpins', async ({ page }) => {
     await openNewPost(page);
 
     // Insert a paragraph to have a block whose menu we can open.
@@ -240,9 +240,18 @@ test.describe('quick slots', () => {
     await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toBeVisible();
 
-    // Delete on the focused slot unpins it.
+    // Removal is deliberate-only (owner decision 2026-08-26): the on-rail
+    // hover × and Delete key are GONE — Delete on a focused slot must be
+    // inert, and unpinning goes through the settings dialog's Remove.
     await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').focus();
     await page.keyboard.press('Delete');
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toBeVisible();
+    expect(await page.evaluate(() =>
+      document.querySelector('#toolrail-rail [data-tool="pin:core/paragraph"] .toolrail-slot-remove')
+    )).toBeNull();
+
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('.toolrail-settings-pinnedrow[data-block="core/paragraph"] .toolrail-settings-remove').click();
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveCount(0);
     expect(await page.evaluate(() => window.localStorage.getItem('toolrail-quick-slots'))).not.toContain('core/paragraph');
   });
@@ -1308,14 +1317,14 @@ test.describe('regressions', () => {
     expect(survived).toBe(true);
   });
 
-  test('an empty slot list from before the migration stays empty', async ({ page }) => {
+  test('a PRE-stamp empty slot list seeds the defaults; a POST-stamp one stays empty', async ({ page }) => {
     await openNewPost(page);
 
-    // The finding-4 case: an author who unpinned everything has an EMPTY
-    // list and no stamp, which used to be indistinguishable from a fresh
-    // install — so migration re-pinned all three, against readme.txt's
-    // promise that removing them sticks. (Distinct from the already-
-    // stamped case tested above.)
+    // Owner decision 2026-08-26 (reversing the earlier accepted-cost
+    // call): under pre-migration builds Text/Heading/Image were built-in
+    // tools, so an old "[]" never meant "I chose an empty rail" — the
+    // migration seeds the defaults for it. Only POST-stamp emptiness is a
+    // decision that sticks.
     await page.evaluate(() => {
       window.localStorage.setItem('toolrail-quick-slots', JSON.stringify([]));
       window.localStorage.removeItem('toolrail-slots-migrated');
@@ -1323,9 +1332,16 @@ test.describe('regressions', () => {
     await page.reload();
     await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
 
-    await expect(page.locator('#toolrail-rail [data-tool^="pin:"]')).toHaveCount(0);
-    // Still stamped, so it is not re-evaluated on every load.
+    await expect(page.locator('#toolrail-rail [data-tool^="pin:"]')).toHaveCount(3);
     expect(await page.evaluate(() => window.localStorage.getItem('toolrail-slots-migrated'))).toBe('1');
+
+    // Post-stamp: the author empties the rail and it MUST stay empty.
+    await page.evaluate(() => {
+      window.localStorage.setItem('toolrail-quick-slots', JSON.stringify([]));
+    });
+    await page.reload();
+    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('#toolrail-rail [data-tool^="pin:"]')).toHaveCount(0);
   });
 
   test('saved sets survive storage failing part-way through a session', async ({ page }) => {

@@ -377,28 +377,9 @@ body.toolrail-dragging * {
     fill: currentColor;
 }
 
-/* Pinned quick slots: the × is pointer-only sugar (aria-hidden, not
-   focusable); the keyboard paths are the Delete key on the slot and the
-   block menu's Pin/Unpin item. */
-.toolrail-slot-remove {
-    position: absolute;
-    top: -4px;
-    right: -4px;
-    width: 16px;
-    height: 16px;
-    display: none;
-    place-items: center;
-    background: #cc1818;
-    color: #fff;
-    border-radius: 50%;
-    font-size: 12px;
-    line-height: 1;
-}
-
-.toolrail-tool--pinned:hover .toolrail-slot-remove,
-.toolrail-tool--pinned:focus-visible .toolrail-slot-remove {
-    display: grid;
-}
+/* Pinned quick slots carry no on-rail removal affordance: the hover × and
+   the Delete key were retired 2026-08-26 (accidental removal was one slip
+   away). Removal lives in the settings dialog and the block menu. */
 
 /* ------------------------------------------------------------------
    Toolbar settings dialog (the gear)
