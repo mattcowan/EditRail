@@ -490,7 +490,7 @@
    *
    * Deduping lives HERE rather than in each caller because a duplicate is
    * not merely untidy — two slots share one `data-tool="pin:<name>"` id,
-   * so syncPressed's querySelector paints only the first, one Delete
+   * so syncPressed's querySelector paints only the first, unpinning one
    * removes only one, and the settings dialog's `[data-block=…]` focus
    * restore matches both. pinBlock guarded against it; import and
    * loadConfig did not, which is how a hand-edited or hand-written set
@@ -527,8 +527,9 @@
    *   no stamp + no slot key      → fresh install, seed the defaults
    *   no stamp + a non-empty list → existing author, restore the three
    *                                 ahead of their own pins
-   *   no stamp + an EMPTY list    → they unpinned everything on purpose;
-   *                                 stamp it and leave the rail empty
+   *   no stamp + an EMPTY list    → treated as an absence, not a
+   *                                 decision — restore the three (see
+   *                                 the comment below on why)
    *   stamp                       → nothing to do, ever again
    *
    * @return {void}
@@ -1457,8 +1458,7 @@
   /**
    * Position picker. Dragging the rail's grip is the pointer affordance;
    * this radio group is the equivalent keyboard and screen-reader path,
-   * so repositioning never depends on a drag (the same split the pinned
-   * slots use for their × button and the Delete key).
+   * so repositioning never depends on a drag.
    */
   function buildPositionControl() {
     var fieldset = document.createElement('fieldset');
@@ -2373,15 +2373,6 @@
       setActiveTool(tool.select ? 'select' : tool.id);
     });
 
-    if (tool.pinnedBlock) {
-      // Removal is DELIBERATE-only: the settings dialog's Remove button
-      // and the block menu's "Unpin from toolbar" item. The old on-rail
-      // paths — a hover × and the Delete key — put accidental removal one
-      // slip away, with recovery buried in settings (owner decision
-      // 2026-08-26).
-      btn.classList.add('toolrail-tool--pinned');
-    }
-
     return btn;
   }
 
@@ -2393,10 +2384,10 @@
   }
 
   /**
-   * The drag handle. Pointer-only sugar, exactly like the pinned slots'
-   * × button: it is aria-hidden and unfocusable, because the keyboard and
-   * screen-reader path for repositioning is the settings dialog's
-   * "Toolbar position" radio group.
+   * The drag handle. Pointer-only sugar: it is aria-hidden and
+   * unfocusable, because the keyboard and screen-reader path for
+   * repositioning is the settings dialog's "Toolbar position" radio
+   * group.
    */
   function buildGrip() {
     var grip = document.createElement('div');

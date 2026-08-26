@@ -1,6 +1,6 @@
 === Editor Tool Rail ===
 Contributors: matthewneilcowan
-Tags: block editor, toolbar, tools, accessibility
+Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
@@ -8,13 +8,13 @@ Stable tag: 0.1.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-A movable, Photoshop-familiar toolbar for the block editor — dock it to any edge or float it. Tools insert ordinary core blocks; other plugins register their own tools through a small provider API.
+A movable, Photoshop-familiar toolbar for the block editor. Dock it to any edge or float it. Tools can insert ordinary core blocks, and a small provider API allows insertion of custom buttons from themes and plugins.
 
 == Description ==
 
-Editor Tool Rail adds a toolbar to the post editor — docked to the left edge by default, movable to any edge or floating as a palette. Selecting a tool arms it: the next click in the canvas inserts that tool's block at the click point, then the rail returns to Select (Shift-click keeps the tool armed).
+Editor Tool Rail adds a toolbar to the post editor, docked to the left edge by default, movable to any edge or floating as a palette. Selecting a tool arms it: the next click in the canvas inserts that tool's block at the click point, then the rail returns to Select (Shift-click keeps the tool armed).
 
-Everything the rail inserts is an ordinary core block — deactivating this plugin changes nothing about how authored content renders or stays editable.
+Everything the rail inserts is an ordinary core block. Deactivating this plugin changes nothing about how authored content renders or stays editable.
 
 * Built-in tools: Select, Shape (circle, rounded rectangle, hexagon, star), Section. Text, Heading and Image ship as ordinary pinned blocks, so you can reorder or remove them like anything else you pin.
 * Pin any block type as a quick-insert tool: search for it in Toolbar settings, drag it from the inserter onto the rail, or use "Pin to toolbar" in the block's options menu. Pins are a per-user browser preference.
@@ -27,7 +27,7 @@ Everything the rail inserts is an ordinary core block — deactivating this plug
 
 = Where is the toolbar position saved? =
 
-In your browser, for you only — the same as pinned blocks and saved sets. It is not site content and not stored against your user account, so a different browser or a private window starts again at the default left edge.
+In your browser, for you only, the same as pinned blocks and saved sets. It is not site content and not stored against your user account, so a different browser or a private window starts again at the default left edge.
 
 = Can I put it back if I lose it? =
 
@@ -36,7 +36,7 @@ Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a 
 == Changelog ==
 
 = 0.1.5 =
-* Pinned blocks no longer show a hover × and the Delete key no longer unpins — accidental removal was one slip away, with recovery buried in settings. Removing a pinned block is now a deliberate act: the Remove button in Toolbar settings, or "Unpin from toolbar" in the block's options menu.
+* Pinned blocks no longer show a hover × and the Delete key no longer unpins — accidental removal was one slip away, with recovery buried in settings. Removing a pinned block is now a deliberate act: the Unpin button in Toolbar settings, or "Unpin from toolbar" in the block's options menu.
 * Screen readers now hear each tool's short name ("Heading (pinned block)") instead of a repeated wall of how-to instructions on every button; the instructions remain in the pointer tooltips.
 * The upgrade step now seeds Text, Heading and Image for a browser whose slot list was emptied under an old build — back then they were fixed tools, so an empty list never meant choosing an empty toolbar. Removing them after this version still sticks.
 

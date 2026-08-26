@@ -1,6 +1,6 @@
 {
   "name": "toolrail",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "description": "Editor Tool Rail — a Photoshop-familiar left toolbar for the WordPress block editor.",
   "scripts": {
