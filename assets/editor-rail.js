@@ -8,12 +8,20 @@
  * about how authored content renders or edits.
  *
  * MOUNT STRATEGY (proven in the Background Candy Phase 0 spike): the rail is
- * inserted as the FIRST CHILD of .interface-interface-skeleton__body so it
- * participates in the editor's flex layout; a debounced MutationObserver
- * re-mounts it across React re-renders (it survives the code-editor
- * round-trip, where the whole visual editor unmounts). Vanilla DOM on
- * purpose: the rail lives OUTSIDE the React tree it observes, so React never
- * reconciles it away.
+ * inserted into the editor's own skeleton so it participates in the editor's
+ * flex layout rather than overlapping the canvas; a debounced
+ * MutationObserver re-mounts it across React re-renders (it survives the
+ * code-editor round-trip, where the whole visual editor unmounts). Vanilla
+ * DOM on purpose: the rail lives OUTSIDE the React tree it observes, so
+ * React never reconciles it away.
+ *
+ * POSITION: the rail docks to the left edge by default, and can be moved to
+ * the right edge (past the settings side panel), to a full-width bar at the
+ * top or bottom, or torn off as a floating Photoshop-style palette. Drag it
+ * by the grip and release near an edge to snap; the settings dialog carries
+ * the equivalent keyboard path. Surfaces open away from the docked edge — a
+ * top rail opens its flyouts downward, a bottom rail upward. See the
+ * "Rail position" block below for where each dock hangs.
  *
  * REGISTRATION API (the provider contract):
  *   window.toolrail.registerTool({
@@ -40,7 +48,122 @@
 
   var SLOTS_KEY = 'toolrail-quick-slots';
   var CONFIGS_KEY = 'toolrail-slot-configs';
+  var POSITION_KEY = 'toolrail-position';
   var SHAPE_FILL = '#b9b9b9';
+
+  // -------------------------------------------------------------------
+  // Rail position — docked to an edge, or floating like a Photoshop
+  // palette. A per-user browser preference, same as the quick slots.
+  //
+  // The docks hang off the editor's OWN skeleton rather than being
+  // absolutely positioned over it, so the canvas reflows around the rail
+  // instead of being overlapped. Verified against core's InterfaceSkeleton
+  // render and the shipped editor stylesheet:
+  //
+  //   .interface-interface-skeleton__editor   flex COLUMN: header, __body
+  //   .interface-interface-skeleton__body     flex ROW, position:relative:
+  //                                           secondary sidebar, content,
+  //                                           settings sidebar, actions
+  //
+  //   left   → first child of __body   (before the canvas — the default)
+  //   right  → last child of __body    (after the settings sidebar)
+  //   top    → in __editor before __body  (full-width bar under the header)
+  //   bottom → last child of __editor     (full-width bar under the canvas)
+  //   float  → last child of __body, absolutely positioned — __body is
+  //            already position:relative in core, so no editor CSS is
+  //            touched and the palette cannot be dragged off into the
+  //            admin chrome.
+  // -------------------------------------------------------------------
+
+  var DOCKS = ['left', 'right', 'top', 'bottom', 'float'];
+  var DEFAULT_DOCK = 'left';
+  var SNAP_THRESHOLD = 72;
+  var RAIL_BAND = 52;
+
+  var DOCK_LABELS = {
+    left: __('Left edge', 'toolrail'),
+    right: __('Right edge, past the side panel', 'toolrail'),
+    top: __('Top, panels open downward', 'toolrail'),
+    bottom: __('Bottom, panels open upward', 'toolrail'),
+    float: __('Floating', 'toolrail')
+  };
+
+  function loadPosition() {
+    var pos = { dock: DEFAULT_DOCK, x: 24, y: 24 };
+    try {
+      var raw = window.localStorage.getItem(POSITION_KEY);
+      var parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === 'object') {
+        if (DOCKS.indexOf(parsed.dock) !== -1) {
+          pos.dock = parsed.dock;
+        }
+        if (typeof parsed.x === 'number' && isFinite(parsed.x)) {
+          pos.x = parsed.x;
+        }
+        if (typeof parsed.y === 'number' && isFinite(parsed.y)) {
+          pos.y = parsed.y;
+        }
+      }
+    } catch (e) {
+      /* Private windows etc. — the default dock is correct. */
+    }
+    return pos;
+  }
+
+  var position = loadPosition();
+
+  function savePosition() {
+    try {
+      window.localStorage.setItem(POSITION_KEY, JSON.stringify(position));
+    } catch (e) {
+      /* Position just won't persist. */
+    }
+  }
+
+  /** Top and bottom docks lay the rail out as a horizontal bar. */
+  function isVertical() {
+    return position.dock !== 'top' && position.dock !== 'bottom';
+  }
+
+  function skeletonBody() {
+    return document.querySelector('.interface-interface-skeleton__body');
+  }
+
+  function skeletonEditor() {
+    return document.querySelector('.interface-interface-skeleton__editor');
+  }
+
+  /**
+   * Where the region belongs for the current dock, as a parent plus the
+   * node to insert before (null = append). Returns null when the editor
+   * chrome for that dock is not on the page yet — mount() then retries.
+   */
+  function dockPlacement() {
+    var body = skeletonBody();
+    var editor = skeletonEditor();
+    switch (position.dock) {
+      case 'right':
+      case 'float':
+        return body ? { parent: body, before: null } : null;
+      case 'top':
+        return editor && body && body.parentNode === editor
+          ? { parent: editor, before: body }
+          : null;
+      case 'bottom':
+        return editor ? { parent: editor, before: null } : null;
+      default:
+        return body ? { parent: body, before: body.firstChild } : null;
+    }
+  }
+
+  function isPlacedCorrectly(region, place) {
+    if (region.parentNode !== place.parent) {
+      return false;
+    }
+    // A left dock's `before` resolves to the region itself once it is the
+    // first child — that is the placed state, not a move.
+    return place.before === region || region.nextSibling === place.before;
+  }
 
   // -------------------------------------------------------------------
   // Icons — inline SVG, currentColor, theme-agnostic (no dashicons dep).
@@ -56,6 +179,25 @@
     pin: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zm0 2.3L6 8.7v6.6l6 3.4 6-3.4V8.7l-6-3.4zM12 8l3.5 2v4L12 16l-3.5-2v-4L12 8z"/></svg>',
     gear: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 9a3 3 0 110 6 3 3 0 010-6zm-1.7-6h3.4l.5 2.4c.6.2 1.1.5 1.6.9l2.3-.8 1.7 3-1.8 1.6a6.7 6.7 0 010 1.8l1.8 1.6-1.7 3-2.3-.8c-.5.4-1 .7-1.6.9l-.5 2.4h-3.4l-.5-2.4a6.6 6.6 0 01-1.6-.9l-2.3.8-1.7-3 1.8-1.6a6.7 6.7 0 010-1.8L4.2 8.5l1.7-3 2.3.8c.5-.4 1-.7 1.6-.9L10.3 3z"/></svg>'
   };
+
+  // Every React root created for a pinned-block icon, so the previous
+  // generation can be unmounted. A discarded root keeps its fiber tree
+  // alive, and the rail rebuilds on every slot change (the ↑/↓ buttons in
+  // the settings dialog rebuild it per click) — so these accumulate fast
+  // unless they are disposed. buildRail() is the ONLY producer and always
+  // creates a complete new set, which makes it the correct disposal point.
+  var iconRoots = [];
+
+  function disposeIconRoots() {
+    iconRoots.forEach(function (root) {
+      try {
+        root.unmount();
+      } catch (e) {
+        /* Already gone with its container — nothing to release. */
+      }
+    });
+    iconRoots = [];
+  }
 
   /**
    * Paint a block type's icon into a span. Block icons come in three
@@ -73,7 +215,9 @@
     if (src && wp.element && wp.element.createRoot) {
       try {
         var node = typeof src === 'function' ? wp.element.createElement(src) : src;
-        wp.element.createRoot(span).render(node);
+        var root = wp.element.createRoot(span);
+        root.render(node);
+        iconRoots.push(root);
         return;
       } catch (e) {
         /* Fall through to the generic glyph. */
@@ -203,6 +347,22 @@
     }
   }
 
+  // Tool ids are interpolated into [data-tool="…"] selectors all over the
+  // rail, so the public contract restricts them to characters that are
+  // unambiguous there. The set allows ':' and '/' because the internal
+  // pinned-slot ids are 'pin:' + a block name ('pin:core/paragraph').
+  var TOOL_ID_PATTERN = /^[A-Za-z0-9_:./-]+$/;
+
+  /**
+   * Quote a value for use inside an attribute selector. Belt to
+   * TOOL_ID_PATTERN's braces: validation guards the documented entry
+   * point, this guards every lookup, so an id arriving by some other
+   * route can still never turn a DOM sweep into a SyntaxError.
+   */
+  function toolSelector(id) {
+    return '[data-tool="' + String(id).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]';
+  }
+
   function allToolIds() {
     var ids = [];
     BUILTIN_TOOLS.forEach(function (t) {
@@ -224,6 +384,10 @@
     }
     if (typeof descriptor.id !== 'string' || descriptor.id === '') {
       warn('registerTool: a non-empty string id is required.');
+      return false;
+    }
+    if (!TOOL_ID_PATTERN.test(descriptor.id)) {
+      warn('registerTool: id "' + descriptor.id + '" has characters outside [A-Za-z0-9_:./-] — ignored.');
       return false;
     }
     if (allToolIds().indexOf(descriptor.id) !== -1) {
@@ -322,14 +486,27 @@
 
   // Named quick-slot configurations — a per-user browser preference like
   // the slots themselves ({name: [blockNames]} in localStorage).
+  //
+  // The map is deliberately PROTOTYPE-LESS. A set named '__proto__' on a
+  // plain object hits Object.prototype's inherited setter: the write is
+  // swallowed, nothing is stored, and saveConfig still reports success.
+  // With a null prototype every name is an ordinary data property.
   function loadConfigs() {
+    var out = Object.create(null);
     try {
       var raw = window.localStorage.getItem(CONFIGS_KEY);
-      var parsed = raw ? JSON.parse(raw) : {};
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      var parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        Object.keys(parsed).forEach(function (key) {
+          if (Array.isArray(parsed[key])) {
+            out[key] = parsed[key];
+          }
+        });
+      }
     } catch (e) {
-      return {};
+      /* Unparseable or unavailable storage — an empty map is correct. */
     }
+    return out;
   }
 
   function persistConfigs(map) {
@@ -613,6 +790,7 @@
     document.removeEventListener('mousedown', onDocMousedown, true);
     parentBtn.setAttribute('aria-expanded', 'false');
     openFlyout = null;
+    syncLayer();
     if (refocusParent) {
       parentBtn.focus();
     }
@@ -636,6 +814,56 @@
       return;
     }
     setActiveTool(child.id);
+  }
+
+  /**
+   * Place a floating surface (a flyout, or the settings dialog) beside the
+   * rail, opening AWAY from the docked edge: to the right of a left rail,
+   * to the left of a right rail, DOWN from a top rail, UP from a bottom
+   * one. The surface must already be in the DOM — the overflow clamp
+   * measures it.
+   *
+   * @param {HTMLElement} node    The surface.
+   * @param {HTMLElement} anchor  Button to align with (falls back to the rail).
+   * @param {HTMLElement} wrapper The positioned region the surface lives in.
+   */
+  function placeSurface(node, anchor, wrapper) {
+    var wrapperRect = wrapper.getBoundingClientRect();
+    var anchorRect = anchor ? anchor.getBoundingClientRect() : wrapperRect;
+
+    node.style.top = '';
+    node.style.right = '';
+    node.style.bottom = '';
+    node.style.left = '';
+
+    if (position.dock === 'top') {
+      node.style.top = 'calc(100% + 4px)';
+      node.style.left = Math.max(0, anchorRect.left - wrapperRect.left) + 'px';
+    } else if (position.dock === 'bottom') {
+      node.style.bottom = 'calc(100% + 4px)';
+      node.style.left = Math.max(0, anchorRect.left - wrapperRect.left) + 'px';
+    } else if (position.dock === 'right') {
+      node.style.right = 'calc(100% + 4px)';
+      node.style.top = Math.max(0, anchorRect.top - wrapperRect.top) + 'px';
+    } else {
+      node.style.left = 'calc(100% + 4px)';
+      node.style.top = Math.max(0, anchorRect.top - wrapperRect.top) + 'px';
+    }
+
+    // Pull back anything that would run off the viewport. Horizontal docks
+    // clamp sideways, vertical docks clamp downward.
+    var rect = node.getBoundingClientRect();
+    if (isVertical()) {
+      var overshootY = rect.bottom - window.innerHeight + 8;
+      if (overshootY > 0 && node.style.top) {
+        node.style.top = Math.max(0, parseFloat(node.style.top) - overshootY) + 'px';
+      }
+    } else {
+      var overshootX = rect.right - window.innerWidth + 8;
+      if (overshootX > 0) {
+        node.style.left = Math.max(0, parseFloat(node.style.left) - overshootX) + 'px';
+      }
+    }
   }
 
   function openFlyoutFor(btn, tool, wrapper) {
@@ -690,13 +918,11 @@
       items[next].focus();
     });
 
-    var wrapperRect = wrapper.getBoundingClientRect();
-    var btnRect = btn.getBoundingClientRect();
-    menu.style.top = Math.max(0, btnRect.top - wrapperRect.top) + 'px';
-
     wrapper.appendChild(menu);
+    placeSurface(menu, btn, wrapper);
     btn.setAttribute('aria-expanded', 'true');
     openFlyout = { node: menu, parentBtn: btn };
+    syncLayer();
     document.addEventListener('mousedown', onDocMousedown, true);
 
     var first = menu.querySelector('.toolrail-flyout-item');
@@ -745,6 +971,7 @@
       node.remove();
     }
     settingsOpen = false;
+    syncLayer();
     document.removeEventListener('mousedown', onSettingsMousedown, true);
     window.removeEventListener('toolrail:tools-updated', onToolsUpdatedWhileOpen);
     var gear = gearButton();
@@ -781,21 +1008,112 @@
     return btn;
   }
 
-  /** Rebuild the dialog's content; focusSelector restores focus after. */
-  function refreshSettings(focusSelector) {
+  /** A rebuilt control is only a usable focus target if it still exists,
+      is enabled and is actually rendered. Restoring focus to a button that
+      the rebuild just disabled (moving a slot to either end disables the
+      arrow you clicked) silently leaves focus outside the dialog. */
+  function focusableIn(node, selector) {
+    if (!selector) {
+      return null;
+    }
+    var el = node.querySelector(selector);
+    if (!el || el.disabled || el.hidden) {
+      return null;
+    }
+    return el.offsetParent === null && el !== document.body ? null : el;
+  }
+
+  /**
+   * Rebuild the dialog's content, preserving both text fields, and hand
+   * focus to the first candidate in `focusSelectors` that survives the
+   * rebuild in a focusable state (search field as the last resort).
+   *
+   * @param {string|string[]} focusSelectors Ordered focus candidates.
+   */
+  function refreshSettings(focusSelectors) {
     var node = settingsNode();
     if (!node) {
       return;
     }
-    var searchValue = '';
-    var existingSearch = node.querySelector('#toolrail-settings-search');
-    if (existingSearch) {
-      searchValue = existingSearch.value;
-    }
+
+    // Both fields carry unsaved typing: an update triggered elsewhere
+    // (pinning from the search results, a drag onto the rail) must not
+    // discard a half-typed set name.
+    var preserved = {};
+    ['#toolrail-settings-search', '#toolrail-settings-setname'].forEach(function (sel) {
+      var field = node.querySelector(sel);
+      if (field) {
+        preserved[sel] = field.value;
+      }
+    });
+
     node.textContent = '';
-    buildSettingsContent(node, searchValue);
-    var target = focusSelector ? node.querySelector(focusSelector) : null;
-    (target || node.querySelector('#toolrail-settings-search')).focus();
+    buildSettingsContent(node, preserved['#toolrail-settings-search'] || '');
+
+    var setName = node.querySelector('#toolrail-settings-setname');
+    if (setName && preserved['#toolrail-settings-setname']) {
+      setName.value = preserved['#toolrail-settings-setname'];
+    }
+
+    var candidates = Array.isArray(focusSelectors) ? focusSelectors.slice() : [focusSelectors];
+    candidates.push('#toolrail-settings-search');
+    var target = null;
+    candidates.some(function (sel) {
+      target = focusableIn(node, sel);
+      return !!target;
+    });
+    if (target) {
+      target.focus();
+    }
+  }
+
+  /**
+   * Position picker. Dragging the rail's grip is the pointer affordance;
+   * this radio group is the equivalent keyboard and screen-reader path,
+   * so repositioning never depends on a drag (the same split the pinned
+   * slots use for their × button and the Delete key).
+   */
+  function buildPositionControl() {
+    var fieldset = document.createElement('fieldset');
+    fieldset.className = 'toolrail-settings-position';
+
+    var legend = document.createElement('legend');
+    legend.className = 'toolrail-settings-label';
+    legend.textContent = __('Toolbar position', 'toolrail');
+    fieldset.appendChild(legend);
+
+    DOCKS.forEach(function (dock) {
+      var row = settingsRow('label', 'toolrail-settings-positionrow');
+      var input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'toolrail-dock';
+      input.value = dock;
+      input.checked = position.dock === dock;
+      input.dataset.dock = dock;
+      input.addEventListener('change', function () {
+        if (!input.checked) {
+          return;
+        }
+        // The dock change rebuilds the region, so the dialog is reopened
+        // with focus back on the radio the author just chose. A refused
+        // dock leaves the radio showing a position the rail is not in, so
+        // repaint the dialog from the real state instead.
+        if (!setDock(dock, { reopenSettings: true })) {
+          refreshSettings('input[data-dock="' + position.dock + '"]');
+        }
+      });
+      row.appendChild(input);
+      var text = settingsRow('span', '');
+      text.textContent = DOCK_LABELS[dock];
+      row.appendChild(text);
+      fieldset.appendChild(row);
+    });
+
+    var hint = settingsRow('p', 'toolrail-settings-empty');
+    hint.textContent = __('You can also drag the toolbar by the grip at its end; releasing near an edge snaps it there.', 'toolrail');
+    fieldset.appendChild(hint);
+
+    return fieldset;
   }
 
   function buildSettingsContent(node, searchValue) {
@@ -812,6 +1130,8 @@
     var note = settingsRow('p', 'toolrail-settings-note');
     note.textContent = __('Pinned blocks appear on the toolbar as quick-insert tools. They are saved in this browser, for you only.', 'toolrail');
     node.appendChild(note);
+
+    node.appendChild(buildPositionControl());
 
     // --- Add a block ---
     var searchLabel = settingsRow('label', 'toolrail-settings-label');
@@ -893,9 +1213,14 @@
       label.textContent = type ? type.title : name + ' ' + __('(inactive)', 'toolrail');
       li.appendChild(label);
 
+      // Reaching either end disables the arrow that was just clicked, so
+      // each handler offers the opposite arrow on the same row as its
+      // second choice — focus stays on the row the author is moving.
+      var row = '.toolrail-settings-pinnedrow[data-block="' + name + '"] ';
+
       var up = settingsButton('↑', function () {
         if (moveSlot(name, -1)) {
-          refreshSettings('.toolrail-settings-pinnedrow[data-block="' + name + '"] .toolrail-settings-up');
+          refreshSettings([row + '.toolrail-settings-up', row + '.toolrail-settings-down']);
         }
       }, 'toolrail-settings-up');
       up.setAttribute('aria-label', sprintf(__('Move %s up', 'toolrail'), label.textContent));
@@ -904,7 +1229,7 @@
 
       var down = settingsButton('↓', function () {
         if (moveSlot(name, 1)) {
-          refreshSettings('.toolrail-settings-pinnedrow[data-block="' + name + '"] .toolrail-settings-down');
+          refreshSettings([row + '.toolrail-settings-down', row + '.toolrail-settings-up']);
         }
       }, 'toolrail-settings-down');
       down.setAttribute('aria-label', sprintf(__('Move %s down', 'toolrail'), label.textContent));
@@ -978,7 +1303,14 @@
     }
   }
 
-  function openSettings(wrapper) {
+  /**
+   * @param {HTMLElement} wrapper       The region to hang the dialog in.
+   * @param {string}      focusSelector Optional initial focus target, used
+   *                                    when a dock change reopens the
+   *                                    dialog to keep focus on the control
+   *                                    that caused it.
+   */
+  function openSettings(wrapper, focusSelector) {
     if (settingsOpen) {
       closeSettings(true);
       return;
@@ -999,15 +1331,365 @@
     buildSettingsContent(node, '');
     wrapper.appendChild(node);
     settingsOpen = true;
+    syncLayer();
 
     var gear = gearButton();
     if (gear) {
       gear.setAttribute('aria-expanded', 'true');
     }
+    placeSurface(node, gear, wrapper);
     document.addEventListener('mousedown', onSettingsMousedown, true);
     window.addEventListener('toolrail:tools-updated', onToolsUpdatedWhileOpen);
+
+    if (focusSelector) {
+      var initial = focusableIn(node, focusSelector);
+      if (initial) {
+        initial.focus();
+        return;
+      }
+    }
     node.querySelector('#toolrail-settings-search').focus();
   }
+
+  // -------------------------------------------------------------------
+  // Moving the rail: dock changes, floating placement, drag-and-snap
+  // -------------------------------------------------------------------
+
+  /**
+   * Raise the rail above the editor's side panels, but only while it
+   * actually needs to be there.
+   *
+   * There is no single z-index that works statically. Core stacks BOTH the
+   * settings sidebar and the Document Overview secondary sidebar at
+   * 100000, so a surface opening over either one has to beat that — but it
+   * puts .components-modal__screen-overlay at the SAME 100000, so anything
+   * that permanently beats the panels also covers every modal, including
+   * the media library the Image tool opens.
+   *
+   * So the region sits low by default and is raised only when a surface is
+   * open, a drag is in flight, or it is a floating palette (which is meant
+   * to sit over the panels).
+   *
+   * The MODAL veto deliberately is not decided here. This function runs off
+   * the debounced mount observer, and making it also clear the class on a
+   * modal put two owners on one decision, with a ~100ms lag at each edge —
+   * a just-opened modal briefly covered, then the palette briefly stuck
+   * behind the panels after the modal closed. Both were caught by an e2e
+   * test asserting immediately, where a hand check seconds later looked
+   * fine. So this owns only "does the rail want to be on top", and the
+   * stylesheet vetoes it synchronously for modals with
+   * `body:has(.components-modal__screen-overlay)`.
+   */
+  function syncLayer() {
+    var region = document.getElementById('toolrail-region');
+    if (!region) {
+      return;
+    }
+    var wantsTop = settingsOpen || !!openFlyout || !!drag || position.dock === 'float';
+    region.classList.toggle('is-raised', wantsTop);
+  }
+
+  /** Clamp + apply the floating offsets. No-op for a docked rail, whose
+      geometry comes from the editor's flex layout instead. */
+  /**
+   * The area a floating palette may occupy, in the coordinates its `left`
+   * and `top` are resolved against.
+   *
+   * An absolutely positioned element is laid out against its ancestor's
+   * PADDING box, and clientWidth/clientHeight measure that same padding
+   * box — so clamping to those alone lets the palette sit inside padding
+   * the editor has deliberately reserved. Core reserves room for the
+   * overlaying publish footer as a padding-bottom on __body, which is
+   * exactly where a floating rail hangs: measured on a real editor, the
+   * palette clamped to 849 while the footer covered 817..849, hiding 33px
+   * of it. Subtracting the parent's own padding is what keeps it clear.
+   *
+   * @return {Object|null} {minX, minY, width, height} or null.
+   */
+  function floatBounds(region) {
+    var parent = region && region.parentNode;
+    if (!parent || !parent.clientHeight) {
+      return null;
+    }
+    var cs = window.getComputedStyle(parent);
+    var padTop = parseFloat(cs.paddingTop) || 0;
+    var padBottom = parseFloat(cs.paddingBottom) || 0;
+    var padLeft = parseFloat(cs.paddingLeft) || 0;
+    var padRight = parseFloat(cs.paddingRight) || 0;
+    return {
+      minX: padLeft,
+      minY: padTop,
+      width: Math.max(0, parent.clientWidth - padLeft - padRight),
+      height: Math.max(0, parent.clientHeight - padTop - padBottom)
+    };
+  }
+
+  function applyFloatPosition() {
+    var region = document.getElementById('toolrail-region');
+    if (!region) {
+      return;
+    }
+    if (position.dock !== 'float') {
+      region.style.left = '';
+      region.style.top = '';
+      region.style.maxHeight = '';
+      return;
+    }
+
+    var bounds = floatBounds(region);
+    if (!bounds) {
+      region.style.left = position.x + 'px';
+      region.style.top = position.y + 'px';
+      return;
+    }
+
+    // Cap BEFORE measuring: a rail carrying a dozen provider tools is
+    // taller than the usable area, and offsetHeight has to reflect the cap
+    // for the clamp below to be right.
+    region.style.maxHeight = bounds.height + 'px';
+
+    var maxX = bounds.minX + Math.max(0, bounds.width - region.offsetWidth);
+    var maxY = bounds.minY + Math.max(0, bounds.height - region.offsetHeight);
+    position.x = Math.min(Math.max(bounds.minX, position.x), maxX);
+    position.y = Math.min(Math.max(bounds.minY, position.y), maxY);
+    region.style.left = position.x + 'px';
+    region.style.top = position.y + 'px';
+  }
+
+  /**
+   * Move the rail to a dock. The region is rebuilt rather than restyled:
+   * each dock hangs off a different node in the editor's skeleton, and the
+   * rail's orientation, arrow keys and surface directions all change with
+   * it.
+   *
+   * @param {string} dock One of DOCKS.
+   * @param {Object} opts {x, y} for a float, {reopenSettings} to keep the
+   *                      settings dialog open across the move.
+   * @return {boolean} Whether the dock was applied.
+   */
+  function setDock(dock, opts) {
+    if (DOCKS.indexOf(dock) === -1) {
+      return false;
+    }
+    var options = opts || {};
+    var reopen = !!options.reopenSettings;
+    var previous = position.dock;
+
+    position.dock = dock;
+
+    // Probe the new dock BEFORE tearing the old one down. Each dock hangs
+    // off a different node in the editor's skeleton, and a dock whose node
+    // is not on the page would leave the rail unmounted with nothing but
+    // an unrelated DOM mutation to bring it back.
+    if (!dockPlacement()) {
+      position.dock = previous;
+      warn('cannot dock to "' + dock + '" — that part of the editor is not present.');
+      return false;
+    }
+
+    if (dock === 'float') {
+      if (typeof options.x === 'number') {
+        position.x = options.x;
+      }
+      if (typeof options.y === 'number') {
+        position.y = options.y;
+      }
+    }
+    savePosition();
+
+    closeFlyout(false);
+    closeSettings(false);
+
+    var existing = document.getElementById('toolrail-region');
+    if (existing) {
+      existing.remove();
+    }
+    mount();
+
+    if (reopen) {
+      var wrapper = document.getElementById('toolrail-region');
+      if (wrapper) {
+        openSettings(wrapper, 'input[data-dock="' + dock + '"]');
+      }
+    }
+
+    window.dispatchEvent(new CustomEvent('toolrail:position-changed', {
+      detail: { dock: dock, x: position.x, y: position.y }
+    }));
+    return true;
+  }
+
+  /**
+   * Which edge a pointer at (x, y) would snap to, or 'float' if it is not
+   * near one. Distances are measured against the editor body, so the snap
+   * targets line up with where each dock actually lands.
+   */
+  function snapCandidate(clientX, clientY) {
+    var body = skeletonBody();
+    if (!body) {
+      return 'float';
+    }
+    var r = body.getBoundingClientRect();
+    if (clientX < r.left - SNAP_THRESHOLD || clientX > r.right + SNAP_THRESHOLD
+      || clientY < r.top - SNAP_THRESHOLD || clientY > r.bottom + SNAP_THRESHOLD) {
+      return 'float';
+    }
+    var distances = {
+      left: Math.abs(clientX - r.left),
+      right: Math.abs(r.right - clientX),
+      top: Math.abs(clientY - r.top),
+      bottom: Math.abs(r.bottom - clientY)
+    };
+    var best = 'float';
+    var bestDistance = SNAP_THRESHOLD;
+    ['left', 'right', 'top', 'bottom'].forEach(function (edge) {
+      if (distances[edge] < bestDistance) {
+        bestDistance = distances[edge];
+        best = edge;
+      }
+    });
+    return best;
+  }
+
+  /** Translucent band showing where a release would dock the rail. Fixed
+      to the viewport so it never depends on the editor's own positioning. */
+  function showSnapPreview(edge) {
+    var el = document.getElementById('toolrail-snap-preview');
+    var body = skeletonBody();
+    if (edge === 'float' || !body) {
+      if (el) {
+        el.remove();
+      }
+      return;
+    }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'toolrail-snap-preview';
+      el.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(el);
+    }
+    var r = body.getBoundingClientRect();
+    var box = { left: r.left, top: r.top, width: r.width, height: r.height };
+    if (edge === 'left') {
+      box.width = RAIL_BAND;
+    } else if (edge === 'right') {
+      box.left = r.right - RAIL_BAND;
+      box.width = RAIL_BAND;
+    } else if (edge === 'top') {
+      box.height = RAIL_BAND;
+    } else {
+      box.top = r.bottom - RAIL_BAND;
+      box.height = RAIL_BAND;
+    }
+    el.style.left = box.left + 'px';
+    el.style.top = box.top + 'px';
+    el.style.width = box.width + 'px';
+    el.style.height = box.height + 'px';
+  }
+
+  var drag = null;
+
+  function startDrag(e) {
+    if (e.button !== 0) {
+      return;
+    }
+    var region = document.getElementById('toolrail-region');
+    if (!region) {
+      return;
+    }
+    e.preventDefault();
+    closeFlyout(false);
+    closeSettings(false);
+
+    var rect = region.getBoundingClientRect();
+    drag = {
+      startDock: position.dock,
+      startX: position.x,
+      startY: position.y,
+      grabX: e.clientX - rect.left,
+      grabY: e.clientY - rect.top,
+      candidate: position.dock,
+      torn: position.dock === 'float'
+    };
+
+    syncLayer();
+    document.body.classList.add('toolrail-dragging');
+    document.addEventListener('mousemove', onDragMove, true);
+    document.addEventListener('mouseup', onDragEnd, true);
+    document.addEventListener('keydown', onDragKey, true);
+  }
+
+  function onDragMove(e) {
+    if (!drag) {
+      return;
+    }
+    e.preventDefault();
+
+    // Tear a docked rail off on first movement so it follows the pointer,
+    // the way a docked Photoshop palette does.
+    if (!drag.torn) {
+      drag.torn = true;
+      var parent = skeletonBody();
+      var parentRect = parent ? parent.getBoundingClientRect() : { left: 0, top: 0 };
+      setDock('float', {
+        x: e.clientX - parentRect.left - drag.grabX,
+        y: e.clientY - parentRect.top - drag.grabY
+      });
+    }
+
+    var region = document.getElementById('toolrail-region');
+    var host = region && region.parentNode ? region.parentNode.getBoundingClientRect() : null;
+    if (region && host) {
+      position.x = e.clientX - host.left - drag.grabX;
+      position.y = e.clientY - host.top - drag.grabY;
+      applyFloatPosition();
+    }
+
+    drag.candidate = snapCandidate(e.clientX, e.clientY);
+    showSnapPreview(drag.candidate);
+  }
+
+  function finishDrag() {
+    showSnapPreview('float');
+    document.body.classList.remove('toolrail-dragging');
+    document.removeEventListener('mousemove', onDragMove, true);
+    document.removeEventListener('mouseup', onDragEnd, true);
+    document.removeEventListener('keydown', onDragKey, true);
+    drag = null;
+    syncLayer();
+  }
+
+  function onDragEnd() {
+    if (!drag) {
+      return;
+    }
+    var candidate = drag.candidate;
+    var x = position.x;
+    var y = position.y;
+    finishDrag();
+    setDock(candidate === 'float' ? 'float' : candidate, { x: x, y: y });
+  }
+
+  /** Escape abandons a drag and puts the rail back where it started. */
+  function onDragKey(e) {
+    if (e.key !== 'Escape' || !drag) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    var startDock = drag.startDock;
+    var startX = drag.startX;
+    var startY = drag.startY;
+    finishDrag();
+    setDock(startDock, { x: startX, y: startY });
+  }
+
+  // Keep a floating rail inside the editor when the window resizes.
+  window.addEventListener('resize', function () {
+    if (position.dock === 'float') {
+      applyFloatPosition();
+    }
+  });
 
   // -------------------------------------------------------------------
   // DOM
@@ -1082,7 +1764,7 @@
           var rail = document.getElementById('toolrail-rail');
           var fallback = rail && rail.querySelector('.toolrail-tool');
           var target = prev && prev.dataset && prev.dataset.tool && rail
-            ? rail.querySelector('[data-tool="' + prev.dataset.tool + '"]') : null;
+            ? rail.querySelector(toolSelector(prev.dataset.tool)) : null;
           (target || fallback || btn).focus();
         }
       });
@@ -1111,12 +1793,33 @@
     return sep;
   }
 
+  /**
+   * The drag handle. Pointer-only sugar, exactly like the pinned slots'
+   * × button: it is aria-hidden and unfocusable, because the keyboard and
+   * screen-reader path for repositioning is the settings dialog's
+   * "Toolbar position" radio group.
+   */
+  function buildGrip() {
+    var grip = document.createElement('div');
+    grip.className = 'toolrail-grip';
+    grip.setAttribute('aria-hidden', 'true');
+    grip.title = __('Drag to move the toolbar', 'toolrail');
+    grip.addEventListener('mousedown', startDrag);
+    return grip;
+  }
+
   function buildRail(wrapper) {
+    // The previous generation of pinned-icon React roots belongs to the
+    // rail this one replaces.
+    disposeIconRoots();
+
     var rail = document.createElement('div');
     rail.id = 'toolrail-rail';
     rail.setAttribute('role', 'toolbar');
-    rail.setAttribute('aria-orientation', 'vertical');
+    rail.setAttribute('aria-orientation', isVertical() ? 'vertical' : 'horizontal');
     rail.setAttribute('aria-label', __('Tools', 'toolrail'));
+
+    rail.appendChild(buildGrip());
 
     var model = railModel();
 
@@ -1162,9 +1865,17 @@
       firstBtn.tabIndex = 0;
     }
 
-    // APG toolbar keys. ArrowRight opens a flyout on parents.
+    // APG toolbar keys, following the rail's orientation: Up/Down move
+    // along a vertical rail and ArrowRight opens a flyout, while a
+    // horizontal rail moves on Left/Right and opens its flyouts with
+    // ArrowDown. The move axis and the open key are never the same key.
     rail.addEventListener('keydown', function (e) {
-      if (['ArrowDown', 'ArrowUp', 'Home', 'End', 'ArrowRight'].indexOf(e.key) === -1) {
+      var vertical = isVertical();
+      var nextKey = vertical ? 'ArrowDown' : 'ArrowRight';
+      var prevKey = vertical ? 'ArrowUp' : 'ArrowLeft';
+      var openKey = vertical ? 'ArrowRight' : 'ArrowDown';
+
+      if ([nextKey, prevKey, openKey, 'Home', 'End'].indexOf(e.key) === -1) {
         return;
       }
       var btns = Array.prototype.slice.call(rail.querySelectorAll('.toolrail-tool'));
@@ -1173,7 +1884,7 @@
         return;
       }
       e.preventDefault();
-      if (e.key === 'ArrowRight') {
+      if (e.key === openKey) {
         var toolId = btns[idx].dataset.tool;
         var tool = findTool(toolId);
         if (tool && tool.children && tool.children.length) {
@@ -1181,8 +1892,8 @@
         }
         return;
       }
-      var next = e.key === 'ArrowDown' ? (idx + 1) % btns.length
-        : e.key === 'ArrowUp' ? (idx - 1 + btns.length) % btns.length
+      var next = e.key === nextKey ? (idx + 1) % btns.length
+        : e.key === prevKey ? (idx - 1 + btns.length) % btns.length
           : e.key === 'Home' ? 0 : btns.length - 1;
       btns.forEach(function (b) { b.tabIndex = -1; });
       btns[next].tabIndex = 0;
@@ -1201,6 +1912,9 @@
     wrapper.setAttribute('role', 'region');
     wrapper.setAttribute('aria-label', __('Tool rail', 'toolrail'));
     wrapper.tabIndex = -1;
+    // Every dock-dependent style keys off this: rail orientation, which
+    // border carries the edge, and which way surfaces open.
+    wrapper.dataset.dock = position.dock;
 
     wrapper.appendChild(buildRail(wrapper));
 
@@ -1282,7 +1996,7 @@
     var model = railModel();
 
     model.tools.concat(model.slots).forEach(function (tool) {
-      var btn = rail.querySelector('[data-tool="' + tool.id + '"]');
+      var btn = rail.querySelector(toolSelector(tool.id));
       if (!btn) {
         return;
       }
@@ -1310,16 +2024,34 @@
   // -------------------------------------------------------------------
 
   function mount() {
-    var body = document.querySelector('.interface-interface-skeleton__body');
-    if (!body) {
+    var place = dockPlacement();
+    if (!place) {
       return false;
     }
     bindCanvas();
-    if (document.getElementById('toolrail-region')) {
+
+    var existing = document.getElementById('toolrail-region');
+    if (existing) {
+      // Re-home a rail that the editor's own re-render moved out from
+      // under its dock, without rebuilding it.
+      if (!isPlacedCorrectly(existing, place)) {
+        place.parent.insertBefore(existing, place.before);
+        applyFloatPosition();
+        syncLayer();
+      }
       return true;
     }
+
     closeFlyout(false);
-    body.insertBefore(buildWrapper(), body.firstChild);
+    // A destroyed region takes the settings dialog with it, but not the
+    // module state that says one is open — without this the rebuilt gear
+    // renders aria-expanded="true" with no dialog behind it, and its
+    // listeners outlive the node they were bound for.
+    closeSettings(false);
+
+    place.parent.insertBefore(buildWrapper(), place.before);
+    applyFloatPosition();
+    syncLayer();
     // Force: a re-mounted rail carries brand-new buttons.
     syncPressed(true);
     return true;
@@ -1327,16 +2059,18 @@
 
   /**
    * Rebuild the rail in place (registry/slot changes). Focus moves to the
-   * rail's first button only if focus was inside the rail.
+   * rail's first button only if focus was inside THE RAIL — the settings
+   * dialog is a sibling inside the same region, so testing the region
+   * would pull focus out of the dialog on every change made from it.
    */
   function rerender() {
     var wrapper = document.getElementById('toolrail-region');
     if (!wrapper) {
       return;
     }
-    var hadFocus = wrapper.contains(document.activeElement);
     closeFlyout(false);
     var oldRail = document.getElementById('toolrail-rail');
+    var hadFocus = !!(oldRail && oldRail.contains(document.activeElement));
     var newRail = buildRail(wrapper);
     if (oldRail) {
       wrapper.replaceChild(newRail, oldRail);
@@ -1381,6 +2115,7 @@
       pending = window.setTimeout(function () {
         pending = null;
         mount();
+        syncLayer();
       }, 100);
     });
     observer.observe(document.body, { childList: true, subtree: true });
@@ -1401,7 +2136,10 @@
     deleteConfig: deleteConfig,
     getConfigs: loadConfigs,
     getActiveTool: function () { return activeTool; },
-    setActiveTool: setActiveTool
+    setActiveTool: setActiveTool,
+    getDock: function () { return position.dock; },
+    setDock: function (dock) { return setDock(dock); },
+    getPosition: function () { return { dock: position.dock, x: position.x, y: position.y }; }
   };
 
   // -------------------------------------------------------------------

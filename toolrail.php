@@ -3,7 +3,7 @@
  * Plugin Name:       Editor Tool Rail
  * Plugin URI:        https://mnc4.com/
  * Description:       A Photoshop-familiar left toolbar for the block editor. Tools insert ordinary core blocks; other plugins and themes register their own tools through a small provider API.
- * Version:           0.1.0
+ * Version:           0.2.0
  * Requires at least: 6.5
  * Requires PHP:      7.4
  * Author:            Matthew Cowan
@@ -19,7 +19,7 @@ defined('ABSPATH') || exit;
 
 // Guarded so the standalone PHPUnit bootstrap can pre-define them.
 if (!defined('TOOLRAIL_VERSION')) {
-    define('TOOLRAIL_VERSION', '0.1.0');
+    define('TOOLRAIL_VERSION', '0.2.0');
 }
 if (!defined('TOOLRAIL_PLUGIN_DIR')) {
     define('TOOLRAIL_PLUGIN_DIR', plugin_dir_path(__FILE__));
