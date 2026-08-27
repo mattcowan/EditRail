@@ -88,9 +88,14 @@
     z-index: 30;
 }
 
+/* 53, not 52: the sum is exact — 44px tools + 8px rail padding + the
+   1px dock-edge border (inside the box under border-box). At 52 the
+   tools overflowed the rail by 1px, which is what summoned the stray
+   horizontal scrollbar strip whenever the rail also scrolled
+   vertically (owner screenshot 2026-08-27). */
 .toolrail-region[data-dock="left"],
 .toolrail-region[data-dock="right"] {
-    flex: 0 0 52px;
+    flex: 0 0 53px;
 }
 
 /* Wide mode: icon + name rows. Vertical docks and the floating palette
@@ -180,19 +185,172 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
     background: var(--toolrail-bg);
 }
 
+/* The rail keeps only its MAIN-axis padding; the cross-axis 4px lives on
+   the scroll/tail containers instead (below). Load-bearing, not
+   cosmetic: the pressed-state edge bar renders 4px OUTSIDE its button,
+   and overflow clips at a scroll container's padding box — so with the
+   4px on the rail, the bar fell outside the scroll container and
+   overflow-x: hidden erased the "never color alone" indicator; on the
+   container's own padding, the bar sits inside the padding box and
+   survives. */
 .toolrail-region[data-dock="left"] #toolrail-rail,
 .toolrail-region[data-dock="right"] #toolrail-rail,
 .toolrail-region[data-dock="float"] #toolrail-rail {
     flex-direction: column;
-    padding: 12px 4px;
-    overflow-y: auto;
+    padding: 12px 0;
 }
 
 .toolrail-region[data-dock="top"] #toolrail-rail,
 .toolrail-region[data-dock="bottom"] #toolrail-rail {
     flex-direction: row;
-    padding: 4px 12px;
+    padding: 0 12px;
+}
+
+/* An overfull rail scrolls its TOOLS section only — the head (grip,
+   chevron) and the tail (Help, the gear) stay pinned and visible at any
+   editor height. Before this split the whole rail scrolled, and the
+   gear — the recovery path for everything — was the first control
+   pushed below the fold (measured on a 14-tool rail: 833px of content
+   in a 671px editor). min-width/min-height: 0 beat the flex automatic
+   minimum, which would otherwise refuse to let the section shrink and
+   push the tail out anyway. */
+.toolrail-scroll,
+.toolrail-tail {
+    display: flex;
+    align-items: center;
+    align-self: stretch;
+    gap: 6px;
+    min-width: 0;
+    min-height: 0;
+}
+
+.toolrail-scroll {
+    flex: 1 1 auto;
+}
+
+.toolrail-tail {
+    flex: 0 0 auto;
+}
+
+.toolrail-region[data-dock="left"] .toolrail-scroll,
+.toolrail-region[data-dock="right"] .toolrail-scroll,
+.toolrail-region[data-dock="float"] .toolrail-scroll,
+.toolrail-region[data-dock="left"] .toolrail-tail,
+.toolrail-region[data-dock="right"] .toolrail-tail,
+.toolrail-region[data-dock="float"] .toolrail-tail {
+    flex-direction: column;
+    /* The cross-axis padding the rail gave up — see the rail comment. */
+    padding: 0 4px;
+}
+
+/* NO native scrollbars on the tools section, ever: in a 44px-wide
+   column a classic (non-overlay) vertical scrollbar steals width from
+   the fixed-width tools, which then overflow sideways by a few pixels
+   and summon a horizontal scrollbar strip at the section's foot — the
+   "little overflow scroll thing" (owner screenshot 2026-08-27). The
+   cross axis is clamped to hidden for the same reason. Scrolling still
+   works — wheel, touch, and keyboard focus — and the JS step buttons
+   (.toolrail-scrollbtn) are the visible affordance. */
+.toolrail-scroll {
+    scrollbar-width: none;
+}
+
+.toolrail-scroll::-webkit-scrollbar {
+    display: none;
+}
+
+.toolrail-region[data-dock="left"] .toolrail-scroll,
+.toolrail-region[data-dock="right"] .toolrail-scroll,
+.toolrail-region[data-dock="float"] .toolrail-scroll {
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.toolrail-region[data-dock="top"] .toolrail-scroll,
+.toolrail-region[data-dock="bottom"] .toolrail-scroll,
+.toolrail-region[data-dock="top"] .toolrail-tail,
+.toolrail-region[data-dock="bottom"] .toolrail-tail {
+    flex-direction: row;
+    padding: 4px 0;
+}
+
+.toolrail-region[data-dock="top"] .toolrail-scroll,
+.toolrail-region[data-dock="bottom"] .toolrail-scroll {
     overflow-x: auto;
+    overflow-y: hidden;
+}
+
+/* Step buttons for the hidden-scrollbar tools section. Rendered by the
+   JS only while there is more to scroll in their direction; pointer
+   sugar (aria-hidden, unfocusable) — the keyboard path is the arrow
+   keys, which scroll the focused tool into view. */
+.toolrail-scrollbtn {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    border-radius: 3px;
+    color: var(--toolrail-fg);
+    cursor: pointer;
+}
+
+/* Author-origin display beats the UA's [hidden] rule regardless of
+   specificity, so hidden needs restating (the wp-admin lesson). */
+.toolrail-scrollbtn[hidden] {
+    display: none;
+}
+
+.toolrail-scrollbtn:hover {
+    background: var(--toolrail-hover);
+    color: var(--toolrail-fg-strong);
+}
+
+.toolrail-scrollbtn::before {
+    content: "";
+    width: 0;
+    height: 0;
+    border: 4px solid transparent;
+}
+
+.toolrail-region[data-dock="left"] .toolrail-scrollbtn,
+.toolrail-region[data-dock="right"] .toolrail-scrollbtn,
+.toolrail-region[data-dock="float"] .toolrail-scrollbtn {
+    width: 28px;
+    height: 14px;
+}
+
+.toolrail-region[data-dock="left"] .toolrail-scrollbtn[data-dir="prev"]::before,
+.toolrail-region[data-dock="right"] .toolrail-scrollbtn[data-dir="prev"]::before,
+.toolrail-region[data-dock="float"] .toolrail-scrollbtn[data-dir="prev"]::before {
+    border-top-width: 0;
+    border-bottom-color: currentColor;
+}
+
+.toolrail-region[data-dock="left"] .toolrail-scrollbtn[data-dir="next"]::before,
+.toolrail-region[data-dock="right"] .toolrail-scrollbtn[data-dir="next"]::before,
+.toolrail-region[data-dock="float"] .toolrail-scrollbtn[data-dir="next"]::before {
+    border-bottom-width: 0;
+    border-top-color: currentColor;
+}
+
+.toolrail-region[data-dock="top"] .toolrail-scrollbtn,
+.toolrail-region[data-dock="bottom"] .toolrail-scrollbtn {
+    width: 14px;
+    height: 28px;
+}
+
+.toolrail-region[data-dock="top"] .toolrail-scrollbtn[data-dir="prev"]::before,
+.toolrail-region[data-dock="bottom"] .toolrail-scrollbtn[data-dir="prev"]::before {
+    border-left-width: 0;
+    border-right-color: currentColor;
+}
+
+.toolrail-region[data-dock="top"] .toolrail-scrollbtn[data-dir="next"]::before,
+.toolrail-region[data-dock="bottom"] .toolrail-scrollbtn[data-dir="next"]::before {
+    border-right-width: 0;
+    border-left-color: currentColor;
 }
 
 .toolrail-region[data-dock="left"] #toolrail-rail {
@@ -712,6 +870,7 @@ body.toolrail-dragging * {
    the position radios are queried through .toolrail-settings-position,
    which therefore must never contain other radios. */
 .toolrail-settings-position,
+.toolrail-settings-widegroup,
 .toolrail-settings-appearance {
     margin: 0 0 12px;
     padding: 0;
@@ -719,9 +878,17 @@ body.toolrail-dragging * {
 }
 
 .toolrail-settings-position .toolrail-settings-label,
+.toolrail-settings-widegroup .toolrail-settings-label,
 .toolrail-settings-appearance .toolrail-settings-label {
     padding: 0;
     margin: 12px 0 4px;
+}
+
+/* The standard separator between the dialog's top-level sections. */
+.toolrail-settings-divider {
+    border: 0;
+    border-top: 1px solid var(--toolrail-border);
+    margin: 14px 0;
 }
 
 .toolrail-settings-positionrow {

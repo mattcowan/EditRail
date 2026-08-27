@@ -38,6 +38,7 @@ async function openNewPost(page) {
       'toolrail-slots-migrated',
       'toolrail-help-hidden',
       'toolrail-wide',
+      'toolrail-wide-toggle',
       'toolrail-appearance',
     ];
     let had = false;
@@ -137,12 +138,11 @@ test.describe('rail chrome + APG toolbar', () => {
     await page.keyboard.press('End');
     const last = await page.evaluate(() => document.activeElement.dataset.tool);
     expect(last).toBeTruthy();
-    // Home lands on the FIRST toolbar control — since 0.1.10 that is the
-    // wide-mode chevron at the rail's head, not Select. Intent unchanged
-    // (Home reaches the start of the arrow order); only the control that
-    // sits there moved.
+    // Home lands on the first toolbar control — Select, because the
+    // wide-mode chevron is OPT-IN (0.1.12) and absent from a default
+    // rail. The opted-in arrangement is pinned in the wide-mode suite.
     await page.keyboard.press('Home');
-    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('wide-toggle');
+    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('select');
   });
 
   test('survives list view and the code-editor round-trip', async ({ page }) => {
@@ -235,12 +235,13 @@ test.describe('quick slots', () => {
     await openNewPost(page);
 
     // Fresh state (openNewPost cleared the key): the three defaults render
-    // as slots between Select and the remaining built-ins, in order. The
-    // wide-mode chevron (0.1.10) sits ahead of Select as rail chrome.
+    // as slots between Select and the remaining built-ins, in order. (The
+    // wide-mode chevron is opt-in as of 0.1.12, so a default rail starts
+    // at Select again.)
     const order = await page.evaluate(() =>
       Array.from(document.querySelectorAll('#toolrail-rail .toolrail-tool')).map((b) => b.dataset.tool)
     );
-    expect(order.slice(0, 5)).toEqual(['wide-toggle', 'select', 'pin:core/paragraph', 'pin:core/heading', 'pin:core/image']);
+    expect(order.slice(0, 4)).toEqual(['select', 'pin:core/paragraph', 'pin:core/heading', 'pin:core/image']);
     expect(order).toContain('shape');
 
     // Defaults are ordinary slots: reorder Heading above Text.
@@ -248,7 +249,7 @@ test.describe('quick slots', () => {
     const reordered = await page.evaluate(() =>
       Array.from(document.querySelectorAll('#toolrail-rail .toolrail-tool')).map((b) => b.dataset.tool)
     );
-    expect(reordered.slice(2, 4)).toEqual(['pin:core/heading', 'pin:core/paragraph']);
+    expect(reordered.slice(1, 3)).toEqual(['pin:core/heading', 'pin:core/paragraph']);
   });
 
   test('unpin and re-pin via the block menu, persist across reload, settings Remove unpins', async ({ page }) => {
@@ -464,6 +465,40 @@ test.describe('toolbar settings dialog', () => {
       window.toolrail.deleteConfig('__proto__');
       window.toolrail.deleteConfig('normal name');
     });
+  });
+
+  test('sections are divided, Pinned blocks precedes Add a block, and new pins land at the bottom', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await expect(page.locator('.toolrail-settings')).toBeVisible();
+
+    // The standard: an <hr> between each top-level section (position /
+    // tool names / appearance / blocks / saved sets / help).
+    const dividers = await page.locator('.toolrail-settings .toolrail-settings-divider').count();
+    expect(dividers).toBeGreaterThanOrEqual(5);
+
+    // Pinned blocks (what is on the toolbar) reads ABOVE the search
+    // that adds to it — the two belong together, in that order (owner
+    // decision 2026-08-27).
+    const orderOk = await page.evaluate(() => {
+      const heads = Array.from(document.querySelectorAll('.toolrail-settings .toolrail-settings-subtitle'));
+      const pinnedHead = heads.find((h) => h.textContent === 'Pinned blocks');
+      const searchLabel = document.querySelector('label[for="toolrail-settings-search"]');
+      return !!(pinnedHead && searchLabel)
+        && !!(pinnedHead.compareDocumentPosition(searchLabel) & Node.DOCUMENT_POSITION_FOLLOWING);
+    });
+    expect(orderOk).toBe(true);
+
+    // A newly pinned block appends at the BOTTOM of the pinned list,
+    // right above the search that added it.
+    await page.locator('#toolrail-settings-search').fill('Quote');
+    await page.locator('.toolrail-settings-result[data-block="core/quote"]').click();
+    const lastRow = await page.evaluate(() => {
+      const rows = document.querySelectorAll('.toolrail-settings-pinnedrow');
+      return rows[rows.length - 1].dataset.block;
+    });
+    expect(lastRow).toBe('core/quote');
   });
 
   test('the gear is not left claiming an open dialog after a remount', async ({ page }) => {
@@ -1651,9 +1686,26 @@ test.describe('help panel', () => {
   });
 });
 
+/** Opt the on-rail expander chevron in via Toolbar settings (it is OFF
+    by default — owner decision 2026-08-27: it spends prime toolbar
+    space). Leaves the settings dialog closed again. */
+async function enableWideToggle(page) {
+  await page.locator('#toolrail-rail [data-tool="settings"]').click();
+  await page.locator('#toolrail-settings-widetoggle').check();
+  await expect(page.locator('#toolrail-rail [data-tool="wide-toggle"]')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.toolrail-settings')).toHaveCount(0);
+}
+
 test.describe('wide mode', () => {
-  test('the chevron toggles icon + name rows and persists', async ({ page }) => {
+  test('the expander is opt-in; once shown, the chevron toggles icon + name rows and persists', async ({ page }) => {
     await openNewPost(page);
+
+    // No chevron on a default rail — it costs toolbar space, so it only
+    // renders once the author asks for it in Toolbar settings.
+    await expect(page.locator('#toolrail-rail [data-tool="wide-toggle"]')).toHaveCount(0);
+    await enableWideToggle(page);
+    expect(await getPref(page, 'toolrail-wide-toggle')).toBe('1');
 
     const toggle = page.locator('#toolrail-rail [data-tool="wide-toggle"]');
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
@@ -1700,6 +1752,7 @@ test.describe('wide mode', () => {
 
   test('wide mode keeps one tab stop and the arrow order', async ({ page }) => {
     await openNewPost(page);
+    await enableWideToggle(page);
     await page.locator('#toolrail-rail [data-tool="wide-toggle"]').click();
 
     const stops = await page.evaluate(() =>
@@ -1719,6 +1772,7 @@ test.describe('wide mode', () => {
 
   test('the chevron does not render on horizontal docks', async ({ page }) => {
     await openNewPost(page);
+    await enableWideToggle(page);
 
     await page.evaluate(() => window.toolrail.setDock('top'));
     await expect(page.locator('#toolrail-region')).toHaveAttribute('data-dock', 'top');
@@ -1730,7 +1784,13 @@ test.describe('wide mode', () => {
 
   test('flyouts and the settings dialog still place correctly in wide mode', async ({ page }) => {
     await openNewPost(page);
-    await page.locator('#toolrail-rail [data-tool="wide-toggle"]').click();
+
+    // Deliberately WITHOUT the chevron: the settings checkbox is the
+    // canonical path to wide mode, so this test rides it end to end.
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('#toolrail-settings-wide').check();
+    await expect(page.locator('#toolrail-region')).toHaveAttribute('data-wide', 'true');
+    expect(await getPref(page, 'toolrail-wide')).toBe('1');
 
     await page.locator('#toolrail-rail [data-tool="shape"]').click();
     await expect(page.locator('.toolrail-flyout')).toBeVisible();
@@ -1754,6 +1814,83 @@ test.describe('wide mode', () => {
       return d.left >= rail.right - 1 && d.right <= window.innerWidth;
     });
     expect(dialogPlaced).toBe(true);
+  });
+});
+
+test.describe('rail overflow', () => {
+  test('an overfull rail scrolls its tools while Help and Settings stay visible', async ({ page }) => {
+    await openNewPost(page);
+
+    // Force overflow regardless of how many tools this site registers.
+    await page.evaluate(() => {
+      ['core/quote', 'core/list', 'core/cover', 'core/gallery', 'core/audio', 'core/video',
+        'core/table', 'core/verse', 'core/code', 'core/buttons', 'core/columns', 'core/group',
+        'core/pullquote', 'core/preformatted', 'core/separator', 'core/spacer']
+        .forEach((n) => window.toolrail.pinBlock(n));
+    });
+
+    const m = await page.evaluate(() => {
+      const rail = document.getElementById('toolrail-rail');
+      const scroll = rail.querySelector('.toolrail-scroll');
+      const gear = rail.querySelector('[data-tool="settings"]');
+      const help = rail.querySelector('[data-tool="help"]');
+      const railRect = rail.getBoundingClientRect();
+      return {
+        // The tools section is what scrolls…
+        scrollOverflows: scroll.scrollHeight > scroll.clientHeight + 1,
+        // …while the rail itself does not, so the tail cannot be pushed
+        // below the fold (pre-fix: the whole rail scrolled and the gear
+        // — the recovery path for everything — was the first casualty).
+        railOverflows: rail.scrollHeight > rail.clientHeight + 1,
+        gearVisible: gear.getBoundingClientRect().bottom <= railRect.bottom + 1,
+        helpVisible: help.getBoundingClientRect().bottom <= railRect.bottom + 1,
+        gearOnScreen: gear.getBoundingClientRect().bottom <= window.innerHeight,
+      };
+    });
+    expect(m.scrollOverflows).toBe(true);
+    expect(m.railOverflows).toBe(false);
+    expect(m.gearVisible).toBe(true);
+    expect(m.helpVisible).toBe(true);
+    expect(m.gearOnScreen).toBe(true);
+
+    // NO native scrollbars: the classic vertical bar stole width from
+    // the 44px tools, which then overflowed sideways and summoned a
+    // horizontal scrollbar strip (the owner's 2026-08-27 screenshot).
+    const bars = await page.evaluate(() => {
+      const scroll = document.querySelector('#toolrail-rail .toolrail-scroll');
+      return {
+        scrollbarWidth: getComputedStyle(scroll).scrollbarWidth,
+        // clientWidth < offsetWidth would mean a scrollbar is consuming
+        // layout width; horizontal overflow would show as scrollWidth
+        // beyond clientWidth.
+        stealsWidth: scroll.offsetWidth - scroll.clientWidth,
+        xOverflow: scroll.scrollWidth - scroll.clientWidth,
+      };
+    });
+    expect(bars.scrollbarWidth).toBe('none');
+    expect(bars.stealsWidth).toBe(0);
+    expect(bars.xOverflow).toBe(0);
+
+    // The step buttons are the affordance: only "more below" shows at
+    // the top, both directions mid-scroll, only "more above" at the end.
+    const steps = (sel) => page.locator('#toolrail-rail ' + sel);
+    await expect(steps('.toolrail-scrollbtn[data-dir="next"]')).toBeVisible();
+    await expect(steps('.toolrail-scrollbtn[data-dir="prev"]')).toBeHidden();
+    await steps('.toolrail-scrollbtn[data-dir="next"]').click();
+    await expect(steps('.toolrail-scrollbtn[data-dir="prev"]')).toBeVisible();
+    await page.evaluate(() => {
+      const scroll = document.querySelector('#toolrail-rail .toolrail-scroll');
+      scroll.scrollTop = scroll.scrollHeight;
+    });
+    await expect(steps('.toolrail-scrollbtn[data-dir="next"]')).toBeHidden();
+    await expect(steps('.toolrail-scrollbtn[data-dir="prev"]')).toBeVisible();
+
+    // The roving tabindex spans the split containers: End still reaches
+    // the gear in the pinned tail — and the step buttons, being pointer
+    // sugar, are not part of the arrow order.
+    await page.locator('#toolrail-rail [data-tool="select"]').focus();
+    await page.keyboard.press('End');
+    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('settings');
   });
 });
 

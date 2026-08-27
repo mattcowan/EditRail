@@ -72,6 +72,7 @@
   var HELP_SEEN_KEY = 'toolrail-help-seen';
   var HELP_HIDDEN_KEY = 'toolrail-help-hidden';
   var WIDE_KEY = 'toolrail-wide';
+  var WIDE_TOGGLE_KEY = 'toolrail-wide-toggle';
   var APPEARANCE_KEY = 'toolrail-appearance';
   var PREFS_SCOPE = 'toolrail';
   var SHAPE_FILL = '#b9b9b9';
@@ -257,7 +258,7 @@
   var DOCKS = ['left', 'right', 'top', 'bottom', 'float'];
   var DEFAULT_DOCK = 'left';
   var SNAP_THRESHOLD = 72;
-  var RAIL_BAND = 52;
+  var RAIL_BAND = 53;
 
   var DOCK_LABELS = {
     left: __('Left edge', 'toolrail'),
@@ -368,6 +369,11 @@
   // creates a complete new set, which makes it the correct disposal point.
   var iconRoots = [];
 
+  // The tools section's ResizeObserver, disposed on the same rule as the
+  // icon roots: buildRail is the only producer, so it disconnects the
+  // previous generation before creating the next.
+  var railScrollObserver = null;
+
   function disposeIconRoots() {
     iconRoots.forEach(function (root) {
       try {
@@ -418,6 +424,18 @@
     return readKey(WIDE_KEY) === '1';
   }
 
+  /**
+   * Whether the on-rail expander chevron renders. OPT-IN (owner decision
+   * 2026-08-27): a permanent button at the rail's head spends prime
+   * toolbar space, so the chevron is off until the author asks for it in
+   * Toolbar settings — where the "Show tool names" checkbox is the
+   * canonical (and keyboard) path to wide mode either way, making the
+   * chevron pure quick-access sugar, like the drag grip is for docking.
+   */
+  function isWideToggleShown() {
+    return readKey(WIDE_TOGGLE_KEY) === '1';
+  }
+
   function setWide(on) {
     writeKey(WIDE_KEY, on ? '1' : '0');
     var region = document.getElementById('toolrail-region');
@@ -426,6 +444,13 @@
         region.dataset.wide = 'true';
       } else {
         delete region.dataset.wide;
+      }
+      // Both writers (the settings checkbox and the optional chevron)
+      // route through here, so the chevron's pressed state is owned in
+      // ONE place and can never disagree with the region.
+      var toggle = region.querySelector('[data-tool="wide-toggle"]');
+      if (toggle) {
+        toggle.setAttribute('aria-pressed', on ? 'true' : 'false');
       }
     }
     // The region's width just changed; a floating palette re-clamps so
@@ -1897,13 +1922,83 @@
     return fieldset;
   }
 
+  /** The standard separator between the dialog's top-level sections. */
+  function settingsDivider() {
+    var hr = document.createElement('hr');
+    hr.className = 'toolrail-settings-divider';
+    return hr;
+  }
+
+  /**
+   * Wide-mode controls. The checkbox here is the CANONICAL path to wide
+   * mode (keyboard-first, like the position radios); the on-rail
+   * chevron is opt-in sugar that spends toolbar space only when asked
+   * for (owner decision 2026-08-27). Both persist per user.
+   */
+  function buildWideControl() {
+    var fieldset = document.createElement('fieldset');
+    fieldset.className = 'toolrail-settings-widegroup';
+
+    var legend = document.createElement('legend');
+    legend.className = 'toolrail-settings-label';
+    legend.textContent = __('Tool names', 'toolrail');
+    fieldset.appendChild(legend);
+
+    var wideRow = settingsRow('label', 'toolrail-settings-positionrow');
+    var wideInput = document.createElement('input');
+    wideInput.type = 'checkbox';
+    wideInput.id = 'toolrail-settings-wide';
+    wideInput.checked = isWide();
+    wideInput.addEventListener('change', function () {
+      setWide(wideInput.checked);
+    });
+    var wideText = settingsRow('span', '');
+    wideText.textContent = __('Show tool names beside the icons (wide toolbar)', 'toolrail');
+    wideRow.appendChild(wideInput);
+    wideRow.appendChild(wideText);
+    fieldset.appendChild(wideRow);
+
+    var toggleRow = settingsRow('label', 'toolrail-settings-positionrow');
+    var toggleInput = document.createElement('input');
+    toggleInput.type = 'checkbox';
+    toggleInput.id = 'toolrail-settings-widetoggle';
+    toggleInput.checked = isWideToggleShown();
+    toggleInput.addEventListener('change', function () {
+      writeKey(WIDE_TOGGLE_KEY, toggleInput.checked ? '1' : '0');
+      // The chevron enters or leaves the rail — rebuild it. Focus stays
+      // on this checkbox (rerender only moves focus when it was IN the
+      // rail).
+      rerender();
+    });
+    var toggleText = settingsRow('span', '');
+    toggleText.textContent = __('Show an expand/contract button on the toolbar', 'toolrail');
+    toggleRow.appendChild(toggleInput);
+    toggleRow.appendChild(toggleText);
+    fieldset.appendChild(toggleRow);
+
+    // Both preferences persist on every dock; the effect shows where
+    // wide mode applies. Stated rather than disabling the controls —
+    // a disabled checkbox hides its state.
+    var hint = settingsRow('p', 'toolrail-settings-empty');
+    hint.textContent = __('Tool names show on left, right and floating toolbars.', 'toolrail');
+    fieldset.appendChild(hint);
+
+    return fieldset;
+  }
+
   /** One line reporting the custom pair's contrast, warning below 4.5:1
       — the pair is applied either way (the author's choice, stated
       honestly), with the ring and pressed markers auto-derived so state
       visibility never drops below 3:1. */
   function pairContrastMessage(appearance) {
     var ratio = contrastRatio(hexToRgb(appearance.bg), hexToRgb(appearance.fg));
-    var formatted = (Math.round(ratio * 100) / 100) + ':1';
+    // Floor, never round: a pair in the [4.495, 4.5) window rounded up
+    // to "4.5:1" while the raw ratio still tripped the sub-threshold
+    // branch, producing "These colors measure 4.5:1, below the 4.5:1
+    // minimum" (review 2026-08-27). Flooring keeps the shown value
+    // consistent with the branch and never displays a failing pair at
+    // the threshold.
+    var formatted = (Math.floor(ratio * 100) / 100) + ':1';
     if (ratio < 4.5) {
       return sprintf(
         /* translators: %s: measured contrast ratio, e.g. "2.5:1". */
@@ -2181,7 +2276,76 @@
     node.appendChild(note);
 
     node.appendChild(buildPositionControl());
+    node.appendChild(settingsDivider());
+    node.appendChild(buildWideControl());
+    node.appendChild(settingsDivider());
     node.appendChild(buildAppearanceControl());
+    node.appendChild(settingsDivider());
+
+    // --- Pinned blocks, THEN Add a block (one section, this order on
+    // purpose: the list shows what is already on the toolbar, the
+    // search below adds to it, and a new pin lands at the BOTTOM of the
+    // list — right above the search that added it, owner decision
+    // 2026-08-27) ---
+    var pinnedHead = settingsRow('h3', 'toolrail-settings-subtitle');
+    pinnedHead.textContent = __('Pinned blocks', 'toolrail');
+    node.appendChild(pinnedHead);
+
+    var pinnedList = settingsRow('ul', 'toolrail-settings-pinned');
+    var slots = loadSlots();
+    if (!slots.length) {
+      var empty = settingsRow('p', 'toolrail-settings-empty');
+      empty.textContent = __('Nothing pinned yet.', 'toolrail');
+      node.appendChild(empty);
+    }
+    slots.forEach(function (name, i) {
+      var type = wp.blocks.getBlockType(name);
+      var li = settingsRow('li', 'toolrail-settings-pinnedrow');
+      var label = settingsRow('span', 'toolrail-settings-pinnedname');
+      label.textContent = type ? type.title : name + ' ' + __('(inactive)', 'toolrail');
+      li.appendChild(label);
+
+      // Reaching either end disables the arrow that was just clicked, so
+      // each handler offers the opposite arrow on the same row as its
+      // second choice — focus stays on the row the author is moving.
+      var row = '.toolrail-settings-pinnedrow[data-block="' + name + '"] ';
+
+      var up = settingsButton('↑', function () {
+        if (moveSlot(name, -1)) {
+          refreshSettings([row + '.toolrail-settings-up', row + '.toolrail-settings-down']);
+        }
+      }, 'toolrail-settings-up');
+      up.setAttribute('aria-label', sprintf(__('Move %s up', 'toolrail'), label.textContent));
+      up.disabled = i === 0;
+      li.appendChild(up);
+
+      var down = settingsButton('↓', function () {
+        if (moveSlot(name, 1)) {
+          refreshSettings([row + '.toolrail-settings-down', row + '.toolrail-settings-up']);
+        }
+      }, 'toolrail-settings-down');
+      down.setAttribute('aria-label', sprintf(__('Move %s down', 'toolrail'), label.textContent));
+      down.disabled = i === slots.length - 1;
+      li.appendChild(down);
+
+      // Visible text is "Unpin", not "Remove", so that it is contained in
+      // the accessible name "Unpin <block>" (WCAG 2.5.3 Label in Name).
+      // With "Remove" on screen and "Unpin Paragraph" as the name, a
+      // speech-input user saying "click Remove" matched nothing. It also
+      // matches the wording of the block menu's own Unpin item.
+      var remove = settingsButton(__('Unpin', 'toolrail'), function () {
+        unpinBlock(name);
+        refreshSettings('#toolrail-settings-search');
+      }, 'toolrail-settings-remove');
+      remove.setAttribute('aria-label', sprintf(__('Unpin %s', 'toolrail'), label.textContent));
+      li.appendChild(remove);
+
+      li.dataset.block = name;
+      pinnedList.appendChild(li);
+    });
+    if (slots.length) {
+      node.appendChild(pinnedList);
+    }
 
     // --- Add a block ---
     var searchLabel = settingsRow('label', 'toolrail-settings-label');
@@ -2244,68 +2408,8 @@
     search.addEventListener('input', renderResults);
     renderResults();
 
-    // --- Pinned blocks ---
-    var pinnedHead = settingsRow('h3', 'toolrail-settings-subtitle');
-    pinnedHead.textContent = __('Pinned blocks', 'toolrail');
-    node.appendChild(pinnedHead);
-
-    var pinnedList = settingsRow('ul', 'toolrail-settings-pinned');
-    var slots = loadSlots();
-    if (!slots.length) {
-      var empty = settingsRow('p', 'toolrail-settings-empty');
-      empty.textContent = __('Nothing pinned yet.', 'toolrail');
-      node.appendChild(empty);
-    }
-    slots.forEach(function (name, i) {
-      var type = wp.blocks.getBlockType(name);
-      var li = settingsRow('li', 'toolrail-settings-pinnedrow');
-      var label = settingsRow('span', 'toolrail-settings-pinnedname');
-      label.textContent = type ? type.title : name + ' ' + __('(inactive)', 'toolrail');
-      li.appendChild(label);
-
-      // Reaching either end disables the arrow that was just clicked, so
-      // each handler offers the opposite arrow on the same row as its
-      // second choice — focus stays on the row the author is moving.
-      var row = '.toolrail-settings-pinnedrow[data-block="' + name + '"] ';
-
-      var up = settingsButton('↑', function () {
-        if (moveSlot(name, -1)) {
-          refreshSettings([row + '.toolrail-settings-up', row + '.toolrail-settings-down']);
-        }
-      }, 'toolrail-settings-up');
-      up.setAttribute('aria-label', sprintf(__('Move %s up', 'toolrail'), label.textContent));
-      up.disabled = i === 0;
-      li.appendChild(up);
-
-      var down = settingsButton('↓', function () {
-        if (moveSlot(name, 1)) {
-          refreshSettings([row + '.toolrail-settings-down', row + '.toolrail-settings-up']);
-        }
-      }, 'toolrail-settings-down');
-      down.setAttribute('aria-label', sprintf(__('Move %s down', 'toolrail'), label.textContent));
-      down.disabled = i === slots.length - 1;
-      li.appendChild(down);
-
-      // Visible text is "Unpin", not "Remove", so that it is contained in
-      // the accessible name "Unpin <block>" (WCAG 2.5.3 Label in Name).
-      // With "Remove" on screen and "Unpin Paragraph" as the name, a
-      // speech-input user saying "click Remove" matched nothing. It also
-      // matches the wording of the block menu's own Unpin item.
-      var remove = settingsButton(__('Unpin', 'toolrail'), function () {
-        unpinBlock(name);
-        refreshSettings('#toolrail-settings-search');
-      }, 'toolrail-settings-remove');
-      remove.setAttribute('aria-label', sprintf(__('Unpin %s', 'toolrail'), label.textContent));
-      li.appendChild(remove);
-
-      li.dataset.block = name;
-      pinnedList.appendChild(li);
-    });
-    if (slots.length) {
-      node.appendChild(pinnedList);
-    }
-
     // --- Saved sets ---
+    node.appendChild(settingsDivider());
     var setsHead = settingsRow('h3', 'toolrail-settings-subtitle');
     setsHead.textContent = __('Saved sets', 'toolrail');
     node.appendChild(setsHead);
@@ -2456,6 +2560,7 @@
     node.appendChild(importInput);
 
     // --- Help ---
+    node.appendChild(settingsDivider());
     var helpHead = settingsRow('h3', 'toolrail-settings-subtitle');
     helpHead.textContent = __('Help', 'toolrail');
     node.appendChild(helpHead);
@@ -3213,8 +3318,12 @@
 
   function buildRail(wrapper) {
     // The previous generation of pinned-icon React roots belongs to the
-    // rail this one replaces.
+    // rail this one replaces — and so does its scroll observer.
     disposeIconRoots();
+    if (railScrollObserver) {
+      railScrollObserver.disconnect();
+      railScrollObserver = null;
+    }
 
     var rail = document.createElement('div');
     rail.id = 'toolrail-rail';
@@ -3224,14 +3333,18 @@
 
     rail.appendChild(buildGrip());
 
-    // Wide-mode chevron, at the rail's head beside the grip. A REAL
-    // focusable button (the grip is pointer-only sugar; this must not
-    // be): it joins the toolbar's roving tabindex via .toolrail-tool, so
-    // Home lands on it and arrows reach it, keeping the one-tab-stop
-    // contract. Vertical docks and the floating palette only — a
-    // label-per-tool row makes a horizontal bar unusably long, so the
-    // toggle does not render on top/bottom (V1 decision, roadmap R2).
-    if (isVertical()) {
+    // Wide-mode chevron, at the rail's head beside the grip — OPT-IN
+    // via Toolbar settings (isWideToggleShown; owner decision
+    // 2026-08-27: it spends prime toolbar space, and the settings
+    // checkbox is the canonical path to wide mode). When shown it is a
+    // REAL focusable button (the grip is pointer-only sugar; this must
+    // not be): it joins the toolbar's roving tabindex via
+    // .toolrail-tool, so Home lands on it and arrows reach it, keeping
+    // the one-tab-stop contract. Vertical docks and the floating
+    // palette only — a label-per-tool row makes a horizontal bar
+    // unusably long, so the toggle does not render on top/bottom (V1
+    // decision, roadmap R2).
+    if (isVertical() && isWideToggleShown()) {
       var wideToggle = document.createElement('button');
       wideToggle.type = 'button';
       wideToggle.className = 'toolrail-tool toolrail-tool--wide-toggle';
@@ -3251,42 +3364,115 @@
       wideLabel.textContent = __('Tool names', 'toolrail');
       wideToggle.appendChild(wideLabel);
       wideToggle.addEventListener('click', function () {
-        var next = !isWide();
-        setWide(next);
-        wideToggle.setAttribute('aria-pressed', next ? 'true' : 'false');
+        // setWide owns the pressed-state paint (shared with the
+        // settings checkbox).
+        setWide(!isWide());
       });
       rail.appendChild(wideToggle);
     }
 
     var model = railModel();
 
+    // A rail carrying many provider tools and pins can be taller than
+    // the editor, so the TOOLS live in their own scrolling section while
+    // the head (grip, chevron) and the tail (Help, the gear) stay
+    // pinned and visible at any height — before this split the whole
+    // rail scrolled and the gear, the recovery path for everything, was
+    // the first thing pushed below the fold (measured 2026-08-27 on a
+    // 14-tool rail: content 833px in a 671px editor). Descendant sweeps
+    // (roving tabindex, syncPressed, gearButton) are unaffected — they
+    // query the rail, not its direct children.
+    var scrollArea = document.createElement('div');
+    scrollArea.className = 'toolrail-scroll';
+
     // Order: Select, then the pinned slots (Text/Heading/Image ship as
     // defaults there), then the remaining built-ins (Shape, Section), then
     // registered top-level tools — so the default rail reads select · text
     // · heading · image exactly as it did when those were built-ins.
-    rail.appendChild(buildToolButton(model.tools[0], wrapper));
+    scrollArea.appendChild(buildToolButton(model.tools[0], wrapper));
 
     model.slots.forEach(function (slot) {
-      rail.appendChild(buildToolButton(slot, wrapper));
+      scrollArea.appendChild(buildToolButton(slot, wrapper));
     });
 
-    rail.appendChild(buildSeparator());
+    scrollArea.appendChild(buildSeparator());
     model.tools.slice(1, BUILTIN_TOOLS.length).forEach(function (tool) {
-      rail.appendChild(buildToolButton(tool, wrapper));
+      scrollArea.appendChild(buildToolButton(tool, wrapper));
     });
 
     var registeredTop = model.tools.slice(BUILTIN_TOOLS.length);
     if (registeredTop.length) {
-      rail.appendChild(buildSeparator());
+      scrollArea.appendChild(buildSeparator());
       registeredTop.forEach(function (tool) {
-        rail.appendChild(buildToolButton(tool, wrapper));
+        scrollArea.appendChild(buildToolButton(tool, wrapper));
       });
     }
 
-    // The help "?" sits last-but-one, beside the gear — unless the
-    // author hid it (Toolbar settings), in which case the panel stays
-    // reachable from the Help button inside that dialog.
-    rail.appendChild(buildSeparator());
+    // The tools section hides its NATIVE scrollbars entirely (CSS): in a
+    // 44px-wide column a classic Windows vertical scrollbar steals width
+    // from the fixed-width tools, which then overflow sideways by a few
+    // pixels and summon a horizontal scrollbar strip at the section's
+    // foot (the owner's screenshot, 2026-08-27). These step buttons are
+    // the visible affordance instead — each renders only while there is
+    // more to scroll in its direction, Photoshop-style. Pointer sugar
+    // like the grip (aria-hidden, unfocusable): wheel and touch scroll
+    // the section directly, and the keyboard path is the arrow keys,
+    // which scroll the focused tool into view.
+    function buildScrollStep(dir) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toolrail-scrollbtn';
+      btn.dataset.dir = dir;
+      btn.setAttribute('aria-hidden', 'true');
+      btn.tabIndex = -1;
+      btn.title = __('Scroll the tools', 'toolrail');
+      btn.hidden = true;
+      btn.addEventListener('click', function () {
+        var delta = dir === 'prev' ? -1 : 1;
+        // Instant, not smooth — a smooth scroll here would need the
+        // triple motion-flatten; an instant step needs nothing.
+        if (isVertical()) {
+          scrollArea.scrollBy(0, delta * Math.max(88, scrollArea.clientHeight * 0.6));
+        } else {
+          scrollArea.scrollBy(delta * Math.max(88, scrollArea.clientWidth * 0.6), 0);
+        }
+      });
+      return btn;
+    }
+    var scrollPrev = buildScrollStep('prev');
+    var scrollNext = buildScrollStep('next');
+
+    function syncScrollSteps() {
+      var vertical = isVertical();
+      var pos = vertical ? scrollArea.scrollTop : scrollArea.scrollLeft;
+      var max = vertical
+        ? scrollArea.scrollHeight - scrollArea.clientHeight
+        : scrollArea.scrollWidth - scrollArea.clientWidth;
+      scrollPrev.hidden = pos <= 0;
+      scrollNext.hidden = pos >= max - 1;
+    }
+    scrollArea.addEventListener('scroll', syncScrollSteps);
+    if (window.ResizeObserver) {
+      // The initial sync below runs before the rail is in the DOM (all
+      // sizes read 0, so both buttons hide); the observer fires once
+      // the section gets its real box after insertion, and again on any
+      // editor resize — panel toggles included.
+      railScrollObserver = new ResizeObserver(syncScrollSteps);
+      railScrollObserver.observe(scrollArea);
+    }
+    syncScrollSteps();
+
+    rail.appendChild(scrollPrev);
+    rail.appendChild(scrollArea);
+    rail.appendChild(scrollNext);
+
+    // The always-visible tail. The help "?" sits last-but-one, beside
+    // the gear — unless the author hid it (Toolbar settings), in which
+    // case the panel stays reachable from the Help button inside that
+    // dialog.
+    var tail = document.createElement('div');
+    tail.className = 'toolrail-tail';
+    tail.appendChild(buildSeparator());
     if (!isHelpHidden()) {
       var help = document.createElement('button');
       help.type = 'button';
@@ -3309,7 +3495,7 @@
       help.addEventListener('click', function () {
         openHelp(wrapper);
       });
-      rail.appendChild(help);
+      tail.appendChild(help);
     }
 
     // The settings gear is always the rail's last control.
@@ -3334,7 +3520,8 @@
     gear.addEventListener('click', function () {
       openSettings(wrapper);
     });
-    rail.appendChild(gear);
+    tail.appendChild(gear);
+    rail.appendChild(tail);
 
     // Roving tabindex: exactly one tab stop. The INITIAL stop is Select
     // (the primary tool), not whatever happens to render first — the

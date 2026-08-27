@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.1.11
+Stable tag: 0.1.12
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,7 +21,7 @@ Everything the rail inserts is an ordinary core block. Deactivating this plugin 
 * Save pinned arrangements as named sets, and move them between sites as small JSON files (Export/Import in Toolbar settings). A set may name blocks a site doesn't have — those stay in the set and appear when their plugin or theme is active.
 * Move the toolbar where you want it: it starts on the left edge, and can dock to the right edge (past the settings side panel), to a full-width bar across the top or the bottom, or float free as a Photoshop-style palette. Drag it by the grip and release near an edge to snap it there, or pick a position in Toolbar settings. Flyouts and panels open away from the docked edge — a top toolbar opens downward, a bottom one upward.
 * Full keyboard operability: one tab stop, arrow keys, Home/End, Escape disarms. Toolbar settings and the tool flyouts close on Escape and when you tab past them, so they never sit open behind you. Arrow keys follow the toolbar's orientation — Up/Down along a vertical rail with ArrowRight opening a tool's flyout, Left/Right along a horizontal one with ArrowDown opening the flyout. Repositioning has a keyboard path of its own in Toolbar settings, so it never depends on dragging.
-* Show tool names beside the icons: a chevron at the head of a vertical or floating toolbar widens it into icon + name rows. Icon-only toolbars ask you to learn the icons; this is the way around that.
+* Show tool names beside the icons: a "Tool names" checkbox in Toolbar settings widens a vertical or floating toolbar into icon + name rows. Icon-only toolbars ask you to learn the icons; this is the way around that. If you switch often, a second checkbox adds an expand/contract button to the toolbar itself.
 * Pick the toolbar's colors: Dark (default), Light and Gray presets, or your own background + text pair. Every preset meets the WCAG contrast minimums, and with custom colors the focus ring and pressed markers are adjusted automatically so they stay visible.
 * A Help panel ("?" next to the gear) explains inserting, pinning, moving the toolbar, the keyboard model and saved sets. It opens once on your first visit; after that, only when you ask. You can hide the "?" from the toolbar — the panel stays available from Toolbar settings.
 * Provider API for themes and plugins: PHP filter `toolrail_tool_providers` + JS `window.toolrail.registerTool()`.
@@ -37,6 +37,12 @@ Against your user account on this site, the same as pinned blocks and saved sets
 Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a position under "Toolbar position".
 
 == Changelog ==
+
+= 0.1.12 =
+* Wide mode is now controlled from Toolbar settings ("Tool names"), and the on-toolbar expand/contract button is opt-in from the same place — a permanent button at the toolbar's head cost space every author paid for a toggle few use often.
+* Toolbar settings sections are separated by dividers, and Pinned blocks now sits directly above "Add a block" — the list you are managing and the search that adds to it read as one unit, with a new pin landing at the bottom of the list, right above the search.
+* Fix: with custom colors, a pair measuring just under 4.5:1 could display as "4.5:1, below the 4.5:1 minimum". The shown value is now floored so it never contradicts the warning.
+* Fix: a toolbar carrying more tools than the editor is tall scrolled as a whole, pushing Help and the settings gear below the fold — and its scrollbar stole width from the tools, which then showed a stray sideways scrollbar strip. Only the tools section scrolls now, with no native scrollbars: small step arrows appear when there is more to scroll, the grip and the Help/Settings tail stay visible at any height, and the mouse wheel, touch and keyboard all still scroll the tools directly.
 
 = 0.1.11 =
 * Add appearance settings: Dark (default), Light and Gray presets, or a custom background + text pair, in Toolbar settings. The presets meet the WCAG contrast minimums. With custom colors, the panel reports the pair's measured contrast in text and warns below 4.5:1; the pair still applies, and the focus ring and pressed markers are derived automatically so they never drop below 3:1.
