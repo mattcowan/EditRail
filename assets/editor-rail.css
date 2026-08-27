@@ -42,7 +42,27 @@
  * the drag snap-preview.
  */
 
+/* Own the box model instead of inheriting it: every width sum in this
+   file (44px tools with border, 100%-width wide rows with padding, the
+   320px dialogs) assumes border-box. Measured 2026-08-26: wp-admin
+   already computes border-box on these elements from core stylesheets we
+   do not control — this declaration makes that a contract of OURS rather
+   than a dependency on theirs. */
+.toolrail-region,
+.toolrail-region *,
+#toolrail-snap-preview {
+    box-sizing: border-box;
+}
+
 .toolrail-region {
+    /* min-width: 0 beats the flex automatic minimum (min-width: auto):
+       without it a wide-mode rail carrying a long pinned-block title is
+       FLOORED at its content's min-content size — measured 270.89px
+       against the 200px flex-basis — so the label never ellipsized and
+       the rail quietly widened (review 2026-08-26, finding refined by
+       measurement: the predicted box-sizing overflow was already
+       covered, the min-width floor was the real defect). */
+    min-width: 0;
     /* The Dark preset — the stylesheet defaults. Measured on #1e1e1e:
        fg 12.63:1, muted 7.69:1, faint 5.85:1, grip 3.32:1, focus ring and
        pressed edge 5.78:1, pressed-fg on pressed 5.61:1, status 9.15:1. */
@@ -152,6 +172,8 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
 
 #toolrail-rail {
     flex: 1 1 auto;
+    /* Same automatic-minimum escape as the region above. */
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 6px;
