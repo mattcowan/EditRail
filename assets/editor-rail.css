@@ -13,75 +13,24 @@
  *   top / bottom   full-width horizontal bar in the skeleton's flex column
  *   float          absolutely positioned palette inside the skeleton body
  *
- * Surfaces (flyouts, the settings dialog, the help panel) get their
- * top/left/right/bottom offsets inline from placeSurface() in the JS,
- * which opens them away from whichever edge the rail is docked to.
+ * Surfaces (flyouts, the settings dialog) get their top/left/right/bottom
+ * offsets inline from placeSurface() in the JS, which opens them away from
+ * whichever edge the rail is docked to.
  *
- * COLOR TOKENS: every color the rail paints goes through a custom
- * property declared on .toolrail-region. The defaults below ARE the Dark
- * preset; the Light/Gray presets and the custom background+text pair are
- * applied by applyAppearance() as inline properties on the region, which
- * the flyouts and dialogs inherit (they are its children). Two colors
- * deliberately stay literal because they draw on the EDITOR, not on the
- * rail: the drag snap-preview blue below, and the canvas-side armed
- * cursor (which has no color at all).
- *
- * ONE focus-ring colour per appearance, because there is only one surface
- * tone. The rail, the flyouts and the dialogs share --toolrail-bg — an
- * earlier pass split this into a "dark" and a "light" token on the false
- * premise that the settings dialog was light, which left the dialog's own
- * controls on #3858e9 at 2.99:1 while the header claimed 5.61:1. Every
- * focus indicator uses --toolrail-focus-ring (#7b90ff, 5.78:1 on
- * #1e1e1e), which clears the 3:1 that WCAG 1.4.11 Non-text Contrast
- * requires; the Light/Gray presets and the custom derivation each supply
- * a ring re-verified at ≥3:1 against their own background (measured
- * ratios are documented beside the preset definitions in editor-rail.js).
+ * ONE focus-ring colour, because there is only one surface tone. The rail,
+ * the flyouts and the settings dialog are all #1e1e1e — an earlier pass
+ * split this into a "dark" and a "light" token on the false premise that
+ * the settings dialog was light, which left the dialog's own controls on
+ * #3858e9 at 2.99:1 while the header claimed 5.61:1. Every focus indicator
+ * now uses --toolrail-focus-ring (#7b90ff, 5.78:1 on #1e1e1e), which
+ * clears the 3:1 that WCAG 1.4.11 Non-text Contrast requires.
  *
  * Anything that reads as a focus or state indicator ON the rail belongs on
- * that token. #3858e9 survives only where it sits on the EDITOR canvas:
- * the drag snap-preview.
+ * this token. #3858e9 survives only where it sits on the EDITOR canvas,
+ * not on the rail: the pressed-tool fill and the drag snap-preview.
  */
 
-/* Own the box model instead of inheriting it: every width sum in this
-   file (44px tools with border, 100%-width wide rows with padding, the
-   320px dialogs) assumes border-box. Measured 2026-08-26: wp-admin
-   already computes border-box on these elements from core stylesheets we
-   do not control — this declaration makes that a contract of OURS rather
-   than a dependency on theirs. */
-.toolrail-region,
-.toolrail-region *,
-#toolrail-snap-preview {
-    box-sizing: border-box;
-}
-
 .toolrail-region {
-    /* min-width: 0 beats the flex automatic minimum (min-width: auto):
-       without it a wide-mode rail carrying a long pinned-block title is
-       FLOORED at its content's min-content size — measured 270.89px
-       against the 200px flex-basis — so the label never ellipsized and
-       the rail quietly widened (review 2026-08-26, finding refined by
-       measurement: the predicted box-sizing overflow was already
-       covered, the min-width floor was the real defect). */
-    min-width: 0;
-    /* The Dark preset — the stylesheet defaults. Measured on #1e1e1e:
-       fg 12.63:1, muted 7.69:1, faint 5.85:1, grip 3.32:1, focus ring and
-       pressed edge 5.78:1, pressed-fg on pressed 5.61:1, status 9.15:1. */
-    --toolrail-bg: #1e1e1e;
-    --toolrail-fg: #e0e0e0;
-    --toolrail-fg-strong: #fff;
-    --toolrail-muted: #b0b0b0;
-    --toolrail-faint: #999;
-    --toolrail-grip: #6f6f6f;
-    --toolrail-hover: #2f2f2f;
-    --toolrail-edge: #2f2f2f;
-    --toolrail-border: #3f3f3f;
-    --toolrail-field-bg: #2a2a2a;
-    --toolrail-field-border: #4f4f4f;
-    --toolrail-field-hover: #3a3a3a;
-    --toolrail-pressed: #3858e9;
-    --toolrail-pressed-fg: #fff;
-    --toolrail-pressed-edge: #7b90ff;
-    --toolrail-status: #9ec1ff;
     --toolrail-focus-ring: #7b90ff;
     position: relative;
     display: flex;
@@ -91,15 +40,6 @@
 .toolrail-region[data-dock="left"],
 .toolrail-region[data-dock="right"] {
     flex: 0 0 52px;
-}
-
-/* Wide mode: icon + name rows. Vertical docks and the floating palette
-   only — the JS does not even render the chevron on top/bottom, and a
-   stored data-wide is inert there because every wide rule is keyed to
-   these three docks. */
-.toolrail-region[data-dock="left"][data-wide],
-.toolrail-region[data-dock="right"][data-wide] {
-    flex: 0 0 200px;
 }
 
 /* The region's z-index caps its surfaces, because position + z-index make
@@ -166,18 +106,12 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
     max-height: calc(100% - 32px);
 }
 
-.toolrail-region[data-dock="float"][data-wide] #toolrail-rail {
-    width: 200px;
-}
-
 #toolrail-rail {
     flex: 1 1 auto;
-    /* Same automatic-minimum escape as the region above. */
-    min-width: 0;
     display: flex;
     align-items: center;
     gap: 6px;
-    background: var(--toolrail-bg);
+    background: #1e1e1e;
 }
 
 .toolrail-region[data-dock="left"] #toolrail-rail,
@@ -196,23 +130,23 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
 }
 
 .toolrail-region[data-dock="left"] #toolrail-rail {
-    border-right: 1px solid var(--toolrail-edge);
+    border-right: 1px solid #2f2f2f;
 }
 
 .toolrail-region[data-dock="right"] #toolrail-rail {
-    border-left: 1px solid var(--toolrail-edge);
+    border-left: 1px solid #2f2f2f;
 }
 
 .toolrail-region[data-dock="top"] #toolrail-rail {
-    border-bottom: 1px solid var(--toolrail-edge);
+    border-bottom: 1px solid #2f2f2f;
 }
 
 .toolrail-region[data-dock="bottom"] #toolrail-rail {
-    border-top: 1px solid var(--toolrail-edge);
+    border-top: 1px solid #2f2f2f;
 }
 
 .toolrail-region[data-dock="float"] #toolrail-rail {
-    border: 1px solid var(--toolrail-border);
+    border: 1px solid #3f3f3f;
     border-radius: 6px;
     box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
 }
@@ -225,7 +159,7 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
     border-radius: 3px;
     background-image: radial-gradient(currentColor 1px, transparent 1px);
     background-size: 4px 4px;
-    color: var(--toolrail-grip);
+    color: #6f6f6f;
     opacity: 0.9;
 }
 
@@ -245,7 +179,7 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
 }
 
 .toolrail-grip:hover {
-    color: var(--toolrail-muted);
+    color: #b0b0b0;
 }
 
 body.toolrail-dragging,
@@ -256,9 +190,7 @@ body.toolrail-dragging * {
 }
 
 /* Where a release would dock the rail. Sits just under the floating rail
-   (100001) so the palette being dragged stays readable on top of it.
-   Deliberately NOT tokenized: it draws on the editor, not on the rail
-   (the 0.1.4 boundary), so it stays theme-blue in every appearance. */
+   (100001) so the palette being dragged stays readable on top of it. */
 #toolrail-snap-preview {
     position: fixed;
     z-index: 100000;
@@ -275,7 +207,7 @@ body.toolrail-dragging * {
     height: 44px;
     display: grid;
     place-items: center;
-    color: var(--toolrail-fg);
+    color: #e0e0e0;
     background: transparent;
     border: 1px solid transparent;
     border-radius: 4px;
@@ -306,44 +238,8 @@ body.toolrail-dragging * {
     height: 20px;
 }
 
-/* The tool's visible name — wide mode only. The accessible name is the
-   button's aria-label, which always contains this text. */
-.toolrail-tool-label {
-    display: none;
-}
-
-.toolrail-region[data-dock="left"][data-wide] .toolrail-tool,
-.toolrail-region[data-dock="right"][data-wide] .toolrail-tool,
-.toolrail-region[data-dock="float"][data-wide] .toolrail-tool {
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 8px;
-    width: 100%;
-    height: auto;
-    min-height: 44px;
-    padding: 0 10px;
-    text-align: left;
-}
-
-.toolrail-region[data-dock="left"][data-wide] .toolrail-tool-label,
-.toolrail-region[data-dock="right"][data-wide] .toolrail-tool-label,
-.toolrail-region[data-dock="float"][data-wide] .toolrail-tool-label {
-    display: block;
-    flex: 1 1 auto;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 13px;
-}
-
-/* In wide mode the chevron points back the way it came. */
-.toolrail-region[data-wide] .toolrail-tool--wide-toggle .toolrail-tool-icon svg {
-    transform: rotate(180deg);
-}
-
 .toolrail-tool:hover {
-    background: var(--toolrail-hover);
+    background: #2f2f2f;
 }
 
 .toolrail-tool:focus-visible {
@@ -362,15 +258,15 @@ body.toolrail-dragging * {
    for an active item in a horizontal toolbar, and it keeps the marker off
    the editor chrome the rail is butted against. */
 .toolrail-tool[aria-pressed="true"] {
-    background: var(--toolrail-pressed);
-    color: var(--toolrail-pressed-fg);
+    background: #3858e9;
+    color: #fff;
 }
 
 .toolrail-tool[aria-pressed="true"]::before {
     content: "";
     position: absolute;
     border-radius: 2px;
-    background: var(--toolrail-pressed-edge);
+    background: #7b90ff;
 }
 
 .toolrail-region[data-dock="left"] .toolrail-tool[aria-pressed="true"]::before,
@@ -404,7 +300,7 @@ body.toolrail-dragging * {
 
 .toolrail-separator {
     flex: 0 0 auto;
-    background: var(--toolrail-border);
+    background: #3f3f3f;
 }
 
 .toolrail-region[data-dock="left"] .toolrail-separator,
@@ -415,13 +311,6 @@ body.toolrail-dragging * {
     margin: 4px 0;
 }
 
-/* Separators span the full row in wide mode. */
-.toolrail-region[data-dock="left"][data-wide] .toolrail-separator,
-.toolrail-region[data-dock="right"][data-wide] .toolrail-separator,
-.toolrail-region[data-dock="float"][data-wide] .toolrail-separator {
-    width: calc(100% - 8px);
-}
-
 .toolrail-region[data-dock="top"] .toolrail-separator,
 .toolrail-region[data-dock="bottom"] .toolrail-separator {
     width: 1px;
@@ -429,8 +318,7 @@ body.toolrail-dragging * {
     margin: 0 4px;
 }
 
-/* Corner glyph marking a tool with a flyout. In wide mode it leaves the
-   corner and sits at the row's right edge, pointing into the flyout. */
+/* Corner glyph marking a tool with a flyout. */
 .toolrail-flyout-glyph {
     position: absolute;
     right: 3px;
@@ -441,25 +329,14 @@ body.toolrail-dragging * {
     border-bottom: 5px solid currentColor;
 }
 
-.toolrail-region[data-dock="left"][data-wide] .toolrail-flyout-glyph,
-.toolrail-region[data-dock="right"][data-wide] .toolrail-flyout-glyph,
-.toolrail-region[data-dock="float"][data-wide] .toolrail-flyout-glyph {
-    position: static;
-    flex: 0 0 auto;
-    margin-left: auto;
-    border-left: 5px solid currentColor;
-    border-top: 5px solid transparent;
-    border-bottom: 5px solid transparent;
-}
-
 /* Flyout menu. Its offsets are set inline by placeSurface(), which opens
    it away from whichever edge the rail is docked to. */
 .toolrail-flyout {
     position: absolute;
     min-width: 180px;
     padding: 4px;
-    background: var(--toolrail-bg);
-    border: 1px solid var(--toolrail-border);
+    background: #1e1e1e;
+    border: 1px solid #3f3f3f;
     border-radius: 4px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
     z-index: 31;
@@ -472,7 +349,7 @@ body.toolrail-dragging * {
     width: 100%;
     min-height: 40px;
     padding: 6px 10px;
-    color: var(--toolrail-fg);
+    color: #e0e0e0;
     background: transparent;
     border: 1px solid transparent;
     border-radius: 3px;
@@ -482,7 +359,7 @@ body.toolrail-dragging * {
 }
 
 .toolrail-flyout-item:hover {
-    background: var(--toolrail-hover);
+    background: #2f2f2f;
 }
 
 .toolrail-flyout-item:focus-visible {
@@ -505,32 +382,26 @@ body.toolrail-dragging * {
    away). Removal lives in the settings dialog and the block menu. */
 
 /* ------------------------------------------------------------------
-   Toolbar settings dialog (the gear) + the help panel — sibling
-   surfaces sharing one tone and one placement mechanism.
+   Toolbar settings dialog (the gear)
    ------------------------------------------------------------------ */
 
 /* Offsets are set inline by placeSurface(). The height cap is measured
    against the VIEWPORT rather than the region: a top or bottom rail is
    only ~52px tall, so the old wrapper-relative calc(100% - 16px) collapsed
    the dialog to a sliver on those docks. */
-.toolrail-settings,
-.toolrail-help {
+.toolrail-settings {
     position: absolute;
     max-height: min(70vh, 560px);
     width: 320px;
     overflow-y: auto;
     padding: 12px;
-    background: var(--toolrail-bg);
-    color: var(--toolrail-fg);
-    border: 1px solid var(--toolrail-border);
+    background: #1e1e1e;
+    color: #e0e0e0;
+    border: 1px solid #3f3f3f;
     border-radius: 4px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
     z-index: 31;
     font-size: 13px;
-}
-
-.toolrail-help-copy {
-    margin: 6px 0;
 }
 
 .toolrail-settings-head {
@@ -543,12 +414,12 @@ body.toolrail-dragging * {
 .toolrail-settings-title {
     font-size: 14px;
     font-weight: 600;
-    color: var(--toolrail-fg-strong);
+    color: #fff;
     margin: 0;
 }
 
 .toolrail-settings-note {
-    color: var(--toolrail-muted);
+    color: #b0b0b0;
     margin: 0 0 12px;
 }
 
@@ -564,9 +435,9 @@ body.toolrail-dragging * {
     width: 100%;
     min-height: 36px;
     padding: 4px 8px;
-    background: var(--toolrail-field-bg);
-    color: var(--toolrail-fg-strong);
-    border: 1px solid var(--toolrail-field-border);
+    background: #2a2a2a;
+    color: #fff;
+    border: 1px solid #4f4f4f;
     border-radius: 3px;
 }
 
@@ -578,16 +449,16 @@ body.toolrail-dragging * {
 .toolrail-settings-btn {
     min-height: 32px;
     padding: 4px 10px;
-    background: var(--toolrail-field-bg);
-    color: var(--toolrail-fg);
-    border: 1px solid var(--toolrail-field-border);
+    background: #2a2a2a;
+    color: #e0e0e0;
+    border: 1px solid #4f4f4f;
     border-radius: 3px;
     cursor: pointer;
     font-size: 12px;
 }
 
 .toolrail-settings-btn:hover {
-    background: var(--toolrail-field-hover);
+    background: #3a3a3a;
 }
 
 .toolrail-settings-btn:focus-visible {
@@ -624,12 +495,12 @@ body.toolrail-dragging * {
     font-size: 12px;
     font-weight: 600;
     text-transform: uppercase;
-    color: var(--toolrail-fg-strong);
+    color: #fff;
     margin: 16px 0 6px;
 }
 
 .toolrail-settings-empty {
-    color: var(--toolrail-faint);
+    color: #999;
     margin: 6px 0;
 }
 
@@ -664,14 +535,12 @@ body.toolrail-dragging * {
     align-items: stretch;
 }
 
-/* VISIBLE text for import/load/appearance outcomes. Not a live region —
-   the dialog body is rebuilt on every render, so announcing is
-   wp.a11y.speak()'s job (see the speak() helper in editor-rail.js).
-   Reserves no space when empty. #9ec1ff on #1e1e1e measures 9.15:1; the
-   presets and the custom derivation supply their own --toolrail-status
-   at ≥4.5:1. */
+/* VISIBLE text for import/load outcomes. Not a live region — the dialog
+   body is rebuilt on every render, so announcing is wp.a11y.speak()'s job
+   (see the speak() helper in editor-rail.js). Reserves no space when
+   empty. #9ec1ff on #1e1e1e measures 9.15:1. */
 .toolrail-settings-status {
-    color: var(--toolrail-status);
+    color: #9ec1ff;
     margin: 6px 0 0;
 }
 
@@ -682,7 +551,7 @@ body.toolrail-dragging * {
 .toolrail-settings-import {
     width: 100%;
     margin-top: 4px;
-    color: var(--toolrail-fg);
+    color: #e0e0e0;
     font-size: 12px;
 }
 
@@ -690,9 +559,9 @@ body.toolrail-dragging * {
     min-height: 32px;
     margin-right: 8px;
     padding: 4px 10px;
-    background: var(--toolrail-field-bg);
-    color: var(--toolrail-fg);
-    border: 1px solid var(--toolrail-field-border);
+    background: #2a2a2a;
+    color: #e0e0e0;
+    border: 1px solid #4f4f4f;
     border-radius: 3px;
     cursor: pointer;
 }
@@ -707,19 +576,14 @@ body.toolrail-dragging * {
     width: auto;
 }
 
-/* Toolbar position picker — the keyboard equivalent of dragging the grip.
-   The appearance fieldset shares the layout but carries its OWN class:
-   the position radios are queried through .toolrail-settings-position,
-   which therefore must never contain other radios. */
-.toolrail-settings-position,
-.toolrail-settings-appearance {
+/* Toolbar position picker — the keyboard equivalent of dragging the grip. */
+.toolrail-settings-position {
     margin: 0 0 12px;
     padding: 0;
     border: 0;
 }
 
-.toolrail-settings-position .toolrail-settings-label,
-.toolrail-settings-appearance .toolrail-settings-label {
+.toolrail-settings-position .toolrail-settings-label {
     padding: 0;
     margin: 12px 0 4px;
 }
@@ -737,40 +601,9 @@ body.toolrail-dragging * {
     margin: 0;
 }
 
-.toolrail-settings-positionrow input:focus-visible,
-.toolrail-settings-color:focus-visible {
+.toolrail-settings-positionrow input:focus-visible {
     outline: 2px solid var(--toolrail-focus-ring);
     outline-offset: 2px;
-}
-
-/* Custom appearance pair. The inputs render (disabled) even while a
-   preset is active, so the dialog's shape never jumps. */
-.toolrail-settings-colorrow {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    min-height: 36px;
-    cursor: pointer;
-}
-
-.toolrail-settings-color {
-    flex: 0 0 auto;
-    width: 44px;
-    height: 28px;
-    padding: 0;
-    background: var(--toolrail-field-bg);
-    border: 1px solid var(--toolrail-field-border);
-    border-radius: 3px;
-}
-
-.toolrail-settings-color:disabled {
-    opacity: 0.4;
-    cursor: default;
-}
-
-.toolrail-settings-helprow {
-    margin: 6px 0;
 }
 
 /* Drop-target hint while a block drag hovers the rail. */
@@ -794,11 +627,11 @@ body.toolrail-dragging * {
 
 /* Windows High Contrast / forced-colors.
    The OS replaces every colour declared above, which costs the rail the
-   two cues that carry state visually: the pressed button's fill and its
-   edge bar both flatten to the system palette, leaving armed and unarmed
-   tools identical on screen. (aria-pressed still carries the state to
-   assistive tech either way; this is for the sighted high-contrast
-   user.)
+   two cues that carry state visually: the pressed button's #3858e9 fill
+   and its #7b90ff edge bar both flatten to the system palette, leaving
+   armed and unarmed tools identical on screen. (aria-pressed still
+   carries the state to assistive tech either way; this is for the sighted
+   high-contrast user.)
    Restoring it in system colours: `forced-color-adjust: none` is NOT used
    — the point is to cooperate with the user's palette, not opt out of it.
    Instead the state is re-expressed with a border, which forced-colors
@@ -824,14 +657,12 @@ body.toolrail-dragging * {
     .toolrail-settings-btn:focus-visible,
     .toolrail-settings-search:focus-visible,
     .toolrail-settings-import:focus-visible,
-    .toolrail-settings-positionrow input:focus-visible,
-    .toolrail-settings-color:focus-visible {
+    .toolrail-settings-positionrow input:focus-visible {
         outline: 2px solid Highlight;
     }
 
     .toolrail-flyout,
-    .toolrail-settings,
-    .toolrail-help {
+    .toolrail-settings {
         border: 1px solid CanvasText;
     }
 
