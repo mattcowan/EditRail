@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.1.8
+Stable tag: 0.1.11
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -21,6 +21,9 @@ Everything the rail inserts is an ordinary core block. Deactivating this plugin 
 * Save pinned arrangements as named sets, and move them between sites as small JSON files (Export/Import in Toolbar settings). A set may name blocks a site doesn't have — those stay in the set and appear when their plugin or theme is active.
 * Move the toolbar where you want it: it starts on the left edge, and can dock to the right edge (past the settings side panel), to a full-width bar across the top or the bottom, or float free as a Photoshop-style palette. Drag it by the grip and release near an edge to snap it there, or pick a position in Toolbar settings. Flyouts and panels open away from the docked edge — a top toolbar opens downward, a bottom one upward.
 * Full keyboard operability: one tab stop, arrow keys, Home/End, Escape disarms. Toolbar settings and the tool flyouts close on Escape and when you tab past them, so they never sit open behind you. Arrow keys follow the toolbar's orientation — Up/Down along a vertical rail with ArrowRight opening a tool's flyout, Left/Right along a horizontal one with ArrowDown opening the flyout. Repositioning has a keyboard path of its own in Toolbar settings, so it never depends on dragging.
+* Show tool names beside the icons: a chevron at the head of a vertical or floating toolbar widens it into icon + name rows. Icon-only toolbars ask you to learn the icons; this is the way around that.
+* Pick the toolbar's colors: Dark (default), Light and Gray presets, or your own background + text pair. Every preset meets the WCAG contrast minimums, and with custom colors the focus ring and pressed markers are adjusted automatically so they stay visible.
+* A Help panel ("?" next to the gear) explains inserting, pinning, moving the toolbar, the keyboard model and saved sets. It opens once on your first visit; after that, only when you ask. You can hide the "?" from the toolbar — the panel stays available from Toolbar settings.
 * Provider API for themes and plugins: PHP filter `toolrail_tool_providers` + JS `window.toolrail.registerTool()`.
 
 == Frequently Asked Questions ==
@@ -34,6 +37,18 @@ Against your user account on this site, the same as pinned blocks and saved sets
 Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a position under "Toolbar position".
 
 == Changelog ==
+
+= 0.1.11 =
+* Add appearance settings: Dark (default), Light and Gray presets, or a custom background + text pair, in Toolbar settings. The presets meet the WCAG contrast minimums. With custom colors, the panel reports the pair's measured contrast in text and warns below 4.5:1; the pair still applies, and the focus ring and pressed markers are derived automatically so they never drop below 3:1.
+* The drag snap preview keeps the editor's blue in every appearance — it draws on the editor, not on the toolbar.
+
+= 0.1.10 =
+* Add wide mode: a chevron at the head of a vertical or floating toolbar shows each tool's name beside its icon. The choice is saved to your account. Hidden on top and bottom toolbars, where a name per tool makes the bar too long.
+* The toolbar keeps its one-tab-stop keyboard model in wide mode; the chevron joins the arrow-key order.
+
+= 0.1.9 =
+* Add a Help panel: a "?" button beside the settings gear explains inserting with a tool, pinning blocks, moving the toolbar, the keyboard model, and saved sets. It opens by itself once, the first time the toolbar appears for your account, and never again unless you open it.
+* A checkbox in Toolbar settings hides the "?" from the toolbar; the panel stays reachable from a Help button inside Toolbar settings.
 
 = 0.1.8 =
 * Fix: the Toolbar settings note still said pinned blocks are "saved in this browser". They are saved to your account on this site since 0.1.6. The note, the integration doc, and stale code comments now say so.
