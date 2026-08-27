@@ -1,0 +1,3 @@
+# Normalize line endings: every text file is stored as LF in the repo,
+# regardless of any contributor's core.autocrlf setting.
+* text=auto

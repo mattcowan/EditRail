@@ -8,12 +8,20 @@
  * about how authored content renders or edits.
  *
  * MOUNT STRATEGY (proven in the Background Candy Phase 0 spike): the rail is
- * inserted as the FIRST CHILD of .interface-interface-skeleton__body so it
- * participates in the editor's flex layout; a debounced MutationObserver
- * re-mounts it across React re-renders (it survives the code-editor
- * round-trip, where the whole visual editor unmounts). Vanilla DOM on
- * purpose: the rail lives OUTSIDE the React tree it observes, so React never
- * reconciles it away.
+ * inserted into the editor's own skeleton so it participates in the editor's
+ * flex layout rather than overlapping the canvas; a debounced
+ * MutationObserver re-mounts it across React re-renders (it survives the
+ * code-editor round-trip, where the whole visual editor unmounts). Vanilla
+ * DOM on purpose: the rail lives OUTSIDE the React tree it observes, so
+ * React never reconciles it away.
+ *
+ * POSITION: the rail docks to the left edge by default, and can be moved to
+ * the right edge (past the settings side panel), to a full-width bar at the
+ * top or bottom, or torn off as a floating Photoshop-style palette. Drag it
+ * by the grip and release near an edge to snap; the settings dialog carries
+ * the equivalent keyboard path. Surfaces open away from the docked edge — a
+ * top rail opens its flyouts downward, a bottom rail upward. See the
+ * "Rail position" block below for where each dock hangs.
  *
  * REGISTRATION API (the provider contract):
  *   window.toolrail.registerTool({
@@ -36,11 +44,300 @@
   }
 
   var __ = wp.i18n ? wp.i18n.__ : function (s) { return s; };
+  var _n = wp.i18n ? wp.i18n._n : function (s, p, n) { return n === 1 ? s : p; };
   var sprintf = wp.i18n ? wp.i18n.sprintf : function (s) { return s; };
+
+  /**
+   * Announce a transient message to assistive technology.
+   *
+   * Deliberately core's regions, not ours: wp.a11y.speak() keeps two
+   * live regions that persist for the life of the page, so a message
+   * announces even when the UI that produced it is being rebuilt around
+   * it. A role="status" element that we create and destroy per render
+   * cannot — AT has to be observing the region BEFORE its text changes.
+   *
+   * @param {string} message Plain text.
+   * @return {void}
+   */
+  function speak(message) {
+    if (message && window.wp && wp.a11y && typeof wp.a11y.speak === 'function') {
+      wp.a11y.speak(message);
+    }
+  }
 
   var SLOTS_KEY = 'toolrail-quick-slots';
   var CONFIGS_KEY = 'toolrail-slot-configs';
+  var POSITION_KEY = 'toolrail-position';
+  var MIGRATED_KEY = 'toolrail-slots-migrated';
+  var PREFS_SCOPE = 'toolrail';
   var SHAPE_FILL = '#b9b9b9';
+
+  // -------------------------------------------------------------------
+  // Storage
+  //
+  // Preferences live in wp.data's `core/preferences` store (owner
+  // decision 2026-08-26): core persists that store to the CURRENT USER's
+  // account (the wp_persisted_preferences user meta, debounced REST
+  // writes, preloaded into every editor page) — so the toolbar position,
+  // pins and saved sets follow the author across browsers and devices on
+  // this site instead of resetting per browser profile. It is the same
+  // mechanism core uses for its own editor preferences. User meta is
+  // per-site; moving state between SITES stays the job of set
+  // export/import.
+  //
+  // Every preference goes through readKey/writeKey (string values, null
+  // = never written — migration semantics depend on that distinction).
+  // The localStorage machinery below survives as the FALLBACK for any
+  // context where the preferences store is unavailable, OR — per KEY —
+  // has proven unreliable this session, keeping the 0.1.4 resilience
+  // contract there: a session where Storage THROWS (a private window,
+  // "block site data", quota hit) stays coherent for its lifetime via
+  // the in-memory mirror; `storageBroken` and `brokenPrefKeys` each
+  // latch on their first throw so a hard-failing browser is not
+  // re-probed on every read, and — critically — reads and writes agree
+  // on which source is authoritative for a given key once it has
+  // latched (see writeKey), without dragging every OTHER key still
+  // working fine in the store down with it.
+  // -------------------------------------------------------------------
+
+  function prefsSelect() {
+    try {
+      return wp.data && wp.data.select ? (wp.data.select('core/preferences') || null) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function prefsDispatch() {
+    try {
+      return wp.data && wp.data.dispatch ? (wp.data.dispatch('core/preferences') || null) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  var storageBroken = false;
+  var memoryStore = Object.create(null);
+
+  function readLocalKey(key) {
+    if (!storageBroken) {
+      try {
+        var value = window.localStorage.getItem(key);
+        // Mirror every SUCCESSFUL read, not just writes — once
+        // storageBroken latches this mirror is the only copy left (the
+        // 0.1.4 lesson: an unmirrored key read back as null and the rail
+        // silently emptied itself of pins and sets until reload).
+        memoryStore[key] = value;
+        return value;
+      } catch (e) {
+        storageBroken = true;
+      }
+    }
+    return key in memoryStore ? memoryStore[key] : null;
+  }
+
+  function writeLocalKey(key, value) {
+    memoryStore[key] = value;
+    if (storageBroken) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (e) {
+      storageBroken = true;
+    }
+  }
+
+  // Per-KEY latch: set when disp.set() has thrown once for that key — see
+  // writeKey. Reads must honor it too, and only for that key: core's own
+  // reducer never applies a failed write, so sel.get() would keep
+  // returning the stale pre-write value forever for THIS key, while the
+  // fallback write landed in memoryStore/localStorage instead — but every
+  // OTHER key the store already holds is untouched by that failure and
+  // must keep reading from the store, or a single bad write would wrongly
+  // orphan everything else already saved there this session.
+  var brokenPrefKeys = Object.create(null);
+
+  function readKey(key) {
+    if (!brokenPrefKeys[key]) {
+      var sel = prefsSelect();
+      if (sel) {
+        var value = sel.get(PREFS_SCOPE, key);
+        return value === undefined || value === null ? null : String(value);
+      }
+    }
+    return readLocalKey(key);
+  }
+
+  function writeKey(key, value) {
+    if (!brokenPrefKeys[key]) {
+      var disp = prefsDispatch();
+      if (disp) {
+        try {
+          disp.set(PREFS_SCOPE, key, value);
+          return;
+        } catch (e) {
+          // Core's persistence layer writes its localStorage cache
+          // SYNCHRONOUSLY inside the reducer, BEFORE the reducer returns
+          // the next state — a browser whose Storage throws (quota hit,
+          // private mode) surfaces that throw here, and it aborts the
+          // whole dispatch: the in-session redux value never updates
+          // either, so a swallow-and-return here would silently drop
+          // the write. Once THIS key has proven unreliable, stop
+          // trusting the store for it (reads included, above) and fall
+          // through to the same local fallback a missing store uses.
+          brokenPrefKeys[key] = true;
+        }
+      }
+    }
+    writeLocalKey(key, value);
+  }
+
+  /**
+   * Lift this browser's localStorage state into the account preferences,
+   * run at boot (and re-run by the boot-race guard below if the
+   * persistence layer's attach lands after boot() and wipes what boot()
+   * just wrote).
+   *
+   * No global stamp gates this — a per-key check is the whole gate:
+   * `sel.get(PREFS_SCOPE, key) !== undefined` skips any key the account
+   * already has, so once any browser has established a key, another
+   * browser's stale localStorage never overwrites it. Re-running this on
+   * every boot is deliberate, not just tolerated: a global stamp here
+   * previously let the FIRST browser to boot (even one with nothing to
+   * migrate) block every later browser's real local state from ever
+   * being lifted. The per-key check alone is idempotent and cheap enough
+   * to run unconditionally.
+   */
+  function migrateLocalToPrefs() {
+    var sel = prefsSelect();
+    if (!sel || !prefsDispatch()) {
+      return;
+    }
+    // writeKey, not a raw dispatch: it owns the throwing-Storage guard.
+    [POSITION_KEY, SLOTS_KEY, CONFIGS_KEY, MIGRATED_KEY].forEach(function (key) {
+      if (sel.get(PREFS_SCOPE, key) !== undefined) {
+        return;
+      }
+      var local = readLocalKey(key);
+      if (local !== null) {
+        writeKey(key, local);
+      }
+    });
+  }
+
+  // -------------------------------------------------------------------
+  // Rail position — docked to an edge, or floating like a Photoshop
+  // palette. A per-user account preference, same as the quick slots.
+  //
+  // The docks hang off the editor's OWN skeleton rather than being
+  // absolutely positioned over it, so the canvas reflows around the rail
+  // instead of being overlapped. Verified against core's InterfaceSkeleton
+  // render and the shipped editor stylesheet:
+  //
+  //   .interface-interface-skeleton__editor   flex COLUMN: header, __body
+  //   .interface-interface-skeleton__body     flex ROW, position:relative:
+  //                                           secondary sidebar, content,
+  //                                           settings sidebar, actions
+  //
+  //   left   → first child of __body   (before the canvas — the default)
+  //   right  → last child of __body    (after the settings sidebar)
+  //   top    → in __editor before __body  (full-width bar under the header)
+  //   bottom → last child of __editor     (full-width bar under the canvas)
+  //   float  → last child of __body, absolutely positioned — __body is
+  //            already position:relative in core, so no editor CSS is
+  //            touched and the palette cannot be dragged off into the
+  //            admin chrome.
+  // -------------------------------------------------------------------
+
+  var DOCKS = ['left', 'right', 'top', 'bottom', 'float'];
+  var DEFAULT_DOCK = 'left';
+  var SNAP_THRESHOLD = 72;
+  var RAIL_BAND = 52;
+
+  var DOCK_LABELS = {
+    left: __('Left edge', 'toolrail'),
+    right: __('Right edge, past the side panel', 'toolrail'),
+    top: __('Top, panels open downward', 'toolrail'),
+    bottom: __('Bottom, panels open upward', 'toolrail'),
+    float: __('Floating', 'toolrail')
+  };
+
+  function loadPosition() {
+    var pos = { dock: DEFAULT_DOCK, x: 24, y: 24 };
+    try {
+      var raw = readKey(POSITION_KEY);
+      var parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === 'object') {
+        if (DOCKS.indexOf(parsed.dock) !== -1) {
+          pos.dock = parsed.dock;
+        }
+        if (typeof parsed.x === 'number' && isFinite(parsed.x)) {
+          pos.x = parsed.x;
+        }
+        if (typeof parsed.y === 'number' && isFinite(parsed.y)) {
+          pos.y = parsed.y;
+        }
+      }
+    } catch (e) {
+      /* Private windows etc. — the default dock is correct. */
+    }
+    return pos;
+  }
+
+  // Defaults until boot() re-loads from storage — reads must wait for the
+  // editor to attach the preferences persistence layer, and nothing
+  // consumes `position` before mount anyway.
+  var position = { dock: DEFAULT_DOCK, x: 24, y: 24 };
+
+  function savePosition() {
+    writeKey(POSITION_KEY, JSON.stringify(position));
+  }
+
+  /** Top and bottom docks lay the rail out as a horizontal bar. */
+  function isVertical() {
+    return position.dock !== 'top' && position.dock !== 'bottom';
+  }
+
+  function skeletonBody() {
+    return document.querySelector('.interface-interface-skeleton__body');
+  }
+
+  function skeletonEditor() {
+    return document.querySelector('.interface-interface-skeleton__editor');
+  }
+
+  /**
+   * Where the region belongs for the current dock, as a parent plus the
+   * node to insert before (null = append). Returns null when the editor
+   * chrome for that dock is not on the page yet — mount() then retries.
+   */
+  function dockPlacement() {
+    var body = skeletonBody();
+    var editor = skeletonEditor();
+    switch (position.dock) {
+      case 'right':
+      case 'float':
+        return body ? { parent: body, before: null } : null;
+      case 'top':
+        return editor && body && body.parentNode === editor
+          ? { parent: editor, before: body }
+          : null;
+      case 'bottom':
+        return editor ? { parent: editor, before: null } : null;
+      default:
+        return body ? { parent: body, before: body.firstChild } : null;
+    }
+  }
+
+  function isPlacedCorrectly(region, place) {
+    if (region.parentNode !== place.parent) {
+      return false;
+    }
+    // A left dock's `before` resolves to the region itself once it is the
+    // first child — that is the placed state, not a move.
+    return place.before === region || region.nextSibling === place.before;
+  }
 
   // -------------------------------------------------------------------
   // Icons — inline SVG, currentColor, theme-agnostic (no dashicons dep).
@@ -56,6 +353,25 @@
     pin: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zm0 2.3L6 8.7v6.6l6 3.4 6-3.4V8.7l-6-3.4zM12 8l3.5 2v4L12 16l-3.5-2v-4L12 8z"/></svg>',
     gear: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 9a3 3 0 110 6 3 3 0 010-6zm-1.7-6h3.4l.5 2.4c.6.2 1.1.5 1.6.9l2.3-.8 1.7 3-1.8 1.6a6.7 6.7 0 010 1.8l1.8 1.6-1.7 3-2.3-.8c-.5.4-1 .7-1.6.9l-.5 2.4h-3.4l-.5-2.4a6.6 6.6 0 01-1.6-.9l-2.3.8-1.7-3 1.8-1.6a6.7 6.7 0 010-1.8L4.2 8.5l1.7-3 2.3.8c.5-.4 1-.7 1.6-.9L10.3 3z"/></svg>'
   };
+
+  // Every React root created for a pinned-block icon, so the previous
+  // generation can be unmounted. A discarded root keeps its fiber tree
+  // alive, and the rail rebuilds on every slot change (the ↑/↓ buttons in
+  // the settings dialog rebuild it per click) — so these accumulate fast
+  // unless they are disposed. buildRail() is the ONLY producer and always
+  // creates a complete new set, which makes it the correct disposal point.
+  var iconRoots = [];
+
+  function disposeIconRoots() {
+    iconRoots.forEach(function (root) {
+      try {
+        root.unmount();
+      } catch (e) {
+        /* Already gone with its container — nothing to release. */
+      }
+    });
+    iconRoots = [];
+  }
 
   /**
    * Paint a block type's icon into a span. Block icons come in three
@@ -73,7 +389,9 @@
     if (src && wp.element && wp.element.createRoot) {
       try {
         var node = typeof src === 'function' ? wp.element.createElement(src) : src;
-        wp.element.createRoot(span).render(node);
+        var root = wp.element.createRoot(span);
+        root.render(node);
+        iconRoots.push(root);
         return;
       } catch (e) {
         /* Fall through to the generic glyph. */
@@ -145,33 +463,16 @@
   // renders a flyout. Registered tools are merged in by railModel().
   // -------------------------------------------------------------------
 
+  // Text, Heading and Image are NOT built-ins — they ship as DEFAULT_SLOTS
+  // (see loadSlots), so authors can reorder, remove and re-pin them like
+  // any other block. Built-ins are only the tools no block type expresses:
+  // Select, the Shape flyout, and Section.
   var BUILTIN_TOOLS = [
     {
       id: 'select',
       label: __('Select', 'toolrail'),
       icon: ICONS.select,
       select: true
-    },
-    {
-      id: 'text',
-      label: __('Text', 'toolrail'),
-      hint: __('click in the canvas to insert a paragraph; Shift-click keeps the tool active', 'toolrail'),
-      icon: ICONS.text,
-      insertBlock: 'core/paragraph'
-    },
-    {
-      id: 'heading',
-      label: __('Heading', 'toolrail'),
-      hint: __('click in the canvas to insert a heading; Shift-click keeps the tool active', 'toolrail'),
-      icon: ICONS.heading,
-      insertBlock: 'core/heading'
-    },
-    {
-      id: 'image',
-      label: __('Image', 'toolrail'),
-      hint: __('click in the canvas to insert an image placeholder with its media library controls', 'toolrail'),
-      icon: ICONS.image,
-      insertBlock: 'core/image'
     },
     {
       id: 'shape',
@@ -203,6 +504,22 @@
     }
   }
 
+  // Tool ids are interpolated into [data-tool="…"] selectors all over the
+  // rail, so the public contract restricts them to characters that are
+  // unambiguous there. The set allows ':' and '/' because the internal
+  // pinned-slot ids are 'pin:' + a block name ('pin:core/paragraph').
+  var TOOL_ID_PATTERN = /^[A-Za-z0-9_:./-]+$/;
+
+  /**
+   * Quote a value for use inside an attribute selector. Belt to
+   * TOOL_ID_PATTERN's braces: validation guards the documented entry
+   * point, this guards every lookup, so an id arriving by some other
+   * route can still never turn a DOM sweep into a SyntaxError.
+   */
+  function toolSelector(id) {
+    return '[data-tool="' + String(id).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]';
+  }
+
   function allToolIds() {
     var ids = [];
     BUILTIN_TOOLS.forEach(function (t) {
@@ -224,6 +541,10 @@
     }
     if (typeof descriptor.id !== 'string' || descriptor.id === '') {
       warn('registerTool: a non-empty string id is required.');
+      return false;
+    }
+    if (!TOOL_ID_PATTERN.test(descriptor.id)) {
+      warn('registerTool: id "' + descriptor.id + '" has characters outside [A-Za-z0-9_:./-] — ignored.');
       return false;
     }
     if (allToolIds().indexOf(descriptor.id) !== -1) {
@@ -254,22 +575,122 @@
     return true;
   }
 
-  function loadSlots() {
+  /**
+   * The out-of-the-box quick slots. Text, Heading and Image are ORDINARY
+   * pinned blocks (owner decision 2026-08-26) — reorderable, removable,
+   * and saved-set–able like anything the author pins.
+   *
+   * These seed exactly once, from migrateSlots(), and never again: an
+   * author who removes all three stays at an empty rail rather than
+   * having them resurrected on the next load.
+   */
+  var DEFAULT_SLOTS = ['core/paragraph', 'core/heading', 'core/image'];
+
+  /**
+   * The single gate for what may sit in the slot list: strings only, no
+   * duplicates, order preserved.
+   *
+   * Deduping lives HERE rather than in each caller because a duplicate is
+   * not merely untidy — two slots share one `data-tool="pin:<name>"` id,
+   * so syncPressed's querySelector paints only the first, unpinning one
+   * removes only one, and the settings dialog's `[data-block=…]` focus
+   * restore matches both. pinBlock guarded against it; import and
+   * loadConfig did not, which is how a hand-edited or hand-written set
+   * file could put the rail into that state.
+   *
+   * @param {*} list Candidate slot list, from storage or a set file.
+   * @return {string[]} Clean list, safe to render and store.
+   */
+  function normalizeSlots(list) {
+    if (!Array.isArray(list)) {
+      return [];
+    }
+    var seen = Object.create(null);
+    return list.filter(function (name) {
+      if (typeof name !== 'string' || name === '' || name in seen) {
+        return false;
+      }
+      seen[name] = true;
+      return true;
+    });
+  }
+
+  /**
+   * One-time upgrade to the pinned-slot model, run once per browser.
+   *
+   * Text, Heading and Image used to be BUILT-IN rail tools; they are now
+   * ordinary pinned slots seeded from DEFAULT_SLOTS. Seeding on "the slot
+   * key has never been written" alone silently deleted all three for
+   * every existing author, because pinning even one block (or loading a
+   * saved set) had already written that key under the old build.
+   *
+   * So a separate STAMP decides, not the presence of the slot list:
+   *
+   *   no stamp + no slot key      → fresh install, seed the defaults
+   *   no stamp + a non-empty list → existing author, restore the three
+   *                                 ahead of their own pins
+   *   no stamp + an EMPTY list    → treated as an absence, not a
+   *                                 decision — restore the three (see
+   *                                 the comment below on why)
+   *   stamp                       → nothing to do, ever again
+   *
+   * @return {void}
+   */
+  function migrateSlots() {
+    if (null !== readKey(MIGRATED_KEY)) {
+      return;
+    }
+    var raw = readKey(SLOTS_KEY);
+    if (null === raw) {
+      writeKey(SLOTS_KEY, JSON.stringify(DEFAULT_SLOTS));
+      writeKey(MIGRATED_KEY, '1');
+      return;
+    }
+    var existing;
     try {
-      var raw = window.localStorage.getItem(SLOTS_KEY);
-      var parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed.filter(function (n) { return typeof n === 'string'; }) : [];
+      existing = normalizeSlots(JSON.parse(raw));
     } catch (e) {
+      existing = [];
+    }
+
+    // A PRE-STAMP empty list is treated as an absence, not a decision
+    // (owner decision 2026-08-26, reversing the earlier accepted-cost
+    // call): under the old builds Text/Heading/Image were built-in tools,
+    // so "[]" back then never meant "I chose an empty rail" — it usually
+    // meant a test drive of unpinning whatever HAD been pinned. The
+    // plugin has not shipped, so nobody's real preference predates the
+    // stamp. POST-stamp emptiness is a decision and sticks (loadSlots
+    // never re-seeds; readme.txt promises removing the defaults sticks).
+    var restored = DEFAULT_SLOTS.filter(function (name) {
+      return existing.indexOf(name) === -1;
+    }).concat(existing);
+    writeKey(SLOTS_KEY, JSON.stringify(restored));
+    writeKey(MIGRATED_KEY, '1');
+  }
+
+  // migrateSlots() runs from boot(), after migrateLocalToPrefs() — and
+  // may run again from watchPersistenceAttach() if the persistence
+  // layer's own attach lands late and wipes this pass.
+
+  function loadSlots() {
+    var raw = readKey(SLOTS_KEY);
+    if (null === raw) {
+      // Post-migration this means the author emptied the rail, which is a
+      // legitimate state — never re-seed the defaults here.
+      return [];
+    }
+    try {
+      return normalizeSlots(JSON.parse(raw));
+    } catch (e) {
+      // Corrupt JSON. An empty rail is recoverable (the settings dialog
+      // still pins); replaying DEFAULT_SLOTS would fight the author on
+      // every read without ever sticking.
       return [];
     }
   }
 
   function saveSlots(slots) {
-    try {
-      window.localStorage.setItem(SLOTS_KEY, JSON.stringify(slots));
-    } catch (e) {
-      /* Private windows etc. — pinning just won't persist. */
-    }
+    writeKey(SLOTS_KEY, JSON.stringify(normalizeSlots(slots)));
   }
 
   function isPinned(blockName) {
@@ -320,24 +741,33 @@
     return true;
   }
 
-  // Named quick-slot configurations — a per-user browser preference like
-  // the slots themselves ({name: [blockNames]} in localStorage).
+  // Named quick-slot configurations — a per-user account preference like
+  // the slots themselves ({name: [blockNames]}).
+  //
+  // The map is deliberately PROTOTYPE-LESS. A set named '__proto__' on a
+  // plain object hits Object.prototype's inherited setter: the write is
+  // swallowed, nothing is stored, and saveConfig still reports success.
+  // With a null prototype every name is an ordinary data property.
   function loadConfigs() {
+    var out = Object.create(null);
     try {
-      var raw = window.localStorage.getItem(CONFIGS_KEY);
-      var parsed = raw ? JSON.parse(raw) : {};
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      var raw = readKey(CONFIGS_KEY);
+      var parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        Object.keys(parsed).forEach(function (key) {
+          if (Array.isArray(parsed[key])) {
+            out[key] = parsed[key];
+          }
+        });
+      }
     } catch (e) {
-      return {};
+      /* Unparseable or unavailable storage — an empty map is correct. */
     }
+    return out;
   }
 
   function persistConfigs(map) {
-    try {
-      window.localStorage.setItem(CONFIGS_KEY, JSON.stringify(map));
-    } catch (e) {
-      /* Private windows etc. */
-    }
+    writeKey(CONFIGS_KEY, JSON.stringify(map));
   }
 
   function saveConfig(name) {
@@ -355,7 +785,9 @@
     if (!Object.prototype.hasOwnProperty.call(map, name) || !Array.isArray(map[name])) {
       return false;
     }
-    saveSlots(map[name].filter(function (n) { return typeof n === 'string'; }));
+    // saveSlots normalizes: a set stored by an older build, hand-edited,
+    // or imported from a file can carry duplicates and non-strings.
+    saveSlots(map[name]);
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
     rerender();
     return true;
@@ -385,15 +817,45 @@
         id: 'pin:' + name,
         label: sprintf(
           /* translators: %s: block title. */
-          __('%s (pinned) — click in the canvas to insert; Delete unpins', 'toolrail'),
+          __('%s (pinned block)', 'toolrail'),
           type.title || name
         ),
+        hint: __('click in the canvas to insert; manage pinned blocks in Toolbar settings', 'toolrail'),
         icon: '',
         blockIcon: type.icon,
         insertBlock: name,
-        pinnedBlock: name
+        pinnedBlock: name,
+        children: []
       };
     }).filter(Boolean);
+  }
+
+  /**
+   * Where a registered tool's `parent` may land besides a built-in id.
+   * 'text'/'heading'/'image' were top-level built-ins before those became
+   * default slots (2026-08-26); the aliases keep every published
+   * integration (the Typography Stylist handoff uses parent: 'text')
+   * working against the slot that replaced them. Block names and full
+   * slot ids are accepted too, so a provider can nest under ANY pinned
+   * block: parent: 'core/paragraph' or parent: 'pin:core/paragraph'.
+   */
+  var PARENT_SLOT_ALIASES = {
+    text: 'core/paragraph',
+    heading: 'core/heading',
+    image: 'core/image'
+  };
+
+  function slotForParent(slots, parent) {
+    var wanted = Object.prototype.hasOwnProperty.call(PARENT_SLOT_ALIASES, parent)
+      ? PARENT_SLOT_ALIASES[parent]
+      : parent;
+    var found = null;
+    slots.forEach(function (slot) {
+      if (slot.pinnedBlock === wanted || slot.id === wanted) {
+        found = slot;
+      }
+    });
+    return found;
   }
 
   /**
@@ -418,6 +880,8 @@
       };
     });
 
+    var slots = slotTools();
+
     registered.forEach(function (t) {
       if (t.parent) {
         var host = null;
@@ -426,6 +890,11 @@
             host = candidate;
           }
         });
+        // Slots host children too — by alias ('text'), block name
+        // ('core/paragraph') or slot id ('pin:core/paragraph').
+        if (!host) {
+          host = slotForParent(slots, t.parent);
+        }
         if (host) {
           host.children.push(t);
           return;
@@ -446,7 +915,7 @@
       });
     });
 
-    return { tools: topLevel, slots: slotTools() };
+    return { tools: topLevel, slots: slots };
   }
 
   function findTool(id) {
@@ -501,6 +970,41 @@
    * inserts after; empty canvas space appends at the end of the document.
    * (Flow-document position — x/y freeform layout is a later phase.)
    */
+  /**
+   * clientIds present at pointerdown, before core has reacted to the
+   * gesture at all. handleCanvasClick uses this to tell the block core
+   * appended during THIS click from one the author already had.
+   *
+   * @type {Object|null}
+   */
+  var preGestureIds = null;
+
+  /**
+   * Bumped on every canvas gesture. sweepStrayDefaultBlock captures it and
+   * its delayed passes bail once it moves, so a sweep can only ever act on
+   * the gesture that scheduled it.
+   *
+   * @type {number}
+   */
+  var gestureGeneration = 0;
+
+  function handleCanvasPointerdown() {
+    // Bump FIRST and unconditionally: a gesture with Select active still
+    // has to invalidate a pending sweep from the previous armed click,
+    // because core's append is the author's intent under Select.
+    gestureGeneration++;
+
+    if (activeTool === 'select') {
+      preGestureIds = null;
+      return;
+    }
+    var ids = Object.create(null);
+    wp.data.select('core/block-editor').getBlocks().forEach(function (b) {
+      ids[b.clientId] = true;
+    });
+    preGestureIds = ids;
+  }
+
   function handleCanvasClick(e) {
     if (activeTool === 'select') {
       return;
@@ -536,11 +1040,109 @@
       }
     }
 
+    // preGestureIds is captured at POINTERDOWN, not here. Core has
+    // already appended its default block by the time this click handler
+    // runs (measured: count 1 at pointerdown, 3 by the time a listener
+    // registered after ours sees the click), so a snapshot taken here
+    // would include the stray and the sweep would never match it.
+    var knownIds = preGestureIds || (function () {
+      var ids = Object.create(null);
+      sel.getBlocks().forEach(function (b) { ids[b.clientId] = true; });
+      return ids;
+    }());
+    preGestureIds = null;
+
     dispatch.insertBlocks(block, index, rootClientId);
+    sweepStrayDefaultBlock(knownIds, block.clientId);
 
     if (!e.shiftKey) {
       setActiveTool('select');
     }
+  }
+
+  /**
+   * Drop the empty default block core appends on a canvas click.
+   *
+   * Clicking the empty space below the content is core's "start a new
+   * paragraph here" gesture, and it fires whatever the rail is doing —
+   * preventDefault() and stopPropagation() on this click do NOT suppress
+   * it (measured: with Heading armed on a one-paragraph document, one
+   * click yields paragraph, EMPTY PARAGRAPH, heading; the same click with
+   * Select armed yields paragraph, empty paragraph, which is core's own
+   * behaviour and correct there). So every insert made by clicking empty
+   * space left a stray empty paragraph above the block the author asked
+   * for.
+   *
+   * Rather than race core for the event, let it run and reclaim the block
+   * afterwards. The sweep is scoped as tightly as it can be: a block has
+   * to have appeared during THIS click, not be the one the tool inserted,
+   * be the site's default block type, and still be unmodified. Anything
+   * pre-existing, and anything the author has typed into, is out of
+   * scope.
+   *
+   * Two passes because core's append can land either synchronously in the
+   * same event or on the next React flush; the second pass is a no-op
+   * whenever the first already caught it.
+   *
+   * @param {Object} knownIds   clientIds present before the insert.
+   * @param {string} insertedId clientId of the tool's own block.
+   * @return {void}
+   */
+  function sweepStrayDefaultBlock(knownIds, insertedId) {
+    // Only the CURRENT gesture may sweep. Both passes below are scheduled
+    // against one click's knownIds, and that snapshot goes stale the
+    // moment another canvas gesture starts — at which point a delayed
+    // pass would be judging blocks it has no business judging:
+    //
+    //   shift-click to repeat  a second insert 40ms later is absent from
+    //                          this call's knownIds, so an unmodified
+    //                          default paragraph the author just asked
+    //                          for looked exactly like a stray
+    //   switch to Select       core's append is then the author's INTENT,
+    //                          and a pending pass would delete it
+    //
+    // handleCanvasPointerdown bumps the generation on every canvas
+    // gesture, armed or not, so both stale passes simply bail.
+    var generation = gestureGeneration;
+
+    var run = function () {
+      if (generation !== gestureGeneration) {
+        return;
+      }
+      var sel = wp.data.select('core/block-editor');
+      if (!sel
+        || typeof wp.blocks.getDefaultBlockName !== 'function'
+        || typeof wp.blocks.isUnmodifiedDefaultBlock !== 'function') {
+        return;
+      }
+      var defaultName = wp.blocks.getDefaultBlockName();
+      if (!defaultName) {
+        return;
+      }
+      var strays = sel.getBlocks().filter(function (b) {
+        return b.clientId !== insertedId
+          && !knownIds[b.clientId]
+          && b.name === defaultName
+          && wp.blocks.isUnmodifiedDefaultBlock(b);
+      }).map(function (b) { return b.clientId; });
+
+      if (!strays.length) {
+        return;
+      }
+      // selectPrevious=false: removing the stray must not move the caret
+      // off the block the tool just inserted.
+      wp.data.dispatch('core/block-editor').removeBlocks(strays, false);
+      if (sel.getBlock(insertedId)) {
+        wp.data.dispatch('core/block-editor').selectBlock(insertedId);
+      }
+    };
+    // The t=0 pass is the one that does the work in practice (measured:
+    // core has already appended by the time our click handler runs). The
+    // 80ms pass is a backstop for a slower machine where React batches the
+    // append into a later flush; the generation guard is what makes
+    // keeping it safe.
+    window.setTimeout(run, 0);
+    window.setTimeout(run, 80);
   }
 
   function handleCanvasKeydown(e) {
@@ -577,6 +1179,7 @@
       return;
     }
     boundDoc = doc;
+    doc.addEventListener('pointerdown', handleCanvasPointerdown, true);
     doc.addEventListener('click', handleCanvasClick, true);
     doc.addEventListener('keydown', handleCanvasKeydown, true);
 
@@ -611,8 +1214,11 @@
     var parentBtn = openFlyout.parentBtn;
     openFlyout.node.remove();
     document.removeEventListener('mousedown', onDocMousedown, true);
+    document.removeEventListener('keydown', onFlyoutKeydown, true);
+    document.removeEventListener('focusin', onFlyoutFocusin, true);
     parentBtn.setAttribute('aria-expanded', 'false');
     openFlyout = null;
+    syncLayer();
     if (refocusParent) {
       parentBtn.focus();
     }
@@ -622,6 +1228,30 @@
     if (openFlyout && !openFlyout.node.contains(e.target) && e.target !== openFlyout.parentBtn) {
       closeFlyout(false);
     }
+  }
+
+  // Same contract as the settings dialog, for the same reason: menu items
+  // are tabIndex -1, so one Tab walked out of the flyout and left it open
+  // with the parent still reporting aria-expanded="true" — and Escape,
+  // bound to the menu node, could no longer reach it. Both listeners sit
+  // on the document for as long as the flyout is open.
+  function onFlyoutKeydown(e) {
+    if (e.key !== 'Escape' || !openFlyout) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    closeFlyout(true);
+  }
+
+  function onFlyoutFocusin(e) {
+    if (!openFlyout) {
+      return;
+    }
+    if (openFlyout.node.contains(e.target) || e.target === openFlyout.parentBtn) {
+      return;
+    }
+    closeFlyout(false);
   }
 
   function activateChild(child) {
@@ -636,6 +1266,56 @@
       return;
     }
     setActiveTool(child.id);
+  }
+
+  /**
+   * Place a floating surface (a flyout, or the settings dialog) beside the
+   * rail, opening AWAY from the docked edge: to the right of a left rail,
+   * to the left of a right rail, DOWN from a top rail, UP from a bottom
+   * one. The surface must already be in the DOM — the overflow clamp
+   * measures it.
+   *
+   * @param {HTMLElement} node    The surface.
+   * @param {HTMLElement} anchor  Button to align with (falls back to the rail).
+   * @param {HTMLElement} wrapper The positioned region the surface lives in.
+   */
+  function placeSurface(node, anchor, wrapper) {
+    var wrapperRect = wrapper.getBoundingClientRect();
+    var anchorRect = anchor ? anchor.getBoundingClientRect() : wrapperRect;
+
+    node.style.top = '';
+    node.style.right = '';
+    node.style.bottom = '';
+    node.style.left = '';
+
+    if (position.dock === 'top') {
+      node.style.top = 'calc(100% + 4px)';
+      node.style.left = Math.max(0, anchorRect.left - wrapperRect.left) + 'px';
+    } else if (position.dock === 'bottom') {
+      node.style.bottom = 'calc(100% + 4px)';
+      node.style.left = Math.max(0, anchorRect.left - wrapperRect.left) + 'px';
+    } else if (position.dock === 'right') {
+      node.style.right = 'calc(100% + 4px)';
+      node.style.top = Math.max(0, anchorRect.top - wrapperRect.top) + 'px';
+    } else {
+      node.style.left = 'calc(100% + 4px)';
+      node.style.top = Math.max(0, anchorRect.top - wrapperRect.top) + 'px';
+    }
+
+    // Pull back anything that would run off the viewport. Horizontal docks
+    // clamp sideways, vertical docks clamp downward.
+    var rect = node.getBoundingClientRect();
+    if (isVertical()) {
+      var overshootY = rect.bottom - window.innerHeight + 8;
+      if (overshootY > 0 && node.style.top) {
+        node.style.top = Math.max(0, parseFloat(node.style.top) - overshootY) + 'px';
+      }
+    } else {
+      var overshootX = rect.right - window.innerWidth + 8;
+      if (overshootX > 0) {
+        node.style.left = Math.max(0, parseFloat(node.style.left) - overshootX) + 'px';
+      }
+    }
   }
 
   function openFlyoutFor(btn, tool, wrapper) {
@@ -674,12 +1354,6 @@
     menu.addEventListener('keydown', function (e) {
       var items = Array.prototype.slice.call(menu.querySelectorAll('.toolrail-flyout-item'));
       var idx = items.indexOf(document.activeElement);
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        closeFlyout(true);
-        return;
-      }
       if (['ArrowDown', 'ArrowUp', 'Home', 'End'].indexOf(e.key) === -1) {
         return;
       }
@@ -690,14 +1364,14 @@
       items[next].focus();
     });
 
-    var wrapperRect = wrapper.getBoundingClientRect();
-    var btnRect = btn.getBoundingClientRect();
-    menu.style.top = Math.max(0, btnRect.top - wrapperRect.top) + 'px';
-
     wrapper.appendChild(menu);
+    placeSurface(menu, btn, wrapper);
     btn.setAttribute('aria-expanded', 'true');
     openFlyout = { node: menu, parentBtn: btn };
+    syncLayer();
     document.addEventListener('mousedown', onDocMousedown, true);
+    document.addEventListener('keydown', onFlyoutKeydown, true);
+    document.addEventListener('focusin', onFlyoutFocusin, true);
 
     var first = menu.querySelector('.toolrail-flyout-item');
     if (first) {
@@ -708,7 +1382,7 @@
   // -------------------------------------------------------------------
   // Toolbar settings dialog — choose which blocks show as quick slots,
   // reorder them, and save/load named sets. All of it is a per-user
-  // browser preference (localStorage), never site or post data.
+  // account preference, never site-wide settings or post data.
   // -------------------------------------------------------------------
 
   var settingsOpen = false;
@@ -745,7 +1419,14 @@
       node.remove();
     }
     settingsOpen = false;
+    syncLayer();
+    // Drop any message that never got rendered — closing the dialog
+    // before an in-flight file read resolves used to strand it here, and
+    // it then surfaced out of context the NEXT time settings was opened.
+    settingsStatus = '';
     document.removeEventListener('mousedown', onSettingsMousedown, true);
+    document.removeEventListener('keydown', onSettingsKeydown, true);
+    document.removeEventListener('focusin', onSettingsFocusin, true);
     window.removeEventListener('toolrail:tools-updated', onToolsUpdatedWhileOpen);
     var gear = gearButton();
     if (gear) {
@@ -762,6 +1443,42 @@
     if (node && !node.contains(e.target) && e.target !== gear && !(gear && gear.contains(e.target))) {
       closeSettings(false);
     }
+  }
+
+  // The dialog is a POPOVER, not a modal: the editor behind it stays
+  // usable, so it gets no focus trap and no aria-modal. What it does need
+  // is for the keyboard and the pointer to agree. An outside click always
+  // dismissed it; leaving by Tab now dismisses it too.
+  //
+  // The bug this closes: Escape was bound to the dialog NODE, so one Tab
+  // put focus in the editor canvas and the dialog was left open, still
+  // claiming aria-expanded="true", with no keyboard route back to close
+  // it. Both listeners now sit on the document for the dialog's lifetime.
+  var refreshingSettings = false;
+
+  function onSettingsKeydown(e) {
+    if (e.key !== 'Escape' || !settingsOpen) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    closeSettings(true);
+  }
+
+  function onSettingsFocusin(e) {
+    // refreshSettings empties and rebuilds the body; the focus churn in
+    // between is ours, not the author leaving.
+    if (!settingsOpen || refreshingSettings) {
+      return;
+    }
+    var node = settingsNode();
+    var gear = gearButton();
+    if (!node || node.contains(e.target) || e.target === gear || (gear && gear.contains(e.target))) {
+      return;
+    }
+    // Focus has genuinely moved on. Close, but do NOT pull it back — the
+    // author is going somewhere on purpose.
+    closeSettings(false);
   }
 
   function settingsRow(tag, className) {
@@ -781,21 +1498,242 @@
     return btn;
   }
 
-  /** Rebuild the dialog's content; focusSelector restores focus after. */
-  function refreshSettings(focusSelector) {
+  /** A rebuilt control is only a usable focus target if it still exists,
+      is enabled and is actually rendered. Restoring focus to a button that
+      the rebuild just disabled (moving a slot to either end disables the
+      arrow you clicked) silently leaves focus outside the dialog. */
+  function focusableIn(node, selector) {
+    if (!selector) {
+      return null;
+    }
+    var el = node.querySelector(selector);
+    if (!el || el.disabled || el.hidden) {
+      return null;
+    }
+    return el.offsetParent === null && el !== document.body ? null : el;
+  }
+
+  /**
+   * Rebuild the dialog's content, preserving both text fields, and hand
+   * focus to the first candidate in `focusSelectors` that survives the
+   * rebuild in a focusable state (search field as the last resort).
+   *
+   * @param {string|string[]} focusSelectors Ordered focus candidates.
+   */
+  function refreshSettings(focusSelectors) {
     var node = settingsNode();
     if (!node) {
       return;
     }
-    var searchValue = '';
-    var existingSearch = node.querySelector('#toolrail-settings-search');
-    if (existingSearch) {
-      searchValue = existingSearch.value;
-    }
+
+    // Both fields carry unsaved typing: an update triggered elsewhere
+    // (pinning from the search results, a drag onto the rail) must not
+    // discard a half-typed set name.
+    var preserved = {};
+    ['#toolrail-settings-search', '#toolrail-settings-setname'].forEach(function (sel) {
+      var field = node.querySelector(sel);
+      if (field) {
+        preserved[sel] = field.value;
+      }
+    });
+
+    refreshingSettings = true;
     node.textContent = '';
-    buildSettingsContent(node, searchValue);
-    var target = focusSelector ? node.querySelector(focusSelector) : null;
-    (target || node.querySelector('#toolrail-settings-search')).focus();
+    buildSettingsContent(node, preserved['#toolrail-settings-search'] || '');
+
+    var setName = node.querySelector('#toolrail-settings-setname');
+    if (setName && preserved['#toolrail-settings-setname']) {
+      setName.value = preserved['#toolrail-settings-setname'];
+    }
+
+    var candidates = Array.isArray(focusSelectors) ? focusSelectors.slice() : [focusSelectors];
+    candidates.push('#toolrail-settings-search');
+    var target = null;
+    candidates.some(function (sel) {
+      target = focusableIn(node, sel);
+      return !!target;
+    });
+    if (target) {
+      target.focus();
+    }
+    refreshingSettings = false;
+  }
+
+  /**
+   * Position picker. Dragging the rail's grip is the pointer affordance;
+   * this radio group is the equivalent keyboard and screen-reader path,
+   * so repositioning never depends on a drag.
+   */
+  function buildPositionControl() {
+    var fieldset = document.createElement('fieldset');
+    fieldset.className = 'toolrail-settings-position';
+
+    var legend = document.createElement('legend');
+    legend.className = 'toolrail-settings-label';
+    legend.textContent = __('Toolbar position', 'toolrail');
+    fieldset.appendChild(legend);
+
+    DOCKS.forEach(function (dock) {
+      var row = settingsRow('label', 'toolrail-settings-positionrow');
+      var input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'toolrail-dock';
+      input.value = dock;
+      input.checked = position.dock === dock;
+      input.dataset.dock = dock;
+      input.addEventListener('change', function () {
+        if (!input.checked) {
+          return;
+        }
+        // The dock change rebuilds the region, so the dialog is reopened
+        // with focus back on the radio the author just chose. A refused
+        // dock leaves the radio showing a position the rail is not in, so
+        // repaint the dialog from the real state instead.
+        if (!setDock(dock, { reopenSettings: true })) {
+          refreshSettings('input[data-dock="' + position.dock + '"]');
+        }
+      });
+      row.appendChild(input);
+      var text = settingsRow('span', '');
+      text.textContent = DOCK_LABELS[dock];
+      row.appendChild(text);
+      fieldset.appendChild(row);
+    });
+
+    var hint = settingsRow('p', 'toolrail-settings-empty');
+    hint.textContent = __('You can also drag the toolbar by the grip at its end; releasing near an edge snaps it there.', 'toolrail');
+    fieldset.appendChild(hint);
+
+    return fieldset;
+  }
+
+  // -------------------------------------------------------------------
+  // Saved-set import/export. Sets travel as small JSON files so a set
+  // built on one site works on another — including a site whose theme or
+  // plugins don't register some of the blocks. Unavailable blocks are
+  // KEPT in the set and simply don't render until their provider is
+  // active (the same skip-not-delete rule the rail applies to slots).
+  // -------------------------------------------------------------------
+
+  /** WP block-name grammar: namespace/name, lowercase alnum + dashes. */
+  var BLOCK_NAME_PATTERN = /^[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*$/;
+
+  /**
+   * One transient outcome line, consumed by the next settings render: it
+   * is painted as visible text in the dialog and announced via speak().
+   * Cleared on close so it cannot surface out of context later.
+   */
+  var settingsStatus = '';
+
+  function missingBlockCount(blocks) {
+    return blocks.filter(function (name) {
+      return !wp.blocks.getBlockType(name);
+    }).length;
+  }
+
+  function exportConfig(name) {
+    var map = loadConfigs();
+    if (!Object.prototype.hasOwnProperty.call(map, name)) {
+      return false;
+    }
+    var payload = {
+      format: 'toolrail-set',
+      version: 1,
+      name: name,
+      blocks: map[name]
+    };
+    var slug = name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'set';
+    var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'toolrail-set-' + slug + '.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    return true;
+  }
+
+  /**
+   * Validate + store a parsed import. Returns a result object; never
+   * throws. Invalid block-name entries are dropped (they could not be
+   * looked up or rendered anyway); a name collision gets a " (2)" suffix
+   * rather than silently overwriting the author's existing set.
+   */
+  function importConfigPayload(parsed) {
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.blocks)) {
+      return { ok: false, error: __('Not a Toolrail set file — expected JSON with a "blocks" array.', 'toolrail') };
+    }
+    var valid = parsed.blocks.filter(function (n) {
+      return typeof n === 'string' && BLOCK_NAME_PATTERN.test(n);
+    });
+    var dropped = parsed.blocks.length - valid.length;
+    // A set file is hand-editable and hand-writable, so it can repeat a
+    // block name. Two slots sharing one `pin:<name>` tool id break the
+    // rail (see normalizeSlots), so collapse them here and report the
+    // collapse separately from genuinely invalid entries.
+    var blocks = normalizeSlots(valid);
+    var duplicates = valid.length - blocks.length;
+
+    var base = typeof parsed.name === 'string' && parsed.name.trim() !== ''
+      ? parsed.name.trim()
+      : __('Imported set', 'toolrail');
+    var map = loadConfigs();
+    var name = base;
+    var n = 2;
+    while (Object.prototype.hasOwnProperty.call(map, name)) {
+      name = base + ' (' + n + ')';
+      n++;
+    }
+
+    map[name] = blocks;
+    persistConfigs(map);
+
+    return {
+      ok: true,
+      name: name,
+      total: blocks.length,
+      missing: missingBlockCount(blocks),
+      dropped: dropped,
+      duplicates: duplicates
+    };
+  }
+
+  function importStatusMessage(result) {
+    var msg = sprintf(
+      /* translators: 1: set name, 2: block count. */
+      _n('Imported "%1$s" (%2$d block).', 'Imported "%1$s" (%2$d blocks).', result.total, 'toolrail'),
+      result.name,
+      result.total
+    );
+    if (result.missing > 0) {
+      msg += ' ' + sprintf(
+        /* translators: %d: count of blocks not registered on this site. */
+        _n(
+          '%d of them is not available on this site — it stays in the set and appears when its plugin or theme is active.',
+          '%d of them are not available on this site — they stay in the set and appear when their plugin or theme is active.',
+          result.missing,
+          'toolrail'
+        ),
+        result.missing
+      );
+    }
+    if (result.duplicates > 0) {
+      msg += ' ' + sprintf(
+        /* translators: %d: count of repeated block names collapsed to one. */
+        _n('%d repeated block was listed once.', '%d repeated blocks were listed once.', result.duplicates, 'toolrail'),
+        result.duplicates
+      );
+    }
+    if (result.dropped > 0) {
+      msg += ' ' + sprintf(
+        /* translators: %d: count of invalid entries. */
+        _n('%d invalid entry was ignored.', '%d invalid entries were ignored.', result.dropped, 'toolrail'),
+        result.dropped
+      );
+    }
+    return msg;
   }
 
   function buildSettingsContent(node, searchValue) {
@@ -810,8 +1748,10 @@
     node.appendChild(head);
 
     var note = settingsRow('p', 'toolrail-settings-note');
-    note.textContent = __('Pinned blocks appear on the toolbar as quick-insert tools. They are saved in this browser, for you only.', 'toolrail');
+    note.textContent = __('Pinned blocks appear on the toolbar as quick-insert tools. They are saved to your account on this site, for you only.', 'toolrail');
     node.appendChild(note);
+
+    node.appendChild(buildPositionControl());
 
     // --- Add a block ---
     var searchLabel = settingsRow('label', 'toolrail-settings-label');
@@ -893,9 +1833,14 @@
       label.textContent = type ? type.title : name + ' ' + __('(inactive)', 'toolrail');
       li.appendChild(label);
 
+      // Reaching either end disables the arrow that was just clicked, so
+      // each handler offers the opposite arrow on the same row as its
+      // second choice — focus stays on the row the author is moving.
+      var row = '.toolrail-settings-pinnedrow[data-block="' + name + '"] ';
+
       var up = settingsButton('↑', function () {
         if (moveSlot(name, -1)) {
-          refreshSettings('.toolrail-settings-pinnedrow[data-block="' + name + '"] .toolrail-settings-up');
+          refreshSettings([row + '.toolrail-settings-up', row + '.toolrail-settings-down']);
         }
       }, 'toolrail-settings-up');
       up.setAttribute('aria-label', sprintf(__('Move %s up', 'toolrail'), label.textContent));
@@ -904,14 +1849,19 @@
 
       var down = settingsButton('↓', function () {
         if (moveSlot(name, 1)) {
-          refreshSettings('.toolrail-settings-pinnedrow[data-block="' + name + '"] .toolrail-settings-down');
+          refreshSettings([row + '.toolrail-settings-down', row + '.toolrail-settings-up']);
         }
       }, 'toolrail-settings-down');
       down.setAttribute('aria-label', sprintf(__('Move %s down', 'toolrail'), label.textContent));
       down.disabled = i === slots.length - 1;
       li.appendChild(down);
 
-      var remove = settingsButton(__('Remove', 'toolrail'), function () {
+      // Visible text is "Unpin", not "Remove", so that it is contained in
+      // the accessible name "Unpin <block>" (WCAG 2.5.3 Label in Name).
+      // With "Remove" on screen and "Unpin Paragraph" as the name, a
+      // speech-input user saying "click Remove" matched nothing. It also
+      // matches the wording of the block menu's own Unpin item.
+      var remove = settingsButton(__('Unpin', 'toolrail'), function () {
         unpinBlock(name);
         refreshSettings('#toolrail-settings-search');
       }, 'toolrail-settings-remove');
@@ -929,6 +1879,23 @@
     var setsHead = settingsRow('h3', 'toolrail-settings-subtitle');
     setsHead.textContent = __('Saved sets', 'toolrail');
     node.appendChild(setsHead);
+
+    // Import/load outcomes land here in TEXT (never color/glyph alone).
+    //
+    // This node is NOT the live region. refreshSettings rebuilds the whole
+    // dialog body, so a role="status" here was destroyed and recreated on
+    // every render, and a live region that enters the DOM with its text
+    // already in it does not announce — the message was visual-only. The
+    // announcement goes through wp.a11y.speak() instead, which owns
+    // persistent regions that outlive any rebuild of ours.
+    var status = settingsRow('p', 'toolrail-settings-status');
+    status.id = 'toolrail-settings-status';
+    status.textContent = settingsStatus;
+    node.appendChild(status);
+    if (settingsStatus) {
+      speak(settingsStatus);
+    }
+    settingsStatus = '';
 
     var saveRow = settingsRow('div', 'toolrail-settings-saverow');
     var nameLabel = settingsRow('label', 'toolrail-settings-label');
@@ -961,10 +1928,38 @@
         li.appendChild(label);
         var load = settingsButton(__('Load', 'toolrail'), function () {
           loadConfig(cfg);
+          var missing = missingBlockCount(loadSlots());
+          if (missing > 0) {
+            settingsStatus = sprintf(
+              /* translators: 1: set name, 2: count of unavailable blocks. */
+              _n(
+                'Loaded "%1$s". %2$d pinned block is not available on this site and stays hidden until its plugin or theme is active.',
+                'Loaded "%1$s". %2$d pinned blocks are not available on this site and stay hidden until their plugin or theme is active.',
+                missing,
+                'toolrail'
+              ),
+              cfg,
+              missing
+            );
+          } else {
+            // Announce the ordinary success too. The rail rebuilding is a
+            // visual-only cue, so without this a screen-reader user got
+            // no confirmation that Load had done anything at all.
+            settingsStatus = sprintf(
+              /* translators: %s: set name. */
+              __('Loaded "%s".', 'toolrail'),
+              cfg
+            );
+          }
           refreshSettings('#toolrail-settings-search');
         }, 'toolrail-settings-load');
         load.setAttribute('aria-label', sprintf(__('Load the set %s', 'toolrail'), cfg));
         li.appendChild(load);
+        var exp = settingsButton(__('Export', 'toolrail'), function () {
+          exportConfig(cfg);
+        }, 'toolrail-settings-export');
+        exp.setAttribute('aria-label', sprintf(__('Export the set %s as a file', 'toolrail'), cfg));
+        li.appendChild(exp);
         var del = settingsButton(__('Delete', 'toolrail'), function () {
           deleteConfig(cfg);
           refreshSettings('#toolrail-settings-setname');
@@ -976,9 +1971,69 @@
       });
       node.appendChild(setList);
     }
+
+    // --- Import ---
+    var importLabel = settingsRow('label', 'toolrail-settings-label');
+    importLabel.setAttribute('for', 'toolrail-settings-import');
+    importLabel.textContent = __('Import a set file', 'toolrail');
+    node.appendChild(importLabel);
+
+    var importInput = document.createElement('input');
+    importInput.type = 'file';
+    importInput.id = 'toolrail-settings-import';
+    importInput.className = 'toolrail-settings-import';
+    importInput.accept = 'application/json,.json';
+    importInput.setAttribute('aria-describedby', 'toolrail-settings-status');
+    /**
+     * Deliver the outcome of a file read.
+     *
+     * Reading a file is async, so the dialog can be gone by the time the
+     * promise settles. Parking the message in `settingsStatus` regardless
+     * stranded it there — closeSettings had already run and cleared the
+     * slot, so the message survived to be rendered, out of context, the
+     * NEXT time settings was opened. When there is no dialog left to
+     * render into, speak the result and drop it.
+     *
+     * @param {string} message Outcome text.
+     * @return {void}
+     */
+    function reportImport(message) {
+      if (!settingsOpen || !settingsNode()) {
+        speak(message);
+        return;
+      }
+      settingsStatus = message;
+      refreshSettings('#toolrail-settings-import');
+    }
+
+    importInput.addEventListener('change', function () {
+      var file = importInput.files && importInput.files[0];
+      if (!file) {
+        return;
+      }
+      file.text().then(function (text) {
+        var result;
+        try {
+          result = importConfigPayload(JSON.parse(text));
+        } catch (e) {
+          result = { ok: false, error: __('That file is not valid JSON.', 'toolrail') };
+        }
+        reportImport(result.ok ? importStatusMessage(result) : result.error);
+      }).catch(function () {
+        reportImport(__('The file could not be read.', 'toolrail'));
+      });
+    });
+    node.appendChild(importInput);
   }
 
-  function openSettings(wrapper) {
+  /**
+   * @param {HTMLElement} wrapper       The region to hang the dialog in.
+   * @param {string}      focusSelector Optional initial focus target, used
+   *                                    when a dock change reopens the
+   *                                    dialog to keep focus on the control
+   *                                    that caused it.
+   */
+  function openSettings(wrapper, focusSelector) {
     if (settingsOpen) {
       closeSettings(true);
       return;
@@ -988,26 +2043,371 @@
     var node = settingsRow('div', 'toolrail-settings');
     node.setAttribute('role', 'dialog');
     node.setAttribute('aria-labelledby', 'toolrail-settings-title');
-    node.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        closeSettings(true);
-      }
-    });
 
     buildSettingsContent(node, '');
     wrapper.appendChild(node);
     settingsOpen = true;
+    syncLayer();
 
     var gear = gearButton();
     if (gear) {
       gear.setAttribute('aria-expanded', 'true');
     }
+    placeSurface(node, gear, wrapper);
     document.addEventListener('mousedown', onSettingsMousedown, true);
+    document.addEventListener('keydown', onSettingsKeydown, true);
+    document.addEventListener('focusin', onSettingsFocusin, true);
     window.addEventListener('toolrail:tools-updated', onToolsUpdatedWhileOpen);
+
+    if (focusSelector) {
+      var initial = focusableIn(node, focusSelector);
+      if (initial) {
+        initial.focus();
+        return;
+      }
+    }
     node.querySelector('#toolrail-settings-search').focus();
   }
+
+  // -------------------------------------------------------------------
+  // Moving the rail: dock changes, floating placement, drag-and-snap
+  // -------------------------------------------------------------------
+
+  /**
+   * Raise the rail above the editor's side panels, but only while it
+   * actually needs to be there.
+   *
+   * There is no single z-index that works statically. Core stacks BOTH the
+   * settings sidebar and the Document Overview secondary sidebar at
+   * 100000, so a surface opening over either one has to beat that — but it
+   * puts .components-modal__screen-overlay at the SAME 100000, so anything
+   * that permanently beats the panels also covers every modal, including
+   * the media library the Image tool opens.
+   *
+   * So the region sits low by default and is raised only when a surface is
+   * open, a drag is in flight, or it is a floating palette (which is meant
+   * to sit over the panels).
+   *
+   * The MODAL veto deliberately is not decided here. This function runs off
+   * the debounced mount observer, and making it also clear the class on a
+   * modal put two owners on one decision, with a ~100ms lag at each edge —
+   * a just-opened modal briefly covered, then the palette briefly stuck
+   * behind the panels after the modal closed. Both were caught by an e2e
+   * test asserting immediately, where a hand check seconds later looked
+   * fine. So this owns only "does the rail want to be on top", and the
+   * stylesheet vetoes it synchronously for modals with
+   * `body:has(.components-modal__screen-overlay)`.
+   */
+  function syncLayer() {
+    var region = document.getElementById('toolrail-region');
+    if (!region) {
+      return;
+    }
+    var wantsTop = settingsOpen || !!openFlyout || !!drag || position.dock === 'float';
+    region.classList.toggle('is-raised', wantsTop);
+  }
+
+  /** Clamp + apply the floating offsets. No-op for a docked rail, whose
+      geometry comes from the editor's flex layout instead. */
+  /**
+   * The area a floating palette may occupy, in the coordinates its `left`
+   * and `top` are resolved against.
+   *
+   * An absolutely positioned element is laid out against its ancestor's
+   * PADDING box, and clientWidth/clientHeight measure that same padding
+   * box — so clamping to those alone lets the palette sit inside padding
+   * the editor has deliberately reserved. Core reserves room for the
+   * overlaying publish footer as a padding-bottom on __body, which is
+   * exactly where a floating rail hangs: measured on a real editor, the
+   * palette clamped to 849 while the footer covered 817..849, hiding 33px
+   * of it. Subtracting the parent's own padding is what keeps it clear.
+   *
+   * @return {Object|null} {minX, minY, width, height} or null.
+   */
+  function floatBounds(region) {
+    var parent = region && region.parentNode;
+    if (!parent || !parent.clientHeight) {
+      return null;
+    }
+    var cs = window.getComputedStyle(parent);
+    var padTop = parseFloat(cs.paddingTop) || 0;
+    var padBottom = parseFloat(cs.paddingBottom) || 0;
+    var padLeft = parseFloat(cs.paddingLeft) || 0;
+    var padRight = parseFloat(cs.paddingRight) || 0;
+    return {
+      minX: padLeft,
+      minY: padTop,
+      width: Math.max(0, parent.clientWidth - padLeft - padRight),
+      height: Math.max(0, parent.clientHeight - padTop - padBottom)
+    };
+  }
+
+  function applyFloatPosition() {
+    var region = document.getElementById('toolrail-region');
+    if (!region) {
+      return;
+    }
+    if (position.dock !== 'float') {
+      region.style.left = '';
+      region.style.top = '';
+      region.style.maxHeight = '';
+      return;
+    }
+
+    var bounds = floatBounds(region);
+    if (!bounds) {
+      region.style.left = position.x + 'px';
+      region.style.top = position.y + 'px';
+      return;
+    }
+
+    // Cap BEFORE measuring: a rail carrying a dozen provider tools is
+    // taller than the usable area, and offsetHeight has to reflect the cap
+    // for the clamp below to be right.
+    region.style.maxHeight = bounds.height + 'px';
+
+    var maxX = bounds.minX + Math.max(0, bounds.width - region.offsetWidth);
+    var maxY = bounds.minY + Math.max(0, bounds.height - region.offsetHeight);
+    position.x = Math.min(Math.max(bounds.minX, position.x), maxX);
+    position.y = Math.min(Math.max(bounds.minY, position.y), maxY);
+    region.style.left = position.x + 'px';
+    region.style.top = position.y + 'px';
+  }
+
+  /**
+   * Move the rail to a dock. The region is rebuilt rather than restyled:
+   * each dock hangs off a different node in the editor's skeleton, and the
+   * rail's orientation, arrow keys and surface directions all change with
+   * it.
+   *
+   * @param {string} dock One of DOCKS.
+   * @param {Object} opts {x, y} for a float, {reopenSettings} to keep the
+   *                      settings dialog open across the move.
+   * @return {boolean} Whether the dock was applied.
+   */
+  function setDock(dock, opts) {
+    if (DOCKS.indexOf(dock) === -1) {
+      return false;
+    }
+    var options = opts || {};
+    var reopen = !!options.reopenSettings;
+    var previous = position.dock;
+
+    position.dock = dock;
+
+    // Probe the new dock BEFORE tearing the old one down. Each dock hangs
+    // off a different node in the editor's skeleton, and a dock whose node
+    // is not on the page would leave the rail unmounted with nothing but
+    // an unrelated DOM mutation to bring it back.
+    if (!dockPlacement()) {
+      position.dock = previous;
+      warn('cannot dock to "' + dock + '" — that part of the editor is not present.');
+      return false;
+    }
+
+    if (dock === 'float') {
+      if (typeof options.x === 'number') {
+        position.x = options.x;
+      }
+      if (typeof options.y === 'number') {
+        position.y = options.y;
+      }
+    }
+    savePosition();
+
+    closeFlyout(false);
+    closeSettings(false);
+
+    var existing = document.getElementById('toolrail-region');
+    if (existing) {
+      existing.remove();
+    }
+    mount();
+
+    if (reopen) {
+      var wrapper = document.getElementById('toolrail-region');
+      if (wrapper) {
+        openSettings(wrapper, 'input[data-dock="' + dock + '"]');
+      }
+    }
+
+    window.dispatchEvent(new CustomEvent('toolrail:position-changed', {
+      detail: { dock: dock, x: position.x, y: position.y }
+    }));
+    return true;
+  }
+
+  /**
+   * Which edge a pointer at (x, y) would snap to, or 'float' if it is not
+   * near one. Distances are measured against the editor body, so the snap
+   * targets line up with where each dock actually lands.
+   */
+  function snapCandidate(clientX, clientY) {
+    var body = skeletonBody();
+    if (!body) {
+      return 'float';
+    }
+    var r = body.getBoundingClientRect();
+    if (clientX < r.left - SNAP_THRESHOLD || clientX > r.right + SNAP_THRESHOLD
+      || clientY < r.top - SNAP_THRESHOLD || clientY > r.bottom + SNAP_THRESHOLD) {
+      return 'float';
+    }
+    var distances = {
+      left: Math.abs(clientX - r.left),
+      right: Math.abs(r.right - clientX),
+      top: Math.abs(clientY - r.top),
+      bottom: Math.abs(r.bottom - clientY)
+    };
+    var best = 'float';
+    var bestDistance = SNAP_THRESHOLD;
+    ['left', 'right', 'top', 'bottom'].forEach(function (edge) {
+      if (distances[edge] < bestDistance) {
+        bestDistance = distances[edge];
+        best = edge;
+      }
+    });
+    return best;
+  }
+
+  /** Translucent band showing where a release would dock the rail. Fixed
+      to the viewport so it never depends on the editor's own positioning. */
+  function showSnapPreview(edge) {
+    var el = document.getElementById('toolrail-snap-preview');
+    var body = skeletonBody();
+    if (edge === 'float' || !body) {
+      if (el) {
+        el.remove();
+      }
+      return;
+    }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'toolrail-snap-preview';
+      el.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(el);
+    }
+    var r = body.getBoundingClientRect();
+    var box = { left: r.left, top: r.top, width: r.width, height: r.height };
+    if (edge === 'left') {
+      box.width = RAIL_BAND;
+    } else if (edge === 'right') {
+      box.left = r.right - RAIL_BAND;
+      box.width = RAIL_BAND;
+    } else if (edge === 'top') {
+      box.height = RAIL_BAND;
+    } else {
+      box.top = r.bottom - RAIL_BAND;
+      box.height = RAIL_BAND;
+    }
+    el.style.left = box.left + 'px';
+    el.style.top = box.top + 'px';
+    el.style.width = box.width + 'px';
+    el.style.height = box.height + 'px';
+  }
+
+  var drag = null;
+
+  function startDrag(e) {
+    if (e.button !== 0) {
+      return;
+    }
+    var region = document.getElementById('toolrail-region');
+    if (!region) {
+      return;
+    }
+    e.preventDefault();
+    closeFlyout(false);
+    closeSettings(false);
+
+    var rect = region.getBoundingClientRect();
+    drag = {
+      startDock: position.dock,
+      startX: position.x,
+      startY: position.y,
+      grabX: e.clientX - rect.left,
+      grabY: e.clientY - rect.top,
+      candidate: position.dock,
+      torn: position.dock === 'float'
+    };
+
+    syncLayer();
+    document.body.classList.add('toolrail-dragging');
+    document.addEventListener('mousemove', onDragMove, true);
+    document.addEventListener('mouseup', onDragEnd, true);
+    document.addEventListener('keydown', onDragKey, true);
+  }
+
+  function onDragMove(e) {
+    if (!drag) {
+      return;
+    }
+    e.preventDefault();
+
+    // Tear a docked rail off on first movement so it follows the pointer,
+    // the way a docked Photoshop palette does.
+    if (!drag.torn) {
+      drag.torn = true;
+      var parent = skeletonBody();
+      var parentRect = parent ? parent.getBoundingClientRect() : { left: 0, top: 0 };
+      setDock('float', {
+        x: e.clientX - parentRect.left - drag.grabX,
+        y: e.clientY - parentRect.top - drag.grabY
+      });
+    }
+
+    var region = document.getElementById('toolrail-region');
+    var host = region && region.parentNode ? region.parentNode.getBoundingClientRect() : null;
+    if (region && host) {
+      position.x = e.clientX - host.left - drag.grabX;
+      position.y = e.clientY - host.top - drag.grabY;
+      applyFloatPosition();
+    }
+
+    drag.candidate = snapCandidate(e.clientX, e.clientY);
+    showSnapPreview(drag.candidate);
+  }
+
+  function finishDrag() {
+    showSnapPreview('float');
+    document.body.classList.remove('toolrail-dragging');
+    document.removeEventListener('mousemove', onDragMove, true);
+    document.removeEventListener('mouseup', onDragEnd, true);
+    document.removeEventListener('keydown', onDragKey, true);
+    drag = null;
+    syncLayer();
+  }
+
+  function onDragEnd() {
+    if (!drag) {
+      return;
+    }
+    var candidate = drag.candidate;
+    var x = position.x;
+    var y = position.y;
+    finishDrag();
+    setDock(candidate === 'float' ? 'float' : candidate, { x: x, y: y });
+  }
+
+  /** Escape abandons a drag and puts the rail back where it started. */
+  function onDragKey(e) {
+    if (e.key !== 'Escape' || !drag) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    var startDock = drag.startDock;
+    var startX = drag.startX;
+    var startY = drag.startY;
+    finishDrag();
+    setDock(startDock, { x: startX, y: startY });
+  }
+
+  // Keep a floating rail inside the editor when the window resizes.
+  window.addEventListener('resize', function () {
+    if (position.dock === 'float') {
+      applyFloatPosition();
+    }
+  });
 
   // -------------------------------------------------------------------
   // DOM
@@ -1022,7 +2422,13 @@
     btn.type = 'button';
     btn.className = 'toolrail-tool';
     btn.dataset.tool = tool.id;
-    btn.setAttribute('aria-label', toolTitle(tool));
+    // The accessible NAME is the label alone; the how-to hint rides only
+    // the pointer tooltip. Baking hints into aria-label made every button
+    // read a wall of repeated instruction ("— click in the canvas to
+    // insert…" a dozen times down the rail) to screen-reader users (owner
+    // feedback 2026-08-26). Instructional copy belongs in the planned
+    // help panel (private/roadmap.md), not in each button's name.
+    btn.setAttribute('aria-label', tool.label);
     btn.setAttribute('aria-pressed', 'false');
     btn.title = toolTitle(tool);
     btn.tabIndex = -1;
@@ -1071,36 +2477,6 @@
       setActiveTool(tool.select ? 'select' : tool.id);
     });
 
-    if (tool.pinnedBlock) {
-      btn.classList.add('toolrail-tool--pinned');
-      btn.addEventListener('keydown', function (e) {
-        if (e.key === 'Delete' || e.key === 'Backspace') {
-          e.preventDefault();
-          var prev = btn.previousElementSibling;
-          unpinBlock(tool.pinnedBlock);
-          // rerender() replaced the rail; move focus somewhere sensible.
-          var rail = document.getElementById('toolrail-rail');
-          var fallback = rail && rail.querySelector('.toolrail-tool');
-          var target = prev && prev.dataset && prev.dataset.tool && rail
-            ? rail.querySelector('[data-tool="' + prev.dataset.tool + '"]') : null;
-          (target || fallback || btn).focus();
-        }
-      });
-
-      // Pointer-only sugar; the keyboard paths are the Delete key here and
-      // the block menu's Pin/Unpin item.
-      var remove = document.createElement('span');
-      remove.className = 'toolrail-slot-remove';
-      remove.setAttribute('aria-hidden', 'true');
-      remove.textContent = '×';
-      remove.addEventListener('mousedown', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        unpinBlock(tool.pinnedBlock);
-      });
-      btn.appendChild(remove);
-    }
-
     return btn;
   }
 
@@ -1111,27 +2487,56 @@
     return sep;
   }
 
+  /**
+   * The drag handle. Pointer-only sugar: it is aria-hidden and
+   * unfocusable, because the keyboard and screen-reader path for
+   * repositioning is the settings dialog's "Toolbar position" radio
+   * group.
+   */
+  function buildGrip() {
+    var grip = document.createElement('div');
+    grip.className = 'toolrail-grip';
+    grip.setAttribute('aria-hidden', 'true');
+    grip.title = __('Drag to move the toolbar', 'toolrail');
+    grip.addEventListener('mousedown', startDrag);
+    return grip;
+  }
+
   function buildRail(wrapper) {
+    // The previous generation of pinned-icon React roots belongs to the
+    // rail this one replaces.
+    disposeIconRoots();
+
     var rail = document.createElement('div');
     rail.id = 'toolrail-rail';
     rail.setAttribute('role', 'toolbar');
-    rail.setAttribute('aria-orientation', 'vertical');
+    rail.setAttribute('aria-orientation', isVertical() ? 'vertical' : 'horizontal');
     rail.setAttribute('aria-label', __('Tools', 'toolrail'));
+
+    rail.appendChild(buildGrip());
 
     var model = railModel();
 
-    model.tools.forEach(function (tool, i) {
-      // Separate the built-in set from registered top-level tools.
-      if (i === BUILTIN_TOOLS.length && registered.length) {
-        rail.appendChild(buildSeparator());
-      }
+    // Order: Select, then the pinned slots (Text/Heading/Image ship as
+    // defaults there), then the remaining built-ins (Shape, Section), then
+    // registered top-level tools — so the default rail reads select · text
+    // · heading · image exactly as it did when those were built-ins.
+    rail.appendChild(buildToolButton(model.tools[0], wrapper));
+
+    model.slots.forEach(function (slot) {
+      rail.appendChild(buildToolButton(slot, wrapper));
+    });
+
+    rail.appendChild(buildSeparator());
+    model.tools.slice(1, BUILTIN_TOOLS.length).forEach(function (tool) {
       rail.appendChild(buildToolButton(tool, wrapper));
     });
 
-    if (model.slots.length) {
+    var registeredTop = model.tools.slice(BUILTIN_TOOLS.length);
+    if (registeredTop.length) {
       rail.appendChild(buildSeparator());
-      model.slots.forEach(function (slot) {
-        rail.appendChild(buildToolButton(slot, wrapper));
+      registeredTop.forEach(function (tool) {
+        rail.appendChild(buildToolButton(tool, wrapper));
       });
     }
 
@@ -1162,9 +2567,17 @@
       firstBtn.tabIndex = 0;
     }
 
-    // APG toolbar keys. ArrowRight opens a flyout on parents.
+    // APG toolbar keys, following the rail's orientation: Up/Down move
+    // along a vertical rail and ArrowRight opens a flyout, while a
+    // horizontal rail moves on Left/Right and opens its flyouts with
+    // ArrowDown. The move axis and the open key are never the same key.
     rail.addEventListener('keydown', function (e) {
-      if (['ArrowDown', 'ArrowUp', 'Home', 'End', 'ArrowRight'].indexOf(e.key) === -1) {
+      var vertical = isVertical();
+      var nextKey = vertical ? 'ArrowDown' : 'ArrowRight';
+      var prevKey = vertical ? 'ArrowUp' : 'ArrowLeft';
+      var openKey = vertical ? 'ArrowRight' : 'ArrowDown';
+
+      if ([nextKey, prevKey, openKey, 'Home', 'End'].indexOf(e.key) === -1) {
         return;
       }
       var btns = Array.prototype.slice.call(rail.querySelectorAll('.toolrail-tool'));
@@ -1173,7 +2586,7 @@
         return;
       }
       e.preventDefault();
-      if (e.key === 'ArrowRight') {
+      if (e.key === openKey) {
         var toolId = btns[idx].dataset.tool;
         var tool = findTool(toolId);
         if (tool && tool.children && tool.children.length) {
@@ -1181,8 +2594,8 @@
         }
         return;
       }
-      var next = e.key === 'ArrowDown' ? (idx + 1) % btns.length
-        : e.key === 'ArrowUp' ? (idx - 1 + btns.length) % btns.length
+      var next = e.key === nextKey ? (idx + 1) % btns.length
+        : e.key === prevKey ? (idx - 1 + btns.length) % btns.length
           : e.key === 'Home' ? 0 : btns.length - 1;
       btns.forEach(function (b) { b.tabIndex = -1; });
       btns[next].tabIndex = 0;
@@ -1201,6 +2614,9 @@
     wrapper.setAttribute('role', 'region');
     wrapper.setAttribute('aria-label', __('Tool rail', 'toolrail'));
     wrapper.tabIndex = -1;
+    // Every dock-dependent style keys off this: rail orientation, which
+    // border carries the edge, and which way surfaces open.
+    wrapper.dataset.dock = position.dock;
 
     wrapper.appendChild(buildRail(wrapper));
 
@@ -1282,7 +2698,7 @@
     var model = railModel();
 
     model.tools.concat(model.slots).forEach(function (tool) {
-      var btn = rail.querySelector('[data-tool="' + tool.id + '"]');
+      var btn = rail.querySelector(toolSelector(tool.id));
       if (!btn) {
         return;
       }
@@ -1310,16 +2726,34 @@
   // -------------------------------------------------------------------
 
   function mount() {
-    var body = document.querySelector('.interface-interface-skeleton__body');
-    if (!body) {
+    var place = dockPlacement();
+    if (!place) {
       return false;
     }
     bindCanvas();
-    if (document.getElementById('toolrail-region')) {
+
+    var existing = document.getElementById('toolrail-region');
+    if (existing) {
+      // Re-home a rail that the editor's own re-render moved out from
+      // under its dock, without rebuilding it.
+      if (!isPlacedCorrectly(existing, place)) {
+        place.parent.insertBefore(existing, place.before);
+        applyFloatPosition();
+        syncLayer();
+      }
       return true;
     }
+
     closeFlyout(false);
-    body.insertBefore(buildWrapper(), body.firstChild);
+    // A destroyed region takes the settings dialog with it, but not the
+    // module state that says one is open — without this the rebuilt gear
+    // renders aria-expanded="true" with no dialog behind it, and its
+    // listeners outlive the node they were bound for.
+    closeSettings(false);
+
+    place.parent.insertBefore(buildWrapper(), place.before);
+    applyFloatPosition();
+    syncLayer();
     // Force: a re-mounted rail carries brand-new buttons.
     syncPressed(true);
     return true;
@@ -1327,16 +2761,18 @@
 
   /**
    * Rebuild the rail in place (registry/slot changes). Focus moves to the
-   * rail's first button only if focus was inside the rail.
+   * rail's first button only if focus was inside THE RAIL — the settings
+   * dialog is a sibling inside the same region, so testing the region
+   * would pull focus out of the dialog on every change made from it.
    */
   function rerender() {
     var wrapper = document.getElementById('toolrail-region');
     if (!wrapper) {
       return;
     }
-    var hadFocus = wrapper.contains(document.activeElement);
     closeFlyout(false);
     var oldRail = document.getElementById('toolrail-rail');
+    var hadFocus = !!(oldRail && oldRail.contains(document.activeElement));
     var newRail = buildRail(wrapper);
     if (oldRail) {
       wrapper.replaceChild(newRail, oldRail);
@@ -1381,6 +2817,7 @@
       pending = window.setTimeout(function () {
         pending = null;
         mount();
+        syncLayer();
       }, 100);
     });
     observer.observe(document.body, { childList: true, subtree: true });
@@ -1400,8 +2837,13 @@
     loadConfig: loadConfig,
     deleteConfig: deleteConfig,
     getConfigs: loadConfigs,
+    exportConfig: exportConfig,
+    importConfig: importConfigPayload,
     getActiveTool: function () { return activeTool; },
-    setActiveTool: setActiveTool
+    setActiveTool: setActiveTool,
+    getDock: function () { return position.dock; },
+    setDock: function (dock) { return setDock(dock); },
+    getPosition: function () { return { dock: position.dock, x: position.x, y: position.y }; }
   };
 
   // -------------------------------------------------------------------
@@ -1446,6 +2888,67 @@
     });
   }
 
+  /**
+   * Self-heals the boot-order race between boot()'s migration writes and
+   * the editor's own async attach of the preferences persistence layer.
+   *
+   * `wp-preferences` being a script dependency only guarantees the
+   * `core/preferences` store is REGISTERED, and that core's attach
+   * (SET_PERSISTENCE_LAYER) has been dispatched, before this file runs —
+   * not that it has RESOLVED. That dispatch is an async thunk which, for
+   * an author with no saved preferences yet (no user-meta, no matching
+   * localStorage), awaits a real REST fetch before resolving. If that
+   * resolution lands after boot()'s migration has already written into
+   * the pre-attach state, core's reducer replaces the WHOLE
+   * `core/preferences` state wholesale — silently wiping those writes.
+   *
+   * SET_PERSISTENCE_LAYER is the only action that can make an
+   * already-set stamp read back as unset, and WordPress dispatches it at
+   * most once per page load. So rather than guess at timing, watch for
+   * exactly that: a dispatch against `core/preferences` that leaves
+   * migrateSlots()'s stamp missing again means a wipe happened. Redo the
+   * migration (idempotent, and this time nothing is racing it) and
+   * repaint. Once the stamp is confirmed to have survived a dispatch,
+   * there is nothing left that could ever wipe it again this page load,
+   * so the watcher unsubscribes itself.
+   */
+  function watchPersistenceAttach() {
+    if (!wp.data || typeof wp.data.subscribe !== 'function' || !prefsSelect()) {
+      return;
+    }
+
+    var repairing = false;
+
+    var unsubscribe = wp.data.subscribe(function () {
+      if (repairing) {
+        return;
+      }
+      if (readKey(MIGRATED_KEY) !== null) {
+        unsubscribe();
+        return;
+      }
+      repairing = true;
+      try {
+        migrateLocalToPrefs();
+        migrateSlots();
+        var restored = loadPosition();
+        position.dock = restored.dock;
+        position.x = restored.x;
+        position.y = restored.y;
+        var existingRegion = document.getElementById('toolrail-region');
+        if (existingRegion) {
+          existingRegion.remove();
+        }
+        mount();
+      } finally {
+        repairing = false;
+      }
+      if (readKey(MIGRATED_KEY) !== null) {
+        unsubscribe();
+      }
+    }, 'core/preferences');
+  }
+
   // -------------------------------------------------------------------
   // Boot. _wpLoadBlockEditor resolves when the editor has actually
   // initialized (more precise than domReady — the Phase 0 spike used it);
@@ -1453,6 +2956,16 @@
   // -------------------------------------------------------------------
 
   function boot() {
+    // Storage order is load-bearing: lift any old localStorage state into
+    // the account preferences FIRST, then read position and run the slot
+    // migration against the lifted state.
+    migrateLocalToPrefs();
+    position = loadPosition();
+    migrateSlots();
+    // These writes can still lose a race with the preferences store's
+    // own async attach — watchPersistenceAttach() catches and repairs
+    // that if it happens.
+    watchPersistenceAttach();
     registerPinMenuItem();
     start();
   }

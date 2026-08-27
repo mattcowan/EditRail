@@ -1,30 +1,203 @@
 /**
  * Editor Tool Rail.
  *
- * The rail region is inserted as the FIRST CHILD of
- * .interface-interface-skeleton__body so it participates in the editor's own
- * flex layout — the canvas shrinks beside it instead of being overlapped.
- * The flyout is positioned from the region wrapper, OUTSIDE the toolbar's
- * overflow-y, so it never clips.
+ * The rail region is inserted into the editor's own skeleton so it
+ * participates in the editor's flex layout — the canvas shrinks beside it
+ * instead of being overlapped. Flyouts and the settings dialog are
+ * positioned from the region wrapper, OUTSIDE the toolbar's own overflow,
+ * so they never clip.
+ *
+ * Every layout rule below is keyed off [data-dock] on the region:
+ *
+ *   left / right   vertical rail in the skeleton body's flex row
+ *   top / bottom   full-width horizontal bar in the skeleton's flex column
+ *   float          absolutely positioned palette inside the skeleton body
+ *
+ * Surfaces (flyouts, the settings dialog) get their top/left/right/bottom
+ * offsets inline from placeSurface() in the JS, which opens them away from
+ * whichever edge the rail is docked to.
+ *
+ * ONE focus-ring colour, because there is only one surface tone. The rail,
+ * the flyouts and the settings dialog are all #1e1e1e — an earlier pass
+ * split this into a "dark" and a "light" token on the false premise that
+ * the settings dialog was light, which left the dialog's own controls on
+ * #3858e9 at 2.99:1 while the header claimed 5.61:1. Every focus indicator
+ * now uses --toolrail-focus-ring (#7b90ff, 5.78:1 on #1e1e1e), which
+ * clears the 3:1 that WCAG 1.4.11 Non-text Contrast requires.
+ *
+ * Anything that reads as a focus or state indicator ON the rail belongs on
+ * this token. #3858e9 survives only where it sits on the EDITOR canvas,
+ * not on the rail: the pressed-tool fill and the drag snap-preview.
  */
 
 .toolrail-region {
+    --toolrail-focus-ring: #7b90ff;
     position: relative;
-    flex: 0 0 52px;
     display: flex;
     z-index: 30;
+}
+
+.toolrail-region[data-dock="left"],
+.toolrail-region[data-dock="right"] {
+    flex: 0 0 52px;
+}
+
+/* The region's z-index caps its surfaces, because position + z-index make
+   it a stacking context — so a flyout or the settings dialog can never
+   paint above whatever the region itself sits below.
+ *
+ * Core stacks the settings sidebar AND the Document Overview secondary
+ * sidebar at z-index 100000, and .components-modal__screen-overlay at that
+ * same 100000. There is therefore no static value that clears the panels
+ * without also covering every modal. Verified on a real editor: at 30 a
+ * right-docked dialog at 634..979 sat under the settings panel at 703..983,
+ * and a LEFT-docked dialog at 57..402 sat under the Document Overview panel
+ * at 53..403 — elementFromPoint at the dialog's own centre returned the
+ * list-view panel.
+ *
+ * So the raise is conditional and JS-driven: see syncLayer(). It applies
+ * while a surface is open, while a drag is in flight, or for a floating
+ * palette — and never while a modal is on screen. */
+.toolrail-region.is-raised {
+    z-index: 100001;
+}
+
+/* A modal must ALWAYS win, and this is the SOLE owner of that decision.
+   Doing it in JS as well put a ~100ms lag at each edge (a just-opened modal
+   briefly covered; the palette briefly stuck behind the panels after the
+   modal closed), because syncLayer() runs off a debounced observer. Here it
+   is synchronous with the DOM in both directions. Specificity (0,3,1) beats
+   the rule above, so no !important is needed. :has() is available in every
+   browser WordPress 6.5+ supports. */
+body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
+    z-index: 30;
+}
+
+.toolrail-region[data-dock="top"],
+.toolrail-region[data-dock="bottom"] {
+    flex: 0 0 auto;
+    width: 100%;
+}
+
+/* The publish footer is an OVERLAY: core sizes __editor to the full
+   skeleton and reserves room for the footer with a padding-bottom on
+   __body alone. A bottom bar sits BELOW __body, so it needs the same
+   reservation for itself or the footer covers it. Measured on a real
+   editor: without this, 33 of the bar's 53px are hidden. The expression
+   matches core's own. */
+.has-footer .toolrail-region[data-dock="bottom"] {
+    margin-bottom: calc(var(--wpds-dimension-size-md, 32px) + 1px);
+}
+
+/* Floating: the skeleton body is already position:relative in core, so the
+   palette anchors to the editor area and cannot be dragged out into the
+   admin chrome. The z-index clears core's .interface-interface-skeleton__
+   sidebar (z-index: 100000) so the palette floats over the side panel,
+   while staying below Gutenberg's popovers and modals. */
+.toolrail-region[data-dock="float"] {
+    position: absolute;
+    flex: 0 0 auto;
+    /* A floating palette is sized by its contents, and a rail carrying a
+       dozen provider tools is taller than the editor. This is the fallback
+       cap; applyFloatPosition() replaces it with an exact pixel height that
+       also excludes the parent's reserved padding, which a percentage here
+       cannot see. The palette is raised by syncLayer(), not by a z-index
+       here, so it never covers a modal. */
+    max-height: calc(100% - 32px);
 }
 
 #toolrail-rail {
     flex: 1 1 auto;
     display: flex;
-    flex-direction: column;
     align-items: center;
     gap: 6px;
-    padding: 12px 4px;
     background: #1e1e1e;
-    border-right: 1px solid #2f2f2f;
+}
+
+.toolrail-region[data-dock="left"] #toolrail-rail,
+.toolrail-region[data-dock="right"] #toolrail-rail,
+.toolrail-region[data-dock="float"] #toolrail-rail {
+    flex-direction: column;
+    padding: 12px 4px;
     overflow-y: auto;
+}
+
+.toolrail-region[data-dock="top"] #toolrail-rail,
+.toolrail-region[data-dock="bottom"] #toolrail-rail {
+    flex-direction: row;
+    padding: 4px 12px;
+    overflow-x: auto;
+}
+
+.toolrail-region[data-dock="left"] #toolrail-rail {
+    border-right: 1px solid #2f2f2f;
+}
+
+.toolrail-region[data-dock="right"] #toolrail-rail {
+    border-left: 1px solid #2f2f2f;
+}
+
+.toolrail-region[data-dock="top"] #toolrail-rail {
+    border-bottom: 1px solid #2f2f2f;
+}
+
+.toolrail-region[data-dock="bottom"] #toolrail-rail {
+    border-top: 1px solid #2f2f2f;
+}
+
+.toolrail-region[data-dock="float"] #toolrail-rail {
+    border: 1px solid #3f3f3f;
+    border-radius: 6px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+
+/* Drag handle. Pointer-only sugar (aria-hidden, not focusable) — the
+   keyboard path is the settings dialog's "Toolbar position" radios. */
+.toolrail-grip {
+    flex: 0 0 auto;
+    cursor: grab;
+    border-radius: 3px;
+    background-image: radial-gradient(currentColor 1px, transparent 1px);
+    background-size: 4px 4px;
+    color: #6f6f6f;
+    opacity: 0.9;
+}
+
+.toolrail-region[data-dock="left"] .toolrail-grip,
+.toolrail-region[data-dock="right"] .toolrail-grip,
+.toolrail-region[data-dock="float"] .toolrail-grip {
+    width: 28px;
+    height: 12px;
+    margin-bottom: 2px;
+}
+
+.toolrail-region[data-dock="top"] .toolrail-grip,
+.toolrail-region[data-dock="bottom"] .toolrail-grip {
+    width: 12px;
+    height: 28px;
+    margin-right: 2px;
+}
+
+.toolrail-grip:hover {
+    color: #b0b0b0;
+}
+
+body.toolrail-dragging,
+body.toolrail-dragging * {
+    cursor: grabbing !important;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+/* Where a release would dock the rail. Sits just under the floating rail
+   (100001) so the palette being dragged stays readable on top of it. */
+#toolrail-snap-preview {
+    position: fixed;
+    z-index: 100000;
+    pointer-events: none;
+    background: rgba(56, 88, 233, 0.25);
+    border: 2px solid #3858e9;
+    border-radius: 4px;
 }
 
 .toolrail-tool {
@@ -50,18 +223,40 @@
     fill: currentColor;
 }
 
+/* Core block icons (@wordpress/icons) ship viewBox-only SVGs with NO
+   width/height attributes — no intrinsic size, so they measured 0×0 and
+   a pinned Cover block showed an empty button (found live 2026-08-26;
+   same trap as an SVG logo without dimensions). Sizing here covers every
+   icon; the hand-drawn built-ins carry matching 24px attributes anyway. */
+.toolrail-tool-icon svg {
+    width: 24px;
+    height: 24px;
+}
+
+.toolrail-flyout-icon svg {
+    width: 20px;
+    height: 20px;
+}
+
 .toolrail-tool:hover {
     background: #2f2f2f;
 }
 
 .toolrail-tool:focus-visible {
-    outline: 2px solid #3858e9;
+    outline: 2px solid var(--toolrail-focus-ring);
     outline-offset: 2px;
 }
 
 /* Pressed = armed (or that tool's surface is open, for onActivate tools).
-   Never color alone: the pressed state also renders a left edge bar, and
-   aria-pressed carries it for assistive tech. */
+   Never color alone: the pressed state also renders an edge bar, and
+   aria-pressed carries it for assistive tech.
+
+   Where that bar sits differs by axis, deliberately. A VERTICAL rail marks
+   the button's outer edge, away from the canvas. A HORIZONTAL rail marks
+   the canvas-facing edge instead — an underline beneath a top bar, an
+   overline above a bottom one — because that is the established reading
+   for an active item in a horizontal toolbar, and it keeps the marker off
+   the editor chrome the rail is butted against. */
 .toolrail-tool[aria-pressed="true"] {
     background: #3858e9;
     color: #fff;
@@ -70,20 +265,57 @@
 .toolrail-tool[aria-pressed="true"]::before {
     content: "";
     position: absolute;
-    left: -4px;
-    top: 8px;
-    bottom: 8px;
-    width: 3px;
     border-radius: 2px;
     background: #7b90ff;
 }
 
+.toolrail-region[data-dock="left"] .toolrail-tool[aria-pressed="true"]::before,
+.toolrail-region[data-dock="float"] .toolrail-tool[aria-pressed="true"]::before {
+    left: -4px;
+    top: 8px;
+    bottom: 8px;
+    width: 3px;
+}
+
+.toolrail-region[data-dock="right"] .toolrail-tool[aria-pressed="true"]::before {
+    right: -4px;
+    top: 8px;
+    bottom: 8px;
+    width: 3px;
+}
+
+.toolrail-region[data-dock="top"] .toolrail-tool[aria-pressed="true"]::before {
+    left: 8px;
+    right: 8px;
+    bottom: -4px;
+    height: 3px;
+}
+
+.toolrail-region[data-dock="bottom"] .toolrail-tool[aria-pressed="true"]::before {
+    left: 8px;
+    right: 8px;
+    top: -4px;
+    height: 3px;
+}
+
 .toolrail-separator {
-    width: 28px;
-    height: 1px;
     flex: 0 0 auto;
     background: #3f3f3f;
+}
+
+.toolrail-region[data-dock="left"] .toolrail-separator,
+.toolrail-region[data-dock="right"] .toolrail-separator,
+.toolrail-region[data-dock="float"] .toolrail-separator {
+    width: 28px;
+    height: 1px;
     margin: 4px 0;
+}
+
+.toolrail-region[data-dock="top"] .toolrail-separator,
+.toolrail-region[data-dock="bottom"] .toolrail-separator {
+    width: 1px;
+    height: 28px;
+    margin: 0 4px;
 }
 
 /* Corner glyph marking a tool with a flyout. */
@@ -97,10 +329,10 @@
     border-bottom: 5px solid currentColor;
 }
 
-/* Flyout menu, floated to the right of the rail. */
+/* Flyout menu. Its offsets are set inline by placeSurface(), which opens
+   it away from whichever edge the rail is docked to. */
 .toolrail-flyout {
     position: absolute;
-    left: calc(100% + 4px);
     min-width: 180px;
     padding: 4px;
     background: #1e1e1e;
@@ -131,7 +363,7 @@
 }
 
 .toolrail-flyout-item:focus-visible {
-    outline: 2px solid #3858e9;
+    outline: 2px solid var(--toolrail-focus-ring);
     outline-offset: -2px;
 }
 
@@ -145,38 +377,21 @@
     fill: currentColor;
 }
 
-/* Pinned quick slots: the × is pointer-only sugar (aria-hidden, not
-   focusable); the keyboard paths are the Delete key on the slot and the
-   block menu's Pin/Unpin item. */
-.toolrail-slot-remove {
-    position: absolute;
-    top: -4px;
-    right: -4px;
-    width: 16px;
-    height: 16px;
-    display: none;
-    place-items: center;
-    background: #cc1818;
-    color: #fff;
-    border-radius: 50%;
-    font-size: 12px;
-    line-height: 1;
-}
-
-.toolrail-tool--pinned:hover .toolrail-slot-remove,
-.toolrail-tool--pinned:focus-visible .toolrail-slot-remove {
-    display: grid;
-}
+/* Pinned quick slots carry no on-rail removal affordance: the hover × and
+   the Delete key were retired 2026-08-26 (accidental removal was one slip
+   away). Removal lives in the settings dialog and the block menu. */
 
 /* ------------------------------------------------------------------
    Toolbar settings dialog (the gear)
    ------------------------------------------------------------------ */
 
+/* Offsets are set inline by placeSurface(). The height cap is measured
+   against the VIEWPORT rather than the region: a top or bottom rail is
+   only ~52px tall, so the old wrapper-relative calc(100% - 16px) collapsed
+   the dialog to a sliver on those docks. */
 .toolrail-settings {
     position: absolute;
-    left: calc(100% + 4px);
-    top: 8px;
-    max-height: calc(100% - 16px);
+    max-height: min(70vh, 560px);
     width: 320px;
     overflow-y: auto;
     padding: 12px;
@@ -227,7 +442,7 @@
 }
 
 .toolrail-settings-search:focus-visible {
-    outline: 2px solid #3858e9;
+    outline: 2px solid var(--toolrail-focus-ring);
     outline-offset: 1px;
 }
 
@@ -247,7 +462,7 @@
 }
 
 .toolrail-settings-btn:focus-visible {
-    outline: 2px solid #3858e9;
+    outline: 2px solid var(--toolrail-focus-ring);
     outline-offset: 1px;
 }
 
@@ -320,14 +535,80 @@
     align-items: stretch;
 }
 
+/* VISIBLE text for import/load outcomes. Not a live region — the dialog
+   body is rebuilt on every render, so announcing is wp.a11y.speak()'s job
+   (see the speak() helper in editor-rail.js). Reserves no space when
+   empty. #9ec1ff on #1e1e1e measures 9.15:1. */
+.toolrail-settings-status {
+    color: #9ec1ff;
+    margin: 6px 0 0;
+}
+
+.toolrail-settings-status:empty {
+    display: none;
+}
+
+.toolrail-settings-import {
+    width: 100%;
+    margin-top: 4px;
+    color: #e0e0e0;
+    font-size: 12px;
+}
+
+.toolrail-settings-import::file-selector-button {
+    min-height: 32px;
+    margin-right: 8px;
+    padding: 4px 10px;
+    background: #2a2a2a;
+    color: #e0e0e0;
+    border: 1px solid #4f4f4f;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.toolrail-settings-import:focus-visible {
+    outline: 2px solid var(--toolrail-focus-ring);
+    outline-offset: 1px;
+}
+
 .toolrail-settings-saverow .toolrail-settings-search {
     flex: 1 1 auto;
     width: auto;
 }
 
+/* Toolbar position picker — the keyboard equivalent of dragging the grip. */
+.toolrail-settings-position {
+    margin: 0 0 12px;
+    padding: 0;
+    border: 0;
+}
+
+.toolrail-settings-position .toolrail-settings-label {
+    padding: 0;
+    margin: 12px 0 4px;
+}
+
+.toolrail-settings-positionrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 28px;
+    cursor: pointer;
+}
+
+.toolrail-settings-positionrow input {
+    flex: 0 0 auto;
+    margin: 0;
+}
+
+.toolrail-settings-positionrow input:focus-visible {
+    outline: 2px solid var(--toolrail-focus-ring);
+    outline-offset: 2px;
+}
+
 /* Drop-target hint while a block drag hovers the rail. */
 .toolrail-region.is-drop-target #toolrail-rail {
-    outline: 2px dashed #3858e9;
+    outline: 2px dashed var(--toolrail-focus-ring);
     outline-offset: -4px;
 }
 
@@ -341,5 +622,53 @@
 @media (max-width: 782px) {
     .toolrail-region {
         display: none;
+    }
+}
+
+/* Windows High Contrast / forced-colors.
+   The OS replaces every colour declared above, which costs the rail the
+   two cues that carry state visually: the pressed button's #3858e9 fill
+   and its #7b90ff edge bar both flatten to the system palette, leaving
+   armed and unarmed tools identical on screen. (aria-pressed still
+   carries the state to assistive tech either way; this is for the sighted
+   high-contrast user.)
+   Restoring it in system colours: `forced-color-adjust: none` is NOT used
+   — the point is to cooperate with the user's palette, not opt out of it.
+   Instead the state is re-expressed with a border, which forced-colors
+   keeps. */
+@media (forced-colors: active) {
+    /* .toolrail-tool already carries `border: 1px solid transparent`, so
+       only the pressed state needs restating here. */
+    .toolrail-tool[aria-pressed="true"] {
+        border-color: Highlight;
+        background: Highlight;
+        color: HighlightText;
+    }
+
+    /* The ::before edge bar is a background-painted sliver, which forced
+       colors erase. The border above replaces it, so hide the remnant
+       rather than leave an invisible gap in the layout. */
+    .toolrail-tool[aria-pressed="true"]::before {
+        display: none;
+    }
+
+    .toolrail-tool:focus-visible,
+    .toolrail-flyout-item:focus-visible,
+    .toolrail-settings-btn:focus-visible,
+    .toolrail-settings-search:focus-visible,
+    .toolrail-settings-import:focus-visible,
+    .toolrail-settings-positionrow input:focus-visible {
+        outline: 2px solid Highlight;
+    }
+
+    .toolrail-flyout,
+    .toolrail-settings {
+        border: 1px solid CanvasText;
+    }
+
+    /* The grip is a radial-gradient dot pattern; gradients do not survive
+       forced colors, so give it an outline that does. */
+    .toolrail-grip {
+        border: 1px solid CanvasText;
     }
 }

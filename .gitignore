@@ -4,3 +4,6 @@ vendor/
 tests/e2e/.auth/
 test-results/
 playwright-report/
+private/
+.playwright-mcp/
+playwright-profile/
