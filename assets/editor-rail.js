@@ -69,6 +69,11 @@
   var CONFIGS_KEY = 'toolrail-slot-configs';
   var POSITION_KEY = 'toolrail-position';
   var MIGRATED_KEY = 'toolrail-slots-migrated';
+  var HELP_SEEN_KEY = 'toolrail-help-seen';
+  var HELP_HIDDEN_KEY = 'toolrail-help-hidden';
+  var WIDE_KEY = 'toolrail-wide';
+  var WIDE_TOGGLE_KEY = 'toolrail-wide-toggle';
+  var APPEARANCE_KEY = 'toolrail-appearance';
   var PREFS_SCOPE = 'toolrail';
   var SHAPE_FILL = '#b9b9b9';
 
@@ -253,7 +258,7 @@
   var DOCKS = ['left', 'right', 'top', 'bottom', 'float'];
   var DEFAULT_DOCK = 'left';
   var SNAP_THRESHOLD = 72;
-  var RAIL_BAND = 52;
+  var RAIL_BAND = 53;
 
   var DOCK_LABELS = {
     left: __('Left edge', 'toolrail'),
@@ -351,7 +356,9 @@
     shape: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M9 3a6 6 0 015.2 9H21v9h-9v-6.8A6 6 0 019 3zm5 11.7a6 6 0 01-2 .3v5h7v-5h-5zM9 5a4 4 0 100 8 4 4 0 000-8z"/></svg>',
     section: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M3 4h18v2H3V4zm2 4h14a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1V9a1 1 0 011-1zm1 2v4h12v-4H6zM3 18h18v2H3v-2z"/></svg>',
     pin: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zm0 2.3L6 8.7v6.6l6 3.4 6-3.4V8.7l-6-3.4zM12 8l3.5 2v4L12 16l-3.5-2v-4L12 8z"/></svg>',
-    gear: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 9a3 3 0 110 6 3 3 0 010-6zm-1.7-6h3.4l.5 2.4c.6.2 1.1.5 1.6.9l2.3-.8 1.7 3-1.8 1.6a6.7 6.7 0 010 1.8l1.8 1.6-1.7 3-2.3-.8c-.5.4-1 .7-1.6.9l-.5 2.4h-3.4l-.5-2.4a6.6 6.6 0 01-1.6-.9l-2.3.8-1.7-3 1.8-1.6a6.7 6.7 0 010-1.8L4.2 8.5l1.7-3 2.3.8c.5-.4 1-.7 1.6-.9L10.3 3z"/></svg>'
+    gear: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 9a3 3 0 110 6 3 3 0 010-6zm-1.7-6h3.4l.5 2.4c.6.2 1.1.5 1.6.9l2.3-.8 1.7 3-1.8 1.6a6.7 6.7 0 010 1.8l1.8 1.6-1.7 3-2.3-.8c-.5.4-1 .7-1.6.9l-.5 2.4h-3.4l-.5-2.4a6.6 6.6 0 01-1.6-.9l-2.3.8-1.7-3 1.8-1.6a6.7 6.7 0 010-1.8L4.2 8.5l1.7-3 2.3.8c.5-.4 1-.7 1.6-.9L10.3 3z"/></svg>',
+    help: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 4a5 5 0 015 5c0 2.3-1.5 3.3-2.7 4.1-.9.7-1.3 1.1-1.3 2.2h-2c0-2 1-2.9 2-3.7 1.1-.8 2-1.4 2-2.6a3 3 0 00-6 0H7a5 5 0 015-5zm-1 13h2v2.5h-2z"/></svg>',
+    chevron: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8.6 5.4L10 4l8 8-8 8-1.4-1.4L15.2 12z"/></svg>'
   };
 
   // Every React root created for a pinned-block icon, so the previous
@@ -361,6 +368,11 @@
   // unless they are disposed. buildRail() is the ONLY producer and always
   // creates a complete new set, which makes it the correct disposal point.
   var iconRoots = [];
+
+  // The tools section's ResizeObserver, disposed on the same rule as the
+  // icon roots: buildRail is the only producer, so it disconnects the
+  // previous generation before creating the next.
+  var railScrollObserver = null;
 
   function disposeIconRoots() {
     iconRoots.forEach(function (root) {
@@ -398,6 +410,299 @@
       }
     }
     span.innerHTML = ICONS.pin;
+  }
+
+  // -------------------------------------------------------------------
+  // Wide mode — icon + name rows on vertical docks and the floating
+  // palette (left/right/float only; a label-per-tool row makes a
+  // horizontal bar unusably long, so the toggle does not render there).
+  // Purely visual: every aria-label already carries the name, so wide
+  // mode changes nothing for assistive tech.
+  // -------------------------------------------------------------------
+
+  function isWide() {
+    return readKey(WIDE_KEY) === '1';
+  }
+
+  /**
+   * Whether the on-rail expander chevron renders. OPT-IN (owner decision
+   * 2026-08-27): a permanent button at the rail's head spends prime
+   * toolbar space, so the chevron is off until the author asks for it in
+   * Toolbar settings — where the "Show tool names" checkbox is the
+   * canonical (and keyboard) path to wide mode either way, making the
+   * chevron pure quick-access sugar, like the drag grip is for docking.
+   */
+  function isWideToggleShown() {
+    return readKey(WIDE_TOGGLE_KEY) === '1';
+  }
+
+  function setWide(on) {
+    writeKey(WIDE_KEY, on ? '1' : '0');
+    var region = document.getElementById('toolrail-region');
+    if (region) {
+      if (on) {
+        region.dataset.wide = 'true';
+      } else {
+        delete region.dataset.wide;
+      }
+      // Both writers (the settings checkbox and the optional chevron)
+      // route through here, so the chevron's pressed state is owned in
+      // ONE place and can never disagree with the region.
+      var toggle = region.querySelector('[data-tool="wide-toggle"]');
+      if (toggle) {
+        toggle.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+    }
+    // The region's width just changed; a floating palette re-clamps so
+    // widening it cannot push it off the editor.
+    applyFloatPosition();
+  }
+
+  // -------------------------------------------------------------------
+  // Appearance — the rail's colors as custom-property tokens on the
+  // region. The stylesheet's defaults ARE the Dark preset; Light and
+  // Gray are complete hand-tuned sets, and Custom derives every token
+  // from an author-chosen background + foreground pair by relative
+  // luminance. Applied as inline properties on the region, which the
+  // flyouts and both dialogs inherit (they are its children). The drag
+  // snap-preview and the canvas-side armed cursor draw on the EDITOR,
+  // not on the rail, and deliberately stay theme-blue.
+  // -------------------------------------------------------------------
+
+  var APPEARANCE_MODES = ['dark', 'light', 'gray', 'custom'];
+
+  var APPEARANCE_LABELS = {
+    dark: __('Dark (default)', 'toolrail'),
+    light: __('Light', 'toolrail'),
+    gray: __('Gray', 'toolrail'),
+    custom: __('Custom colors', 'toolrail')
+  };
+
+  /** Every token applyAppearance() manages — must match the stylesheet's
+      var(--toolrail-…) vocabulary. */
+  var APPEARANCE_TOKENS = [
+    'bg', 'fg', 'fg-strong', 'muted', 'faint', 'grip', 'hover', 'edge',
+    'border', 'field-bg', 'field-border', 'field-hover', 'pressed',
+    'pressed-fg', 'pressed-edge', 'status', 'focus-ring'
+  ];
+
+  /**
+   * Hand-tuned preset token sets, contrast-verified (measured with the
+   * WCAG relative-luminance formula, 2026-08-26):
+   *
+   *   light: fg:bg 16.67, muted 7.0, faint 5.92 (all ≥4.5); grip 4.54,
+   *          ring/pressed/pressed-edge 7.27 on bg (all ≥3);
+   *          pressed-fg:pressed 7.27; field-border:field-bg 4.09;
+   *          status 8.2.
+   *   gray:  fg:bg 11.6, muted 6.91, faint 5.89; grip 4.46, ring/
+   *          pressed/pressed-edge 6.91 on bg; pressed-fg:pressed 9.46;
+   *          field-border:field-bg 5.03; status 6.91.
+   *
+   * Dark is the stylesheet's defaults and ships unchanged.
+   */
+  var APPEARANCE_PRESETS = {
+    light: {
+      'bg': '#ffffff', 'fg': '#1e1e1e', 'fg-strong': '#000000',
+      'muted': '#595959', 'faint': '#646464', 'grip': '#767676',
+      'hover': '#eaeaea', 'edge': '#c6c6c6', 'border': '#c6c6c6',
+      'field-bg': '#f3f3f3', 'field-border': '#767676', 'field-hover': '#e2e2e2',
+      'pressed': '#2145d6', 'pressed-fg': '#ffffff', 'pressed-edge': '#2145d6',
+      'status': '#1d3fc4', 'focus-ring': '#2145d6'
+    },
+    gray: {
+      'bg': '#dcdcde', 'fg': '#1d2327', 'fg-strong': '#000000',
+      'muted': '#3f474d', 'faint': '#4a5157', 'grip': '#5b636a',
+      'hover': '#cbcbce', 'edge': '#8c8f94', 'border': '#8c8f94',
+      'field-bg': '#e9e9ea', 'field-border': '#5b636a', 'field-hover': '#d0d0d3',
+      'pressed': '#1d35b4', 'pressed-fg': '#ffffff', 'pressed-edge': '#1d35b4',
+      'status': '#1d35b4', 'focus-ring': '#1d35b4'
+    }
+  };
+
+  function hexToRgb(hex) {
+    if (typeof hex !== 'string') {
+      return null;
+    }
+    var m = hex.trim().match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i);
+    if (!m) {
+      return null;
+    }
+    var h = m[1];
+    if (h.length === 3) {
+      h = h.charAt(0) + h.charAt(0) + h.charAt(1) + h.charAt(1) + h.charAt(2) + h.charAt(2);
+    }
+    return [
+      parseInt(h.slice(0, 2), 16),
+      parseInt(h.slice(2, 4), 16),
+      parseInt(h.slice(4, 6), 16)
+    ];
+  }
+
+  function rgbToHex(rgb) {
+    return '#' + rgb.map(function (v) {
+      var s = Math.round(Math.min(255, Math.max(0, v))).toString(16);
+      return s.length === 1 ? '0' + s : s;
+    }).join('');
+  }
+
+  function mixRgb(a, b, t) {
+    return [0, 1, 2].map(function (i) {
+      return a[i] + (b[i] - a[i]) * t;
+    });
+  }
+
+  /** WCAG relative luminance. */
+  function relativeLuminance(rgb) {
+    var channels = rgb.map(function (v) {
+      v /= 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  }
+
+  function contrastRatio(a, b) {
+    var l1 = relativeLuminance(a);
+    var l2 = relativeLuminance(b);
+    return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+  }
+
+  /**
+   * Focus ring / pressed-edge color for a background: the first brand
+   * candidate that clears 3:1 on it, else black or white — one of which
+   * ALWAYS clears 3:1 (black does above luminance 0.10, white below
+   * 0.30; the 0.18 split sits inside the overlap), so state visibility
+   * never depends on the author's pair.
+   */
+  function ringColorFor(bg) {
+    var candidates = ['#7b90ff', '#2145d6'];
+    for (var i = 0; i < candidates.length; i++) {
+      if (contrastRatio(hexToRgb(candidates[i]), bg) >= 3) {
+        return candidates[i];
+      }
+    }
+    return relativeLuminance(bg) > 0.18 ? '#000000' : '#ffffff';
+  }
+
+  /**
+   * Derive the full token set from an author's background + foreground
+   * pair. Surfaces mix toward the foreground; text tones mix toward the
+   * background but never below their contrast floor (falling back to
+   * the foreground itself); pressed is foreground-weighted (an inverted
+   * button, so its contrast equals the pair's own); the ring and
+   * pressed-edge are always auto-derived to ≥3:1 regardless of the
+   * pair.
+   */
+  function deriveAppearanceTokens(bgHex, fgHex) {
+    var bg = hexToRgb(bgHex);
+    var fg = hexToRgb(fgHex);
+    if (!bg || !fg) {
+      return null;
+    }
+    var toward = function (t) {
+      return rgbToHex(mixRgb(bg, fg, t));
+    };
+    var textTone = function (t, floor) {
+      var mixed = mixRgb(fg, bg, t);
+      return contrastRatio(mixed, bg) >= floor ? rgbToHex(mixed) : rgbToHex(fg);
+    };
+    var ring = ringColorFor(bg);
+
+    return {
+      'bg': rgbToHex(bg),
+      'fg': rgbToHex(fg),
+      'fg-strong': rgbToHex(fg),
+      'muted': textTone(0.25, 4.5),
+      'faint': textTone(0.35, 4.5),
+      'grip': textTone(0.5, 3),
+      'hover': toward(0.1),
+      'edge': toward(0.16),
+      'border': toward(0.26),
+      'field-bg': toward(0.06),
+      'field-border': toward(0.45),
+      'field-hover': toward(0.14),
+      'pressed': rgbToHex(fg),
+      'pressed-fg': rgbToHex(bg),
+      'pressed-edge': ring,
+      // Status text carries the "your colors fail contrast" warning, so
+      // IT can never be allowed to fail: ring when it reads as text
+      // (≥4.5), else the pair's own fg when that does — else black or
+      // white, split at luminance 0.179, inside the narrow band
+      // (0.175–0.183) where BOTH clear 4.5:1, so the floor is
+      // guaranteed for any background. A plain fg fallback here
+      // rendered the warning at ~1:1 on a dark hostile pair (review
+      // 2026-08-26: bg luminance ≈0.021–0.071, where the light ring
+      // candidate clears 3:1 but not 4.5).
+      'status': contrastRatio(hexToRgb(ring), bg) >= 4.5 ? ring
+        : contrastRatio(fg, bg) >= 4.5 ? rgbToHex(fg)
+          : relativeLuminance(bg) > 0.179 ? '#000000' : '#ffffff',
+      'focus-ring': ring
+    };
+  }
+
+  function loadAppearance() {
+    var out = { mode: 'dark', bg: '#1e1e1e', fg: '#e0e0e0' };
+    try {
+      var raw = readKey(APPEARANCE_KEY);
+      var parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === 'object') {
+        if (APPEARANCE_MODES.indexOf(parsed.mode) !== -1) {
+          out.mode = parsed.mode;
+        }
+        // The pair is kept even while a preset is active, so switching
+        // back to Custom restores the author's colors.
+        if (hexToRgb(parsed.bg)) {
+          out.bg = parsed.bg;
+        }
+        if (hexToRgb(parsed.fg)) {
+          out.fg = parsed.fg;
+        }
+      }
+    } catch (e) {
+      /* Unparseable — the dark default is correct. */
+    }
+    return out;
+  }
+
+  function saveAppearance(appearance) {
+    writeKey(APPEARANCE_KEY, JSON.stringify(appearance));
+  }
+
+  function appearanceTokens(appearance) {
+    if (Object.prototype.hasOwnProperty.call(APPEARANCE_PRESETS, appearance.mode)) {
+      return APPEARANCE_PRESETS[appearance.mode];
+    }
+    if (appearance.mode === 'custom') {
+      return deriveAppearanceTokens(appearance.bg, appearance.fg);
+    }
+    return null;
+  }
+
+  /**
+   * Paint the stored appearance onto the region as inline custom
+   * properties. Dark (or an unresolvable custom pair) clears them, which
+   * hands every token back to the stylesheet defaults.
+   *
+   * @param {HTMLElement} [region] Defaults to the mounted region.
+   * @param {Object}      [tokens] Override token set — used by the color
+   *                               inputs to preview a pair live without
+   *                               persisting each intermediate value.
+   */
+  function applyAppearance(region, tokens) {
+    region = region || document.getElementById('toolrail-region');
+    if (!region) {
+      return;
+    }
+    if (tokens === undefined) {
+      tokens = appearanceTokens(loadAppearance());
+    }
+    APPEARANCE_TOKENS.forEach(function (name) {
+      var prop = '--toolrail-' + name;
+      if (tokens && tokens[name]) {
+        region.style.setProperty(prop, tokens[name]);
+      } else {
+        region.style.removeProperty(prop);
+      }
+    });
   }
 
   // -------------------------------------------------------------------
@@ -521,7 +826,10 @@
   }
 
   function allToolIds() {
-    var ids = [];
+    // The rail's own chrome buttons are not tools, but they carry
+    // data-tool ids the [data-tool="…"] sweeps can reach — a registered
+    // tool must not be able to collide with them.
+    var ids = ['settings', 'help', 'wide-toggle'];
     BUILTIN_TOOLS.forEach(function (t) {
       ids.push(t.id);
       (t.children || []).forEach(function (c) { ids.push(c.id); });
@@ -820,6 +1128,11 @@
           __('%s (pinned block)', 'toolrail'),
           type.title || name
         ),
+        // Wide mode's visible row text: the block title alone — the
+        // "(pinned block)" suffix reads noisy repeated down a rail, and
+        // the accessible name (which keeps it) still contains the
+        // visible text, so WCAG 2.5.3 Label in Name holds.
+        shortLabel: type.title || name,
         hint: __('click in the canvas to insert; manage pinned blocks in Toolbar settings', 'toolrail'),
         icon: '',
         blockIcon: type.icon,
@@ -1423,7 +1736,9 @@
     // Drop any message that never got rendered — closing the dialog
     // before an in-flight file read resolves used to strand it here, and
     // it then surfaced out of context the NEXT time settings was opened.
+    // The appearance section's transient follows the same rule.
     settingsStatus = '';
+    appearanceStatus = '';
     document.removeEventListener('mousedown', onSettingsMousedown, true);
     document.removeEventListener('keydown', onSettingsKeydown, true);
     document.removeEventListener('focusin', onSettingsFocusin, true);
@@ -1607,6 +1922,215 @@
     return fieldset;
   }
 
+  /** The standard separator between the dialog's top-level sections. */
+  function settingsDivider() {
+    var hr = document.createElement('hr');
+    hr.className = 'toolrail-settings-divider';
+    return hr;
+  }
+
+  /**
+   * Wide-mode controls. The checkbox here is the CANONICAL path to wide
+   * mode (keyboard-first, like the position radios); the on-rail
+   * chevron is opt-in sugar that spends toolbar space only when asked
+   * for (owner decision 2026-08-27). Both persist per user.
+   */
+  function buildWideControl() {
+    var fieldset = document.createElement('fieldset');
+    fieldset.className = 'toolrail-settings-widegroup';
+
+    var legend = document.createElement('legend');
+    legend.className = 'toolrail-settings-label';
+    legend.textContent = __('Tool names', 'toolrail');
+    fieldset.appendChild(legend);
+
+    var wideRow = settingsRow('label', 'toolrail-settings-positionrow');
+    var wideInput = document.createElement('input');
+    wideInput.type = 'checkbox';
+    wideInput.id = 'toolrail-settings-wide';
+    wideInput.checked = isWide();
+    wideInput.addEventListener('change', function () {
+      setWide(wideInput.checked);
+    });
+    var wideText = settingsRow('span', '');
+    wideText.textContent = __('Show tool names beside the icons (wide toolbar)', 'toolrail');
+    wideRow.appendChild(wideInput);
+    wideRow.appendChild(wideText);
+    fieldset.appendChild(wideRow);
+
+    var toggleRow = settingsRow('label', 'toolrail-settings-positionrow');
+    var toggleInput = document.createElement('input');
+    toggleInput.type = 'checkbox';
+    toggleInput.id = 'toolrail-settings-widetoggle';
+    toggleInput.checked = isWideToggleShown();
+    toggleInput.addEventListener('change', function () {
+      writeKey(WIDE_TOGGLE_KEY, toggleInput.checked ? '1' : '0');
+      // The chevron enters or leaves the rail — rebuild it. Focus stays
+      // on this checkbox (rerender only moves focus when it was IN the
+      // rail).
+      rerender();
+    });
+    var toggleText = settingsRow('span', '');
+    toggleText.textContent = __('Show an expand/contract button on the toolbar', 'toolrail');
+    toggleRow.appendChild(toggleInput);
+    toggleRow.appendChild(toggleText);
+    fieldset.appendChild(toggleRow);
+
+    // Both preferences persist on every dock; the effect shows where
+    // wide mode applies. Stated rather than disabling the controls —
+    // a disabled checkbox hides its state.
+    var hint = settingsRow('p', 'toolrail-settings-empty');
+    hint.textContent = __('Tool names show on left, right and floating toolbars.', 'toolrail');
+    fieldset.appendChild(hint);
+
+    return fieldset;
+  }
+
+  /** One line reporting the custom pair's contrast, warning below 4.5:1
+      — the pair is applied either way (the author's choice, stated
+      honestly), with the ring and pressed markers auto-derived so state
+      visibility never drops below 3:1. */
+  function pairContrastMessage(appearance) {
+    var ratio = contrastRatio(hexToRgb(appearance.bg), hexToRgb(appearance.fg));
+    // Floor, never round: a pair in the [4.495, 4.5) window rounded up
+    // to "4.5:1" while the raw ratio still tripped the sub-threshold
+    // branch, producing "These colors measure 4.5:1, below the 4.5:1
+    // minimum" (review 2026-08-27). Flooring keeps the shown value
+    // consistent with the branch and never displays a failing pair at
+    // the threshold.
+    var formatted = (Math.floor(ratio * 100) / 100) + ':1';
+    if (ratio < 4.5) {
+      return sprintf(
+        /* translators: %s: measured contrast ratio, e.g. "2.5:1". */
+        __('These colors measure %s, below the 4.5:1 minimum for text. They are applied anyway; the focus ring and pressed markers are adjusted automatically and stay at 3:1 or better.', 'toolrail'),
+        formatted
+      );
+    }
+    return sprintf(
+      /* translators: %s: measured contrast ratio, e.g. "12.6:1". */
+      __('Custom colors applied. Text contrast is %s.', 'toolrail'),
+      formatted
+    );
+  }
+
+  /**
+   * One transient outcome line for the APPEARANCE section, consumed by
+   * its next render — the appearance twin of settingsStatus. It gets its
+   * OWN node inside the fieldset because the shared
+   * #toolrail-settings-status sits under Saved sets AND is bound as the
+   * import file input's accessible description: a contrast warning
+   * written there appeared far from the swatches it was about, and a
+   * screen-reader user tabbing to Import heard it read as that
+   * control's description (review 2026-08-26).
+   */
+  var appearanceStatus = '';
+
+  /**
+   * Appearance picker: three contrast-verified presets plus a custom
+   * background + text pair. A preset switch re-renders the dialog (the
+   * color inputs enable only under Custom); the color inputs apply live
+   * on `input` and persist + report on `change` WITHOUT a rebuild —
+   * refreshing mid-interaction would dismiss the native color picker.
+   */
+  function buildAppearanceControl() {
+    // Its OWN class, not .toolrail-settings-position — the dock radios
+    // are counted and queried through that class, so sharing it would
+    // sweep these radios into the position picker's selectors.
+    var fieldset = document.createElement('fieldset');
+    fieldset.className = 'toolrail-settings-appearance';
+
+    var legend = document.createElement('legend');
+    legend.className = 'toolrail-settings-label';
+    legend.textContent = __('Appearance', 'toolrail');
+    fieldset.appendChild(legend);
+
+    var current = loadAppearance();
+
+    APPEARANCE_MODES.forEach(function (mode) {
+      var row = settingsRow('label', 'toolrail-settings-positionrow');
+      var input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'toolrail-appearance';
+      input.value = mode;
+      input.checked = current.mode === mode;
+      input.dataset.appearance = mode;
+      input.addEventListener('change', function () {
+        if (!input.checked) {
+          return;
+        }
+        var appearance = loadAppearance();
+        appearance.mode = mode;
+        saveAppearance(appearance);
+        applyAppearance();
+        if (mode === 'custom') {
+          appearanceStatus = pairContrastMessage(appearance);
+        }
+        refreshSettings('input[data-appearance="' + mode + '"]');
+      });
+      row.appendChild(input);
+      var text = settingsRow('span', '');
+      text.textContent = APPEARANCE_LABELS[mode];
+      row.appendChild(text);
+      fieldset.appendChild(row);
+    });
+
+    var inputs = {};
+    [
+      { key: 'bg', id: 'toolrail-settings-appearance-bg', label: __('Background color', 'toolrail') },
+      { key: 'fg', id: 'toolrail-settings-appearance-fg', label: __('Text color', 'toolrail') }
+    ].forEach(function (spec) {
+      var row = settingsRow('label', 'toolrail-settings-colorrow');
+      var text = settingsRow('span', 'toolrail-settings-colortext');
+      text.textContent = spec.label;
+      var input = document.createElement('input');
+      input.type = 'color';
+      input.id = spec.id;
+      input.className = 'toolrail-settings-color';
+      input.value = current[spec.key];
+      // Rendered even while a preset is active (disabled), so the pair
+      // is visible and the dialog's shape never jumps.
+      input.disabled = current.mode !== 'custom';
+      inputs[spec.key] = input;
+      row.appendChild(text);
+      row.appendChild(input);
+      fieldset.appendChild(row);
+    });
+
+    // The section's own outcome line, right under the swatches it
+    // reports on. Same render-and-speak contract as the Saved-sets
+    // status; deliberately NOT the shared #toolrail-settings-status
+    // (see appearanceStatus above).
+    var status = settingsRow('p', 'toolrail-settings-status');
+    status.id = 'toolrail-settings-appearance-status';
+    status.textContent = appearanceStatus;
+    fieldset.appendChild(status);
+    if (appearanceStatus) {
+      speak(appearanceStatus);
+    }
+    appearanceStatus = '';
+
+    ['bg', 'fg'].forEach(function (key) {
+      // Live preview while the native picker is open — not persisted;
+      // the change event persists the settled pair.
+      inputs[key].addEventListener('input', function () {
+        applyAppearance(null, deriveAppearanceTokens(inputs.bg.value, inputs.fg.value));
+      });
+      inputs[key].addEventListener('change', function () {
+        var appearance = { mode: 'custom', bg: inputs.bg.value, fg: inputs.fg.value };
+        saveAppearance(appearance);
+        applyAppearance();
+        // Update the status text in place (a dialog rebuild here would
+        // close the native picker and drop focus); speak() owns the
+        // announcement.
+        var msg = pairContrastMessage(appearance);
+        status.textContent = msg;
+        speak(msg);
+      });
+    });
+
+    return fieldset;
+  }
+
   // -------------------------------------------------------------------
   // Saved-set import/export. Sets travel as small JSON files so a set
   // built on one site works on another — including a site whose theme or
@@ -1752,6 +2276,76 @@
     node.appendChild(note);
 
     node.appendChild(buildPositionControl());
+    node.appendChild(settingsDivider());
+    node.appendChild(buildWideControl());
+    node.appendChild(settingsDivider());
+    node.appendChild(buildAppearanceControl());
+    node.appendChild(settingsDivider());
+
+    // --- Pinned blocks, THEN Add a block (one section, this order on
+    // purpose: the list shows what is already on the toolbar, the
+    // search below adds to it, and a new pin lands at the BOTTOM of the
+    // list — right above the search that added it, owner decision
+    // 2026-08-27) ---
+    var pinnedHead = settingsRow('h3', 'toolrail-settings-subtitle');
+    pinnedHead.textContent = __('Pinned blocks', 'toolrail');
+    node.appendChild(pinnedHead);
+
+    var pinnedList = settingsRow('ul', 'toolrail-settings-pinned');
+    var slots = loadSlots();
+    if (!slots.length) {
+      var empty = settingsRow('p', 'toolrail-settings-empty');
+      empty.textContent = __('Nothing pinned yet.', 'toolrail');
+      node.appendChild(empty);
+    }
+    slots.forEach(function (name, i) {
+      var type = wp.blocks.getBlockType(name);
+      var li = settingsRow('li', 'toolrail-settings-pinnedrow');
+      var label = settingsRow('span', 'toolrail-settings-pinnedname');
+      label.textContent = type ? type.title : name + ' ' + __('(inactive)', 'toolrail');
+      li.appendChild(label);
+
+      // Reaching either end disables the arrow that was just clicked, so
+      // each handler offers the opposite arrow on the same row as its
+      // second choice — focus stays on the row the author is moving.
+      var row = '.toolrail-settings-pinnedrow[data-block="' + name + '"] ';
+
+      var up = settingsButton('↑', function () {
+        if (moveSlot(name, -1)) {
+          refreshSettings([row + '.toolrail-settings-up', row + '.toolrail-settings-down']);
+        }
+      }, 'toolrail-settings-up');
+      up.setAttribute('aria-label', sprintf(__('Move %s up', 'toolrail'), label.textContent));
+      up.disabled = i === 0;
+      li.appendChild(up);
+
+      var down = settingsButton('↓', function () {
+        if (moveSlot(name, 1)) {
+          refreshSettings([row + '.toolrail-settings-down', row + '.toolrail-settings-up']);
+        }
+      }, 'toolrail-settings-down');
+      down.setAttribute('aria-label', sprintf(__('Move %s down', 'toolrail'), label.textContent));
+      down.disabled = i === slots.length - 1;
+      li.appendChild(down);
+
+      // Visible text is "Unpin", not "Remove", so that it is contained in
+      // the accessible name "Unpin <block>" (WCAG 2.5.3 Label in Name).
+      // With "Remove" on screen and "Unpin Paragraph" as the name, a
+      // speech-input user saying "click Remove" matched nothing. It also
+      // matches the wording of the block menu's own Unpin item.
+      var remove = settingsButton(__('Unpin', 'toolrail'), function () {
+        unpinBlock(name);
+        refreshSettings('#toolrail-settings-search');
+      }, 'toolrail-settings-remove');
+      remove.setAttribute('aria-label', sprintf(__('Unpin %s', 'toolrail'), label.textContent));
+      li.appendChild(remove);
+
+      li.dataset.block = name;
+      pinnedList.appendChild(li);
+    });
+    if (slots.length) {
+      node.appendChild(pinnedList);
+    }
 
     // --- Add a block ---
     var searchLabel = settingsRow('label', 'toolrail-settings-label');
@@ -1814,68 +2408,8 @@
     search.addEventListener('input', renderResults);
     renderResults();
 
-    // --- Pinned blocks ---
-    var pinnedHead = settingsRow('h3', 'toolrail-settings-subtitle');
-    pinnedHead.textContent = __('Pinned blocks', 'toolrail');
-    node.appendChild(pinnedHead);
-
-    var pinnedList = settingsRow('ul', 'toolrail-settings-pinned');
-    var slots = loadSlots();
-    if (!slots.length) {
-      var empty = settingsRow('p', 'toolrail-settings-empty');
-      empty.textContent = __('Nothing pinned yet.', 'toolrail');
-      node.appendChild(empty);
-    }
-    slots.forEach(function (name, i) {
-      var type = wp.blocks.getBlockType(name);
-      var li = settingsRow('li', 'toolrail-settings-pinnedrow');
-      var label = settingsRow('span', 'toolrail-settings-pinnedname');
-      label.textContent = type ? type.title : name + ' ' + __('(inactive)', 'toolrail');
-      li.appendChild(label);
-
-      // Reaching either end disables the arrow that was just clicked, so
-      // each handler offers the opposite arrow on the same row as its
-      // second choice — focus stays on the row the author is moving.
-      var row = '.toolrail-settings-pinnedrow[data-block="' + name + '"] ';
-
-      var up = settingsButton('↑', function () {
-        if (moveSlot(name, -1)) {
-          refreshSettings([row + '.toolrail-settings-up', row + '.toolrail-settings-down']);
-        }
-      }, 'toolrail-settings-up');
-      up.setAttribute('aria-label', sprintf(__('Move %s up', 'toolrail'), label.textContent));
-      up.disabled = i === 0;
-      li.appendChild(up);
-
-      var down = settingsButton('↓', function () {
-        if (moveSlot(name, 1)) {
-          refreshSettings([row + '.toolrail-settings-down', row + '.toolrail-settings-up']);
-        }
-      }, 'toolrail-settings-down');
-      down.setAttribute('aria-label', sprintf(__('Move %s down', 'toolrail'), label.textContent));
-      down.disabled = i === slots.length - 1;
-      li.appendChild(down);
-
-      // Visible text is "Unpin", not "Remove", so that it is contained in
-      // the accessible name "Unpin <block>" (WCAG 2.5.3 Label in Name).
-      // With "Remove" on screen and "Unpin Paragraph" as the name, a
-      // speech-input user saying "click Remove" matched nothing. It also
-      // matches the wording of the block menu's own Unpin item.
-      var remove = settingsButton(__('Unpin', 'toolrail'), function () {
-        unpinBlock(name);
-        refreshSettings('#toolrail-settings-search');
-      }, 'toolrail-settings-remove');
-      remove.setAttribute('aria-label', sprintf(__('Unpin %s', 'toolrail'), label.textContent));
-      li.appendChild(remove);
-
-      li.dataset.block = name;
-      pinnedList.appendChild(li);
-    });
-    if (slots.length) {
-      node.appendChild(pinnedList);
-    }
-
     // --- Saved sets ---
+    node.appendChild(settingsDivider());
     var setsHead = settingsRow('h3', 'toolrail-settings-subtitle');
     setsHead.textContent = __('Saved sets', 'toolrail');
     node.appendChild(setsHead);
@@ -2024,6 +2558,40 @@
       });
     });
     node.appendChild(importInput);
+
+    // --- Help ---
+    node.appendChild(settingsDivider());
+    var helpHead = settingsRow('h3', 'toolrail-settings-subtitle');
+    helpHead.textContent = __('Help', 'toolrail');
+    node.appendChild(helpHead);
+
+    var helpRow = settingsRow('div', 'toolrail-settings-helprow');
+    helpRow.appendChild(settingsButton(__('Open toolbar help', 'toolrail'), function () {
+      // openHelp closes this dialog on purpose — the panel and the
+      // dialog are sibling surfaces anchored to the same rail.
+      var wrapper = document.getElementById('toolrail-region');
+      if (wrapper) {
+        openHelp(wrapper);
+      }
+    }, 'toolrail-settings-helpbtn'));
+    node.appendChild(helpRow);
+
+    var hideHelpRow = settingsRow('label', 'toolrail-settings-positionrow');
+    var hideHelp = document.createElement('input');
+    hideHelp.type = 'checkbox';
+    hideHelp.id = 'toolrail-settings-helphidden';
+    hideHelp.checked = isHelpHidden();
+    hideHelp.addEventListener('change', function () {
+      writeKey(HELP_HIDDEN_KEY, hideHelp.checked ? '1' : '0');
+      // Rebuild the rail with/without the "?" tool. Focus stays on this
+      // checkbox — rerender() only moves focus when it was in the rail.
+      rerender();
+    });
+    var hideHelpText = settingsRow('span', '');
+    hideHelpText.textContent = __('Hide the Help button from the toolbar (help stays available here)', 'toolrail');
+    hideHelpRow.appendChild(hideHelp);
+    hideHelpRow.appendChild(hideHelpText);
+    node.appendChild(hideHelpRow);
   }
 
   /**
@@ -2039,6 +2607,7 @@
       return;
     }
     closeFlyout(false);
+    closeHelp(false);
 
     var node = settingsRow('div', 'toolrail-settings');
     node.setAttribute('role', 'dialog');
@@ -2067,6 +2636,242 @@
       }
     }
     node.querySelector('#toolrail-settings-search').focus();
+  }
+
+  // -------------------------------------------------------------------
+  // Help panel — the how-to copy that 0.1.5 moved out of every button's
+  // accessible name, given a home a first-time user can find. Same
+  // surface machinery as the settings dialog (placeSurface, syncLayer,
+  // Escape returns focus, click-outside close). Static content only —
+  // nothing here goes through the status machinery, because none of it
+  // is a status.
+  // -------------------------------------------------------------------
+
+  var helpOpen = false;
+
+  function helpNode() {
+    return document.querySelector('.toolrail-help');
+  }
+
+  function helpButton() {
+    var rail = document.getElementById('toolrail-rail');
+    return rail ? rail.querySelector('[data-tool="help"]') : null;
+  }
+
+  function isHelpHidden() {
+    return readKey(HELP_HIDDEN_KEY) === '1';
+  }
+
+  /** Where Escape sends focus back: the "?" tool when it renders, the
+      gear when the author has hidden it (the settings dialog's own Help
+      button cannot take it — that dialog closes when the panel opens). */
+  function helpOpenerButton() {
+    return helpButton() || gearButton();
+  }
+
+  function closeHelp(refocusOpener) {
+    var node = helpNode();
+    if (node) {
+      node.remove();
+    }
+    helpOpen = false;
+    syncLayer();
+    document.removeEventListener('mousedown', onHelpMousedown, true);
+    document.removeEventListener('keydown', onHelpKeydown, true);
+    document.removeEventListener('focusin', onHelpFocusin, true);
+    var btn = helpButton();
+    if (btn) {
+      btn.setAttribute('aria-expanded', 'false');
+    }
+    if (refocusOpener) {
+      var opener = helpOpenerButton();
+      if (opener) {
+        opener.focus();
+      }
+    }
+  }
+
+  function onHelpMousedown(e) {
+    var node = helpNode();
+    var btn = helpButton();
+    if (node && !node.contains(e.target) && e.target !== btn && !(btn && btn.contains(e.target))) {
+      closeHelp(false);
+    }
+  }
+
+  function onHelpKeydown(e) {
+    if (e.key !== 'Escape' || !helpOpen) {
+      return;
+    }
+    // Only claim the Escape when focus is actually in the panel (or on
+    // its button). The auto-opened panel never takes focus, so an
+    // Escape pressed there is aimed at whatever the author IS in — the
+    // inserter, a sidebar. Swallowing it (and yanking focus to the
+    // rail, as closeHelp(true) does) hijacked that press: the inserter
+    // stayed open and the caret teleported (review 2026-08-26). With
+    // focus elsewhere, close quietly and let the event through to its
+    // real target.
+    var node = helpNode();
+    var btn = helpButton();
+    var inside = !!(node && node.contains(document.activeElement))
+      || (btn && document.activeElement === btn);
+    if (inside) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeHelp(true);
+    } else {
+      closeHelp(false);
+    }
+  }
+
+  function onHelpFocusin(e) {
+    if (!helpOpen) {
+      return;
+    }
+    var node = helpNode();
+    var btn = helpButton();
+    if (!node || node.contains(e.target) || e.target === btn || (btn && btn.contains(e.target))) {
+      return;
+    }
+    closeHelp(false);
+  }
+
+  function helpSections() {
+    return [
+      {
+        title: __('Inserting with a tool', 'toolrail'),
+        body: [
+          __('Select a tool, then click in the canvas. The tool\'s block is inserted at the click point and the toolbar returns to Select.', 'toolrail'),
+          __('Shift-click in the canvas to keep the tool armed for repeat inserts. Press Escape to return to Select at any time.', 'toolrail')
+        ]
+      },
+      {
+        title: __('Pinning blocks', 'toolrail'),
+        body: [
+          __('Pin any block type as a quick-insert tool: search under "Add a block" in Toolbar settings, drag a block from the inserter onto the toolbar, or choose "Pin to toolbar" in a block\'s options menu.', 'toolrail'),
+          __('Remove a pin with Unpin in Toolbar settings, or "Unpin from toolbar" in the block\'s options menu.', 'toolrail')
+        ]
+      },
+      {
+        title: __('Moving the toolbar', 'toolrail'),
+        body: [
+          __('Drag the toolbar by its grip and release near an edge to dock it there, or let go anywhere to float it over the editor.', 'toolrail'),
+          __('The keyboard path: pick a position under "Toolbar position" in Toolbar settings.', 'toolrail')
+        ]
+      },
+      {
+        title: __('Keyboard', 'toolrail'),
+        body: [
+          __('The toolbar is one Tab stop. Arrow keys move between tools, following the toolbar\'s orientation; Home and End jump to the ends.', 'toolrail'),
+          __('ArrowRight opens a tool\'s flyout on a vertical toolbar; ArrowDown opens it on a horizontal one. Escape closes any open panel.', 'toolrail')
+        ]
+      },
+      {
+        title: __('Saved sets', 'toolrail'),
+        body: [
+          __('Save the current pinned arrangement as a named set in Toolbar settings, and load a set to switch arrangements.', 'toolrail'),
+          __('Export a set as a small JSON file and import it on another site. Blocks the site does not have stay in the set and appear when their plugin or theme is active.', 'toolrail')
+        ]
+      }
+    ];
+  }
+
+  /**
+   * @param {HTMLElement} wrapper The region to hang the panel in.
+   * @param {Object}      opts    {takeFocus: false} for the first-run
+   *                              auto-open, which must not steal the
+   *                              author's caret. Explicit opens move
+   *                              focus into the panel so Escape and Tab
+   *                              behave like the settings dialog.
+   */
+  function openHelp(wrapper, opts) {
+    if (helpOpen) {
+      closeHelp(true);
+      return;
+    }
+    closeFlyout(false);
+    closeSettings(false);
+
+    var options = opts || {};
+    var node = settingsRow('div', 'toolrail-help');
+    node.setAttribute('role', 'dialog');
+    node.setAttribute('aria-labelledby', 'toolrail-help-title');
+    node.tabIndex = -1;
+
+    var head = settingsRow('div', 'toolrail-settings-head');
+    var title = settingsRow('h2', 'toolrail-settings-title');
+    title.textContent = __('Toolbar help', 'toolrail');
+    title.id = 'toolrail-help-title';
+    head.appendChild(title);
+    var close = settingsButton('×', function () { closeHelp(true); }, 'toolrail-settings-close');
+    close.setAttribute('aria-label', __('Close toolbar help', 'toolrail'));
+    head.appendChild(close);
+    node.appendChild(head);
+
+    helpSections().forEach(function (section) {
+      var h = settingsRow('h3', 'toolrail-settings-subtitle');
+      h.textContent = section.title;
+      node.appendChild(h);
+      section.body.forEach(function (line) {
+        var p = settingsRow('p', 'toolrail-help-copy');
+        p.textContent = line;
+        node.appendChild(p);
+      });
+    });
+
+    wrapper.appendChild(node);
+    helpOpen = true;
+    syncLayer();
+
+    var btn = helpButton();
+    if (btn) {
+      btn.setAttribute('aria-expanded', 'true');
+    }
+    placeSurface(node, btn || gearButton(), wrapper);
+    document.addEventListener('mousedown', onHelpMousedown, true);
+    document.addEventListener('keydown', onHelpKeydown, true);
+
+    // The focusin close is for a panel the author is INSIDE of and tabs
+    // past. The auto-opened panel never holds focus — on a new post the
+    // editor moves focus to the title moments after boot, and a focusin
+    // listener would read that as "the author left" and close the panel
+    // before it was ever seen. Click-outside and Escape still close it.
+    if (options.takeFocus !== false) {
+      document.addEventListener('focusin', onHelpFocusin, true);
+      node.focus();
+    }
+  }
+
+  /**
+   * First-run auto-open: once per account (the `toolrail-help-seen`
+   * stamp goes through the account preferences like every other key),
+   * never again unless invoked — closing IS dismissal, so there is no
+   * "don't show this again" affordance.
+   *
+   * The 400ms delay gives the preferences persistence attach a beat to
+   * resolve, so a stamp set on another browser is normally visible
+   * before this reads it. If the attach still lands later, the worst
+   * case is one extra auto-open — accepted, matching the tolerance the
+   * migration lift already lives with.
+   */
+  var helpFirstRunChecked = false;
+
+  function maybeAutoOpenHelp() {
+    if (helpFirstRunChecked) {
+      return;
+    }
+    helpFirstRunChecked = true;
+    window.setTimeout(function () {
+      if (helpOpen || settingsOpen || isHelpHidden() || readKey(HELP_SEEN_KEY) !== null) {
+        return;
+      }
+      var wrapper = document.getElementById('toolrail-region');
+      if (!wrapper) {
+        return;
+      }
+      writeKey(HELP_SEEN_KEY, '1');
+      openHelp(wrapper, { takeFocus: false });
+    }, 400);
   }
 
   // -------------------------------------------------------------------
@@ -2103,7 +2908,7 @@
     if (!region) {
       return;
     }
-    var wantsTop = settingsOpen || !!openFlyout || !!drag || position.dock === 'float';
+    var wantsTop = settingsOpen || helpOpen || !!openFlyout || !!drag || position.dock === 'float';
     region.classList.toggle('is-raised', wantsTop);
   }
 
@@ -2217,6 +3022,7 @@
 
     closeFlyout(false);
     closeSettings(false);
+    closeHelp(false);
 
     var existing = document.getElementById('toolrail-region');
     if (existing) {
@@ -2318,6 +3124,7 @@
     e.preventDefault();
     closeFlyout(false);
     closeSettings(false);
+    closeHelp(false);
 
     var rect = region.getBoundingClientRect();
     drag = {
@@ -2445,6 +3252,13 @@
     icon.setAttribute('aria-hidden', 'true');
     btn.appendChild(icon);
 
+    // Visible only in wide mode (CSS). The accessible name stays the
+    // aria-label above, which always contains this text.
+    var labelSpan = document.createElement('span');
+    labelSpan.className = 'toolrail-tool-label';
+    labelSpan.textContent = tool.shortLabel || tool.label;
+    btn.appendChild(labelSpan);
+
     if (tool.children && tool.children.length) {
       btn.setAttribute('aria-haspopup', 'true');
       btn.setAttribute('aria-expanded', 'false');
@@ -2504,8 +3318,12 @@
 
   function buildRail(wrapper) {
     // The previous generation of pinned-icon React roots belongs to the
-    // rail this one replaces.
+    // rail this one replaces — and so does its scroll observer.
     disposeIconRoots();
+    if (railScrollObserver) {
+      railScrollObserver.disconnect();
+      railScrollObserver = null;
+    }
 
     var rail = document.createElement('div');
     rail.id = 'toolrail-rail';
@@ -2513,35 +3331,201 @@
     rail.setAttribute('aria-orientation', isVertical() ? 'vertical' : 'horizontal');
     rail.setAttribute('aria-label', __('Tools', 'toolrail'));
 
-    rail.appendChild(buildGrip());
+    // The head shares the scroll/tail container grammar (and, crucially,
+    // their cross-axis padding): the chevron is a .toolrail-tool, so
+    // wide mode sizes it width:100% — as a DIRECT rail child it measured
+    // 199px against 191px tool rows and its pressed edge bar rendered
+    // outside the rail onto the editor (review 2026-08-27, finding 1).
+    var head = document.createElement('div');
+    head.className = 'toolrail-head';
+    head.appendChild(buildGrip());
+
+    // Wide-mode chevron, at the rail's head beside the grip — OPT-IN
+    // via Toolbar settings (isWideToggleShown; owner decision
+    // 2026-08-27: it spends prime toolbar space, and the settings
+    // checkbox is the canonical path to wide mode). When shown it is a
+    // REAL focusable button (the grip is pointer-only sugar; this must
+    // not be): it joins the toolbar's roving tabindex via
+    // .toolrail-tool, so Home lands on it and arrows reach it, keeping
+    // the one-tab-stop contract. Vertical docks and the floating
+    // palette only — a label-per-tool row makes a horizontal bar
+    // unusably long, so the toggle does not render on top/bottom (V1
+    // decision, roadmap R2).
+    if (isVertical() && isWideToggleShown()) {
+      var wideToggle = document.createElement('button');
+      wideToggle.type = 'button';
+      wideToggle.className = 'toolrail-tool toolrail-tool--wide-toggle';
+      wideToggle.dataset.tool = 'wide-toggle';
+      wideToggle.setAttribute('aria-label', __('Show tool names', 'toolrail'));
+      wideToggle.title = __('Show tool names', 'toolrail');
+      wideToggle.setAttribute('aria-pressed', isWide() ? 'true' : 'false');
+      wideToggle.tabIndex = -1;
+      var wideIcon = document.createElement('span');
+      wideIcon.className = 'toolrail-tool-icon';
+      wideIcon.innerHTML = ICONS.chevron;
+      wideIcon.setAttribute('aria-hidden', 'true');
+      wideToggle.appendChild(wideIcon);
+      var wideLabel = document.createElement('span');
+      wideLabel.className = 'toolrail-tool-label';
+      // Contained in the accessible name "Show tool names" (2.5.3).
+      wideLabel.textContent = __('Tool names', 'toolrail');
+      wideToggle.appendChild(wideLabel);
+      wideToggle.addEventListener('click', function () {
+        // setWide owns the pressed-state paint (shared with the
+        // settings checkbox).
+        setWide(!isWide());
+      });
+      head.appendChild(wideToggle);
+    }
+    rail.appendChild(head);
 
     var model = railModel();
+
+    // A rail carrying many provider tools and pins can be taller than
+    // the editor, so the TOOLS live in their own scrolling section while
+    // the head (grip, chevron) and the tail (Help, the gear) stay
+    // pinned and visible at any height — before this split the whole
+    // rail scrolled and the gear, the recovery path for everything, was
+    // the first thing pushed below the fold (measured 2026-08-27 on a
+    // 14-tool rail: content 833px in a 671px editor). Descendant sweeps
+    // (roving tabindex, syncPressed, gearButton) are unaffected — they
+    // query the rail, not its direct children.
+    var scrollArea = document.createElement('div');
+    scrollArea.className = 'toolrail-scroll';
 
     // Order: Select, then the pinned slots (Text/Heading/Image ship as
     // defaults there), then the remaining built-ins (Shape, Section), then
     // registered top-level tools — so the default rail reads select · text
     // · heading · image exactly as it did when those were built-ins.
-    rail.appendChild(buildToolButton(model.tools[0], wrapper));
+    scrollArea.appendChild(buildToolButton(model.tools[0], wrapper));
 
     model.slots.forEach(function (slot) {
-      rail.appendChild(buildToolButton(slot, wrapper));
+      scrollArea.appendChild(buildToolButton(slot, wrapper));
     });
 
-    rail.appendChild(buildSeparator());
+    scrollArea.appendChild(buildSeparator());
     model.tools.slice(1, BUILTIN_TOOLS.length).forEach(function (tool) {
-      rail.appendChild(buildToolButton(tool, wrapper));
+      scrollArea.appendChild(buildToolButton(tool, wrapper));
     });
 
     var registeredTop = model.tools.slice(BUILTIN_TOOLS.length);
     if (registeredTop.length) {
-      rail.appendChild(buildSeparator());
+      scrollArea.appendChild(buildSeparator());
       registeredTop.forEach(function (tool) {
-        rail.appendChild(buildToolButton(tool, wrapper));
+        scrollArea.appendChild(buildToolButton(tool, wrapper));
       });
     }
 
+    // The tools section hides its NATIVE scrollbars entirely (CSS): in a
+    // 44px-wide column a classic Windows vertical scrollbar steals width
+    // from the fixed-width tools, which then overflow sideways by a few
+    // pixels and summon a horizontal scrollbar strip at the section's
+    // foot (the owner's screenshot, 2026-08-27). These step buttons are
+    // the visible affordance instead — each renders only while there is
+    // more to scroll in its direction, Photoshop-style. Pointer sugar
+    // like the grip (aria-hidden, unfocusable): wheel and touch scroll
+    // the section directly, and the keyboard path is the arrow keys,
+    // which scroll the focused tool into view.
+    function buildScrollStep(dir) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toolrail-scrollbtn';
+      btn.dataset.dir = dir;
+      btn.setAttribute('aria-hidden', 'true');
+      btn.tabIndex = -1;
+      btn.title = __('Scroll the tools', 'toolrail');
+      btn.hidden = true;
+      // A real <button> takes focus on mousedown even at tabIndex -1 —
+      // the grip never had this problem only because it is a <div>. An
+      // aria-hidden element must never HOLD focus (it vanishes from the
+      // accessibility tree while focused), so refuse the focus while
+      // keeping the click (review 2026-08-27, finding 2).
+      btn.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+      });
+      btn.addEventListener('click', function () {
+        var delta = dir === 'prev' ? -1 : 1;
+        // Instant, not smooth — a smooth scroll here would need the
+        // triple motion-flatten; an instant step needs nothing.
+        if (isVertical()) {
+          scrollArea.scrollBy(0, delta * Math.max(88, scrollArea.clientHeight * 0.6));
+        } else {
+          // RTL x-scrolling runs NEGATIVE from the right edge, so
+          // "forward through the tools" flips sign there.
+          var rtl = getComputedStyle(scrollArea).direction === 'rtl';
+          scrollArea.scrollBy((rtl ? -delta : delta) * Math.max(88, scrollArea.clientWidth * 0.6), 0);
+        }
+      });
+      return btn;
+    }
+    var scrollPrev = buildScrollStep('prev');
+    var scrollNext = buildScrollStep('next');
+
+    function syncScrollSteps() {
+      var vertical = isVertical();
+      // abs() because RTL reports scrollLeft as 0..-max; the distance
+      // from the start is what the buttons care about on either side.
+      var pos = vertical ? scrollArea.scrollTop : Math.abs(scrollArea.scrollLeft);
+      var max = vertical
+        ? scrollArea.scrollHeight - scrollArea.clientHeight
+        : scrollArea.scrollWidth - scrollArea.clientWidth;
+      scrollPrev.hidden = pos <= 0;
+      scrollNext.hidden = pos >= max - 1;
+    }
+    scrollArea.addEventListener('scroll', syncScrollSteps);
+    if (window.ResizeObserver) {
+      // The initial sync below runs before the rail is in the DOM (all
+      // sizes read 0, so both buttons hide); the observer fires once
+      // the section gets its real box after insertion, and again on any
+      // editor resize — panel toggles included.
+      railScrollObserver = new ResizeObserver(syncScrollSteps);
+      railScrollObserver.observe(scrollArea);
+    }
+    syncScrollSteps();
+    // Post-insertion pass: mount() inserts the rail synchronously after
+    // buildRail returns, so this reads real sizes even in a browser
+    // with no ResizeObserver — with native scrollbars hidden, the step
+    // buttons are the ONLY scroll affordance and must not depend on the
+    // observer alone.
+    window.setTimeout(syncScrollSteps, 0);
+
+    rail.appendChild(scrollPrev);
+    rail.appendChild(scrollArea);
+    rail.appendChild(scrollNext);
+
+    // The always-visible tail. The help "?" sits last-but-one, beside
+    // the gear — unless the author hid it (Toolbar settings), in which
+    // case the panel stays reachable from the Help button inside that
+    // dialog.
+    var tail = document.createElement('div');
+    tail.className = 'toolrail-tail';
+    tail.appendChild(buildSeparator());
+    if (!isHelpHidden()) {
+      var help = document.createElement('button');
+      help.type = 'button';
+      help.className = 'toolrail-tool toolrail-tool--help';
+      help.dataset.tool = 'help';
+      help.setAttribute('aria-label', __('Toolbar help', 'toolrail'));
+      help.title = __('Toolbar help', 'toolrail');
+      help.setAttribute('aria-haspopup', 'dialog');
+      help.setAttribute('aria-expanded', helpOpen ? 'true' : 'false');
+      help.tabIndex = -1;
+      var helpIcon = document.createElement('span');
+      helpIcon.className = 'toolrail-tool-icon';
+      helpIcon.innerHTML = ICONS.help;
+      helpIcon.setAttribute('aria-hidden', 'true');
+      help.appendChild(helpIcon);
+      var helpLabel = document.createElement('span');
+      helpLabel.className = 'toolrail-tool-label';
+      helpLabel.textContent = __('Help', 'toolrail');
+      help.appendChild(helpLabel);
+      help.addEventListener('click', function () {
+        openHelp(wrapper);
+      });
+      tail.appendChild(help);
+    }
+
     // The settings gear is always the rail's last control.
-    rail.appendChild(buildSeparator());
     var gear = document.createElement('button');
     gear.type = 'button';
     gear.className = 'toolrail-tool toolrail-tool--settings';
@@ -2556,13 +3540,22 @@
     gearIcon.innerHTML = ICONS.gear;
     gearIcon.setAttribute('aria-hidden', 'true');
     gear.appendChild(gearIcon);
+    var gearLabel = document.createElement('span');
+    gearLabel.className = 'toolrail-tool-label';
+    gearLabel.textContent = __('Settings', 'toolrail');
+    gear.appendChild(gearLabel);
     gear.addEventListener('click', function () {
       openSettings(wrapper);
     });
-    rail.appendChild(gear);
+    tail.appendChild(gear);
+    rail.appendChild(tail);
 
-    // Roving tabindex: the first button is the single tab stop.
-    var firstBtn = rail.querySelector('.toolrail-tool');
+    // Roving tabindex: exactly one tab stop. The INITIAL stop is Select
+    // (the primary tool), not whatever happens to render first — the
+    // wide-mode chevron sits ahead of it in DOM order but is chrome, not
+    // where entering the toolbar should land. Home/End and arrows still
+    // reach every control, chevron included.
+    var firstBtn = rail.querySelector('[data-tool="select"]') || rail.querySelector('.toolrail-tool');
     if (firstBtn) {
       firstBtn.tabIndex = 0;
     }
@@ -2617,6 +3610,13 @@
     // Every dock-dependent style keys off this: rail orientation, which
     // border carries the edge, and which way surfaces open.
     wrapper.dataset.dock = position.dock;
+    // Wide mode is persisted independently of the dock; the wide CSS is
+    // keyed to vertical docks + float, so a stored wide state is simply
+    // inert while the rail is horizontal.
+    if (isWide()) {
+      wrapper.dataset.wide = 'true';
+    }
+    applyAppearance(wrapper);
 
     wrapper.appendChild(buildRail(wrapper));
 
@@ -2748,14 +3748,17 @@
     // A destroyed region takes the settings dialog with it, but not the
     // module state that says one is open — without this the rebuilt gear
     // renders aria-expanded="true" with no dialog behind it, and its
-    // listeners outlive the node they were bound for.
+    // listeners outlive the node they were bound for. Same for the help
+    // panel.
     closeSettings(false);
+    closeHelp(false);
 
     place.parent.insertBefore(buildWrapper(), place.before);
     applyFloatPosition();
     syncLayer();
     // Force: a re-mounted rail carries brand-new buttons.
     syncPressed(true);
+    maybeAutoOpenHelp();
     return true;
   }
 
@@ -2781,7 +3784,7 @@
     }
     syncPressed(true);
     if (hadFocus) {
-      var first = newRail.querySelector('.toolrail-tool');
+      var first = newRail.querySelector('[data-tool="select"]') || newRail.querySelector('.toolrail-tool');
       if (first) {
         first.focus();
       }
