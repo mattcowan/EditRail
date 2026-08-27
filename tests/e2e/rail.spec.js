@@ -36,6 +36,9 @@ async function openNewPost(page) {
       'toolrail-quick-slots',
       'toolrail-slot-configs',
       'toolrail-slots-migrated',
+      'toolrail-help-hidden',
+      'toolrail-wide',
+      'toolrail-appearance',
     ];
     let had = false;
     keys.forEach((k) => {
@@ -53,6 +56,16 @@ async function openNewPost(page) {
           disp.set('toolrail', k, undefined);
         }
       });
+      // The help-seen stamp is the ONE key that must be SET, not
+      // cleared: clearing it would auto-open the help panel over every
+      // later spec. (The first-ever pageload on a fresh account stamps
+      // it itself by auto-opening — the reload below then starts that
+      // spec from the stamped state.) The dedicated first-run test
+      // clears it deliberately.
+      if (sel.get('toolrail', 'toolrail-help-seen') !== '1') {
+        had = true;
+        disp.set('toolrail', 'toolrail-help-seen', '1');
+      }
     } catch (e) {
       /* Store not ready — nothing stored there either, then. */
     }
@@ -124,8 +137,12 @@ test.describe('rail chrome + APG toolbar', () => {
     await page.keyboard.press('End');
     const last = await page.evaluate(() => document.activeElement.dataset.tool);
     expect(last).toBeTruthy();
+    // Home lands on the FIRST toolbar control — since 0.1.10 that is the
+    // wide-mode chevron at the rail's head, not Select. Intent unchanged
+    // (Home reaches the start of the arrow order); only the control that
+    // sits there moved.
     await page.keyboard.press('Home');
-    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('select');
+    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('wide-toggle');
   });
 
   test('survives list view and the code-editor round-trip', async ({ page }) => {
@@ -218,11 +235,12 @@ test.describe('quick slots', () => {
     await openNewPost(page);
 
     // Fresh state (openNewPost cleared the key): the three defaults render
-    // as slots between Select and the remaining built-ins, in order.
+    // as slots between Select and the remaining built-ins, in order. The
+    // wide-mode chevron (0.1.10) sits ahead of Select as rail chrome.
     const order = await page.evaluate(() =>
       Array.from(document.querySelectorAll('#toolrail-rail .toolrail-tool')).map((b) => b.dataset.tool)
     );
-    expect(order.slice(0, 4)).toEqual(['select', 'pin:core/paragraph', 'pin:core/heading', 'pin:core/image']);
+    expect(order.slice(0, 5)).toEqual(['wide-toggle', 'select', 'pin:core/paragraph', 'pin:core/heading', 'pin:core/image']);
     expect(order).toContain('shape');
 
     // Defaults are ordinary slots: reorder Heading above Text.
@@ -230,7 +248,7 @@ test.describe('quick slots', () => {
     const reordered = await page.evaluate(() =>
       Array.from(document.querySelectorAll('#toolrail-rail .toolrail-tool')).map((b) => b.dataset.tool)
     );
-    expect(reordered.slice(1, 3)).toEqual(['pin:core/heading', 'pin:core/paragraph']);
+    expect(reordered.slice(2, 4)).toEqual(['pin:core/heading', 'pin:core/paragraph']);
   });
 
   test('unpin and re-pin via the block menu, persist across reload, settings Remove unpins', async ({ page }) => {
@@ -1510,5 +1528,288 @@ test.describe('account persistence', () => {
     await expect(fresh.locator('#toolrail-rail [data-tool="pin:core/quote"]')).toBeVisible();
 
     await ctx.close();
+  });
+});
+
+test.describe('help panel', () => {
+  test('first-run auto-open happens once, without stealing focus, then never again', async ({ page }) => {
+    await openNewPost(page);
+
+    // Simulate a first run: clear the seen stamp and reload. (openNewPost
+    // deliberately SETS the stamp for every other spec.)
+    await page.evaluate(() => {
+      window.wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-help-seen', undefined);
+      window.localStorage.removeItem('toolrail-help-seen');
+    });
+    await page.reload();
+    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+
+    // Auto-opens (after its 400ms breather) and stamps the account.
+    await expect(page.locator('.toolrail-help')).toBeVisible({ timeout: 5000 });
+    await expect.poll(async () => await getPref(page, 'toolrail-help-seen')).toBe('1');
+
+    // The auto-open must not steal the author's caret.
+    const focusInPanel = await page.evaluate(() => {
+      const panel = document.querySelector('.toolrail-help');
+      return panel.contains(document.activeElement);
+    });
+    expect(focusInPanel).toBe(false);
+
+    // Closing is dismissal — the next load (stamp set) stays closed.
+    await page.reload();
+    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+    await page.waitForTimeout(900); // outlive the auto-open delay
+    await expect(page.locator('.toolrail-help')).toHaveCount(0);
+  });
+
+  test('opens from the "?" tool; Escape closes and returns focus to it', async ({ page }) => {
+    await openNewPost(page);
+
+    const helpBtn = page.locator('#toolrail-rail [data-tool="help"]');
+    await expect(helpBtn).toHaveAttribute('aria-haspopup', 'dialog');
+    await helpBtn.click();
+
+    const panel = page.locator('.toolrail-help');
+    await expect(panel).toBeVisible();
+    await expect(panel).toHaveAttribute('role', 'dialog');
+    await expect(panel).toHaveAttribute('aria-labelledby', 'toolrail-help-title');
+    await expect(panel.locator('#toolrail-help-title')).toHaveText('Toolbar help');
+    await expect(helpBtn).toHaveAttribute('aria-expanded', 'true');
+
+    // All five sections render as headed text.
+    await expect(panel.locator('h3')).toHaveCount(5);
+
+    // An explicit open moves focus into the panel…
+    const focusInPanel = await page.evaluate(() => {
+      const node = document.querySelector('.toolrail-help');
+      return node === document.activeElement || node.contains(document.activeElement);
+    });
+    expect(focusInPanel).toBe(true);
+
+    // …and Escape closes it, handing focus back to the opener.
+    await page.keyboard.press('Escape');
+    await expect(panel).toHaveCount(0);
+    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('help');
+    await expect(helpBtn).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  test('the hide checkbox removes the tool but keeps the settings path', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('#toolrail-settings-helphidden').check();
+    await expect(page.locator('#toolrail-rail [data-tool="help"]')).toHaveCount(0);
+    expect(await getPref(page, 'toolrail-help-hidden')).toBe('1');
+
+    // The panel stays reachable from the dialog's own Help button, and
+    // opening it closes the dialog (they are sibling surfaces).
+    await page.locator('.toolrail-settings-helpbtn').click();
+    await expect(page.locator('.toolrail-help')).toBeVisible();
+    await expect(page.locator('.toolrail-settings')).toHaveCount(0);
+
+    // With the "?" hidden, Escape falls back to the gear.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.toolrail-help')).toHaveCount(0);
+    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('settings');
+
+    // Unhiding restores the tool.
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('#toolrail-settings-helphidden').uncheck();
+    await expect(page.locator('#toolrail-rail [data-tool="help"]')).toBeVisible();
+  });
+});
+
+test.describe('wide mode', () => {
+  test('the chevron toggles icon + name rows and persists', async ({ page }) => {
+    await openNewPost(page);
+
+    const toggle = page.locator('#toolrail-rail [data-tool="wide-toggle"]');
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    const selectLabel = page.locator('#toolrail-rail [data-tool="select"] .toolrail-tool-label');
+    await expect(selectLabel).toBeHidden();
+
+    await toggle.click();
+    await expect(page.locator('#toolrail-region')).toHaveAttribute('data-wide', 'true');
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await expect(selectLabel).toBeVisible();
+    await expect(selectLabel).toHaveText('Select');
+    // Pinned slots show the block title WITHOUT the "(pinned block)"
+    // suffix — the accessible name keeps it (Label in Name holds).
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"] .toolrail-tool-label')).toHaveText('Paragraph');
+    const width = await page.evaluate(() => document.getElementById('toolrail-region').getBoundingClientRect().width);
+    expect(width).toBeGreaterThan(150);
+
+    expect(await getPref(page, 'toolrail-wide')).toBe('1');
+    await page.reload();
+    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('#toolrail-region')).toHaveAttribute('data-wide', 'true');
+
+    await page.locator('#toolrail-rail [data-tool="wide-toggle"]').click();
+    await expect(page.locator('#toolrail-region')).not.toHaveAttribute('data-wide', 'true');
+    expect(await getPref(page, 'toolrail-wide')).toBe('0');
+  });
+
+  test('wide mode keeps one tab stop and the arrow order', async ({ page }) => {
+    await openNewPost(page);
+    await page.locator('#toolrail-rail [data-tool="wide-toggle"]').click();
+
+    const stops = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#toolrail-rail .toolrail-tool'))
+        .filter((b) => b.tabIndex === 0).length
+    );
+    expect(stops).toBe(1);
+
+    await page.locator('#toolrail-rail [data-tool="select"]').focus();
+    await page.keyboard.press('ArrowUp');
+    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('wide-toggle');
+    await page.keyboard.press('ArrowDown');
+    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('select');
+    await page.keyboard.press('ArrowDown');
+    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('pin:core/paragraph');
+  });
+
+  test('the chevron does not render on horizontal docks', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.evaluate(() => window.toolrail.setDock('top'));
+    await expect(page.locator('#toolrail-region')).toHaveAttribute('data-dock', 'top');
+    await expect(page.locator('#toolrail-rail [data-tool="wide-toggle"]')).toHaveCount(0);
+
+    await page.evaluate(() => window.toolrail.setDock('left'));
+    await expect(page.locator('#toolrail-rail [data-tool="wide-toggle"]')).toBeVisible();
+  });
+
+  test('flyouts and the settings dialog still place correctly in wide mode', async ({ page }) => {
+    await openNewPost(page);
+    await page.locator('#toolrail-rail [data-tool="wide-toggle"]').click();
+
+    await page.locator('#toolrail-rail [data-tool="shape"]').click();
+    await expect(page.locator('.toolrail-flyout')).toBeVisible();
+    const flyoutPlaced = await page.evaluate(() => {
+      const rail = document.getElementById('toolrail-rail').getBoundingClientRect();
+      const menu = document.querySelector('.toolrail-flyout').getBoundingClientRect();
+      return {
+        awayFromRail: menu.left >= rail.right - 1,
+        onScreen: menu.right <= window.innerWidth && menu.bottom <= window.innerHeight,
+      };
+    });
+    expect(flyoutPlaced.awayFromRail).toBe(true);
+    expect(flyoutPlaced.onScreen).toBe(true);
+    await page.keyboard.press('Escape');
+
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await expect(page.locator('.toolrail-settings')).toBeVisible();
+    const dialogPlaced = await page.evaluate(() => {
+      const rail = document.getElementById('toolrail-rail').getBoundingClientRect();
+      const d = document.querySelector('.toolrail-settings').getBoundingClientRect();
+      return d.left >= rail.right - 1 && d.right <= window.innerWidth;
+    });
+    expect(dialogPlaced).toBe(true);
+  });
+});
+
+/** Set a color input the way the native picker does: value + input +
+    change. (Playwright's fill() refuses input[type=color].) */
+async function setColor(page, id, value) {
+  await page.evaluate(({ inputId, hex }) => {
+    const input = document.getElementById(inputId);
+    input.value = hex;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }, { inputId: id, hex: value });
+}
+
+test.describe('appearance', () => {
+  test('presets recolor the rail and its surfaces, and persist', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('input[data-appearance="light"]').check();
+
+    await expect.poll(async () => page.evaluate(() =>
+      getComputedStyle(document.getElementById('toolrail-rail')).backgroundColor
+    )).toBe('rgb(255, 255, 255)');
+    expect(JSON.parse(await getPref(page, 'toolrail-appearance')).mode).toBe('light');
+
+    // The dialog inherits the region's tokens — one surface tone.
+    expect(await page.evaluate(() =>
+      getComputedStyle(document.querySelector('.toolrail-settings')).backgroundColor
+    )).toBe('rgb(255, 255, 255)');
+
+    await page.reload();
+    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+    expect(await page.evaluate(() =>
+      getComputedStyle(document.getElementById('toolrail-rail')).backgroundColor
+    )).toBe('rgb(255, 255, 255)');
+
+    // Dark clears the inline tokens instead of restating them, so the
+    // stylesheet defaults are back in charge.
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('input[data-appearance="dark"]').check();
+    await expect.poll(async () => page.evaluate(() =>
+      getComputedStyle(document.getElementById('toolrail-rail')).backgroundColor
+    )).toBe('rgb(30, 30, 30)');
+    expect(await page.evaluate(() =>
+      document.getElementById('toolrail-region').style.getPropertyValue('--toolrail-bg')
+    )).toBe('');
+  });
+
+  test('a custom pair applies; a low-contrast pair warns in text but is honored', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('input[data-appearance="custom"]').check();
+
+    await expect(page.locator('#toolrail-settings-appearance-bg')).toBeEnabled();
+
+    // A hostile pair: mid-grays at ~1.6:1.
+    await setColor(page, 'toolrail-settings-appearance-bg', '#777777');
+    await setColor(page, 'toolrail-settings-appearance-fg', '#999999');
+
+    await expect.poll(async () => page.evaluate(() =>
+      getComputedStyle(document.getElementById('toolrail-rail')).backgroundColor
+    )).toBe('rgb(119, 119, 119)');
+
+    // The warning is text in the dialog (and spoken via wp.a11y), never
+    // color alone — and the pair is still applied and stored.
+    await expect(page.locator('#toolrail-settings-status')).toContainText('below the 4.5:1 minimum');
+    expect(JSON.parse(await getPref(page, 'toolrail-appearance')))
+      .toEqual({ mode: 'custom', bg: '#777777', fg: '#999999' });
+  });
+
+  test('the focus ring and pressed edge stay at 3:1 or better for a hostile pair', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('input[data-appearance="custom"]').check();
+    await setColor(page, 'toolrail-settings-appearance-bg', '#777777');
+    await setColor(page, 'toolrail-settings-appearance-fg', '#999999');
+
+    const measured = await page.evaluate(() => {
+      const cs = getComputedStyle(document.getElementById('toolrail-region'));
+      const get = (t) => cs.getPropertyValue('--toolrail-' + t).trim();
+      const h2r = (h) => {
+        const m = h.replace('#', '');
+        return [0, 2, 4].map((i) => parseInt(m.slice(i, i + 2), 16));
+      };
+      const lum = (rgb) => {
+        const [r, g, b] = rgb.map((v) => {
+          v /= 255;
+          return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const ratio = (a, b) => {
+        const l1 = lum(h2r(a));
+        const l2 = lum(h2r(b));
+        return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+      };
+      return {
+        ring: ratio(get('focus-ring'), get('bg')),
+        pressedEdge: ratio(get('pressed-edge'), get('bg')),
+      };
+    });
+    expect(measured.ring).toBeGreaterThanOrEqual(3);
+    expect(measured.pressedEdge).toBeGreaterThanOrEqual(3);
   });
 });
