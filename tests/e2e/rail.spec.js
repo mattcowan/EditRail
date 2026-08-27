@@ -589,7 +589,7 @@ test.describe('rail position', () => {
     });
     expect(floated).toBe('absolute');
 
-    // Position is a browser preference: it survives a reload.
+    // Position is a persisted per-user preference: it survives a reload.
     await page.reload();
     await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
     await expect(page.locator('#toolrail-region')).toHaveAttribute('data-dock', 'float');

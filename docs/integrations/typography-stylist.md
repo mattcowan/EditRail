@@ -17,7 +17,7 @@ the real TS icon → canvas click → a `typost/block` in the document.
 
 So the `registerTool` integration below is **optional polish**, not a prerequisite. Ship it
 only if TS wants something pinning can't give: a button present for every user by default
-(pins are per-user browser preferences), nesting under the Text flyout, an `onActivate`
+(pins are per-user preferences), nesting under the Text flyout, an `onActivate`
 that opens TS UI instead of inserting, or a block preconfigured via `createBlock` attrs.
 A separate "bridge" plugin between the two is not needed in either case — the provider API
 below IS the bridge, and it lives in whichever plugin registers.

@@ -228,7 +228,7 @@
 
   // -------------------------------------------------------------------
   // Rail position — docked to an edge, or floating like a Photoshop
-  // palette. A per-user browser preference, same as the quick slots.
+  // palette. A per-user account preference, same as the quick slots.
   //
   // The docks hang off the editor's OWN skeleton rather than being
   // absolutely positioned over it, so the canvas reflows around the rail
@@ -741,8 +741,8 @@
     return true;
   }
 
-  // Named quick-slot configurations — a per-user browser preference like
-  // the slots themselves ({name: [blockNames]} in localStorage).
+  // Named quick-slot configurations — a per-user account preference like
+  // the slots themselves ({name: [blockNames]}).
   //
   // The map is deliberately PROTOTYPE-LESS. A set named '__proto__' on a
   // plain object hits Object.prototype's inherited setter: the write is
@@ -1382,7 +1382,7 @@
   // -------------------------------------------------------------------
   // Toolbar settings dialog — choose which blocks show as quick slots,
   // reorder them, and save/load named sets. All of it is a per-user
-  // browser preference (localStorage), never site or post data.
+  // account preference, never site-wide settings or post data.
   // -------------------------------------------------------------------
 
   var settingsOpen = false;
@@ -1748,7 +1748,7 @@
     node.appendChild(head);
 
     var note = settingsRow('p', 'toolrail-settings-note');
-    note.textContent = __('Pinned blocks appear on the toolbar as quick-insert tools. They are saved in this browser, for you only.', 'toolrail');
+    note.textContent = __('Pinned blocks appear on the toolbar as quick-insert tools. They are saved to your account on this site, for you only.', 'toolrail');
     node.appendChild(note);
 
     node.appendChild(buildPositionControl());
