@@ -598,7 +598,18 @@
       'pressed': rgbToHex(fg),
       'pressed-fg': rgbToHex(bg),
       'pressed-edge': ring,
-      'status': contrastRatio(hexToRgb(ring), bg) >= 4.5 ? ring : rgbToHex(fg),
+      // Status text carries the "your colors fail contrast" warning, so
+      // IT can never be allowed to fail: ring when it reads as text
+      // (≥4.5), else the pair's own fg when that does — else black or
+      // white, split at luminance 0.179, inside the narrow band
+      // (0.175–0.183) where BOTH clear 4.5:1, so the floor is
+      // guaranteed for any background. A plain fg fallback here
+      // rendered the warning at ~1:1 on a dark hostile pair (review
+      // 2026-08-26: bg luminance ≈0.021–0.071, where the light ring
+      // candidate clears 3:1 but not 4.5).
+      'status': contrastRatio(hexToRgb(ring), bg) >= 4.5 ? ring
+        : contrastRatio(fg, bg) >= 4.5 ? rgbToHex(fg)
+          : relativeLuminance(bg) > 0.179 ? '#000000' : '#ffffff',
       'focus-ring': ring
     };
   }
@@ -1700,7 +1711,9 @@
     // Drop any message that never got rendered — closing the dialog
     // before an in-flight file read resolves used to strand it here, and
     // it then surfaced out of context the NEXT time settings was opened.
+    // The appearance section's transient follows the same rule.
     settingsStatus = '';
+    appearanceStatus = '';
     document.removeEventListener('mousedown', onSettingsMousedown, true);
     document.removeEventListener('keydown', onSettingsKeydown, true);
     document.removeEventListener('focusin', onSettingsFocusin, true);
@@ -1906,6 +1919,18 @@
   }
 
   /**
+   * One transient outcome line for the APPEARANCE section, consumed by
+   * its next render — the appearance twin of settingsStatus. It gets its
+   * OWN node inside the fieldset because the shared
+   * #toolrail-settings-status sits under Saved sets AND is bound as the
+   * import file input's accessible description: a contrast warning
+   * written there appeared far from the swatches it was about, and a
+   * screen-reader user tabbing to Import heard it read as that
+   * control's description (review 2026-08-26).
+   */
+  var appearanceStatus = '';
+
+  /**
    * Appearance picker: three contrast-verified presets plus a custom
    * background + text pair. A preset switch re-renders the dialog (the
    * color inputs enable only under Custom); the color inputs apply live
@@ -1943,7 +1968,7 @@
         saveAppearance(appearance);
         applyAppearance();
         if (mode === 'custom') {
-          settingsStatus = pairContrastMessage(appearance);
+          appearanceStatus = pairContrastMessage(appearance);
         }
         refreshSettings('input[data-appearance="' + mode + '"]');
       });
@@ -1976,6 +2001,19 @@
       fieldset.appendChild(row);
     });
 
+    // The section's own outcome line, right under the swatches it
+    // reports on. Same render-and-speak contract as the Saved-sets
+    // status; deliberately NOT the shared #toolrail-settings-status
+    // (see appearanceStatus above).
+    var status = settingsRow('p', 'toolrail-settings-status');
+    status.id = 'toolrail-settings-appearance-status';
+    status.textContent = appearanceStatus;
+    fieldset.appendChild(status);
+    if (appearanceStatus) {
+      speak(appearanceStatus);
+    }
+    appearanceStatus = '';
+
     ['bg', 'fg'].forEach(function (key) {
       // Live preview while the native picker is open — not persisted;
       // the change event persists the settled pair.
@@ -1990,10 +2028,7 @@
         // close the native picker and drop focus); speak() owns the
         // announcement.
         var msg = pairContrastMessage(appearance);
-        var status = document.getElementById('toolrail-settings-status');
-        if (status) {
-          status.textContent = msg;
-        }
+        status.textContent = msg;
         speak(msg);
       });
     });
@@ -2563,9 +2598,25 @@
     if (e.key !== 'Escape' || !helpOpen) {
       return;
     }
-    e.preventDefault();
-    e.stopPropagation();
-    closeHelp(true);
+    // Only claim the Escape when focus is actually in the panel (or on
+    // its button). The auto-opened panel never takes focus, so an
+    // Escape pressed there is aimed at whatever the author IS in — the
+    // inserter, a sidebar. Swallowing it (and yanking focus to the
+    // rail, as closeHelp(true) does) hijacked that press: the inserter
+    // stayed open and the caret teleported (review 2026-08-26). With
+    // focus elsewhere, close quietly and let the event through to its
+    // real target.
+    var node = helpNode();
+    var btn = helpButton();
+    var inside = !!(node && node.contains(document.activeElement))
+      || (btn && document.activeElement === btn);
+    if (inside) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeHelp(true);
+    } else {
+      closeHelp(false);
+    }
   }
 
   function onHelpFocusin(e) {

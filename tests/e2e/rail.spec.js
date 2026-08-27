@@ -1562,6 +1562,38 @@ test.describe('help panel', () => {
     await expect(page.locator('.toolrail-help')).toHaveCount(0);
   });
 
+  test('an Escape aimed elsewhere closes the auto-opened panel quietly, without stealing focus', async ({ page }) => {
+    await openNewPost(page);
+
+    // Recreate the auto-open state: panel open, focus never inside it.
+    await page.evaluate(() => {
+      window.wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-help-seen', undefined);
+      window.localStorage.removeItem('toolrail-help-seen');
+    });
+    await page.reload();
+    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('.toolrail-help')).toBeVisible({ timeout: 5000 });
+
+    // The author is working elsewhere — a header control has focus.
+    await page.evaluate(() => {
+      document.querySelector('.interface-interface-skeleton__header button').focus();
+    });
+    await page.keyboard.press('Escape');
+
+    // The panel goes away, but QUIETLY: the event is not claimed and
+    // focus stays where the author put it. Before the fix the panel's
+    // capture-phase handler stopPropagation()ed the press (so whatever
+    // the author meant to close stayed open) and closeHelp(true)
+    // teleported focus to the rail (review 2026-08-26).
+    await expect(page.locator('.toolrail-help')).toHaveCount(0);
+    const after = await page.evaluate(() => ({
+      tool: document.activeElement.dataset ? document.activeElement.dataset.tool : null,
+      inHeader: !!document.activeElement.closest('.interface-interface-skeleton__header'),
+    }));
+    expect(after.tool).not.toBe('help');
+    expect(after.inHeader).toBe(true);
+  });
+
   test('opens from the "?" tool; Escape closes and returns focus to it', async ({ page }) => {
     await openNewPost(page);
 
@@ -1638,6 +1670,23 @@ test.describe('wide mode', () => {
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"] .toolrail-tool-label')).toHaveText('Paragraph');
     const width = await page.evaluate(() => document.getElementById('toolrail-region').getBoundingClientRect().width);
     expect(width).toBeGreaterThan(150);
+
+    // A long block title must ellipsize, never widen the rail past its
+    // 200px basis: min-width:auto (the flex automatic minimum) floored
+    // the region at its content's min-content size — measured 270.89px
+    // before the min-width:0 fix (review 2026-08-26).
+    await page.evaluate(() => window.toolrail.pinBlock('core/latest-comments'));
+    const geometry = await page.evaluate(() => {
+      const region = document.getElementById('toolrail-region');
+      const rail = document.getElementById('toolrail-rail');
+      return {
+        regionWidth: region.getBoundingClientRect().width,
+        horizontalOverflow: rail.scrollWidth > rail.clientWidth,
+      };
+    });
+    expect(geometry.regionWidth).toBe(200);
+    expect(geometry.horizontalOverflow).toBe(false);
+    await page.evaluate(() => window.toolrail.unpinBlock('core/latest-comments'));
 
     expect(await getPref(page, 'toolrail-wide')).toBe('1');
     await page.reload();
@@ -1771,21 +1820,26 @@ test.describe('appearance', () => {
     )).toBe('rgb(119, 119, 119)');
 
     // The warning is text in the dialog (and spoken via wp.a11y), never
-    // color alone — and the pair is still applied and stored.
-    await expect(page.locator('#toolrail-settings-status')).toContainText('below the 4.5:1 minimum');
+    // color alone — and it renders INSIDE the Appearance section, beside
+    // the swatches it is about. It must NOT land in the Saved-sets
+    // status, which is bound as the import file input's accessible
+    // description (review 2026-08-26: a screen-reader user tabbing to
+    // Import heard the contrast warning read as that control's
+    // description).
+    await expect(page.locator('.toolrail-settings-appearance #toolrail-settings-appearance-status'))
+      .toContainText('below the 4.5:1 minimum');
+    await expect(page.locator('#toolrail-settings-status')).not.toContainText('4.5:1');
     expect(JSON.parse(await getPref(page, 'toolrail-appearance')))
       .toEqual({ mode: 'custom', bg: '#777777', fg: '#999999' });
   });
 
-  test('the focus ring and pressed edge stay at 3:1 or better for a hostile pair', async ({ page }) => {
+  test('the derived indicators hold their floors for hostile pairs', async ({ page }) => {
     await openNewPost(page);
 
     await page.locator('#toolrail-rail [data-tool="settings"]').click();
     await page.locator('input[data-appearance="custom"]').check();
-    await setColor(page, 'toolrail-settings-appearance-bg', '#777777');
-    await setColor(page, 'toolrail-settings-appearance-fg', '#999999');
 
-    const measured = await page.evaluate(() => {
+    const measure = () => page.evaluate(() => {
       const cs = getComputedStyle(document.getElementById('toolrail-region'));
       const get = (t) => cs.getPropertyValue('--toolrail-' + t).trim();
       const h2r = (h) => {
@@ -1807,9 +1861,29 @@ test.describe('appearance', () => {
       return {
         ring: ratio(get('focus-ring'), get('bg')),
         pressedEdge: ratio(get('pressed-edge'), get('bg')),
+        status: ratio(get('status'), get('bg')),
       };
     });
-    expect(measured.ring).toBeGreaterThanOrEqual(3);
-    expect(measured.pressedEdge).toBeGreaterThanOrEqual(3);
+
+    // Mid-gray pair (~1.6:1): both brand ring candidates fail, so the
+    // black/white fallback must carry the 3:1 floor.
+    await setColor(page, 'toolrail-settings-appearance-bg', '#777777');
+    await setColor(page, 'toolrail-settings-appearance-fg', '#999999');
+    const midGray = await measure();
+    expect(midGray.ring).toBeGreaterThanOrEqual(3);
+    expect(midGray.pressedEdge).toBeGreaterThanOrEqual(3);
+    expect(midGray.status).toBeGreaterThanOrEqual(4.5);
+
+    // The dark band from the review (bg luminance ≈0.033): the light
+    // ring candidate clears 3:1 but NOT 4.5, and the pair itself is
+    // ~1.3:1 — before the fix the status token fell back to the raw
+    // foreground and the "your colors fail contrast" warning itself
+    // rendered near-invisible.
+    await setColor(page, 'toolrail-settings-appearance-bg', '#333333');
+    await setColor(page, 'toolrail-settings-appearance-fg', '#444444');
+    const darkBand = await measure();
+    expect(darkBand.ring).toBeGreaterThanOrEqual(3);
+    expect(darkBand.pressedEdge).toBeGreaterThanOrEqual(3);
+    expect(darkBand.status).toBeGreaterThanOrEqual(4.5);
   });
 });
