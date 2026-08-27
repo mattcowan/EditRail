@@ -1020,22 +1020,47 @@ body.toolrail-overview-on .toolrail-ov-scale-host {
     margin-bottom: var(--toolrail-ov-mb, 0px);
 }
 
-/* The zoom transition is presentation only, so it exists only where
-   motion is welcome. */
-@media (prefers-reduced-motion: no-preference) {
-    body.toolrail-overview-on .toolrail-ov-scale-host {
-        transition: transform 0.15s ease;
-    }
-}
-
 /* Covers the content region's LAYOUT box (inline geometry from the JS).
    z-index 30 on purpose: over the canvas, UNDER core's side panels and
    modals (both at 100000) — the overview never needs to beat them, so
-   the modal-veto machinery needs no special case here. */
+   the modal-veto machinery needs no special case here.
+
+   pointer-events: auto — the overview is a MODE: while it is open, no
+   click can fall through and edit (or, with a tool armed, insert into)
+   the zoomed-out document underneath; the wheel pans instead of
+   scrolling something else. overflow: hidden clips panned-away boxes;
+   the focusin handler pans a focused box back into view, so keyboard
+   reachability never depends on what happens to be on screen. */
 #toolrail-overview {
     position: absolute;
     z-index: 30;
+    overflow: hidden;
+    pointer-events: auto;
+}
+
+/* The mode frame: a visible boundary around the whole overview area, so
+   the state reads as a mode with an inside and an outside (owner
+   feedback 2026-08-27). Painted by a pseudo so it sits ABOVE the boxes
+   and never intercepts the pointer. */
+#toolrail-overview::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 3px solid #3858e9;
     pointer-events: none;
+    z-index: 3;
+}
+
+.toolrail-ov-title {
+    color: #fff;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.toolrail-ov-esc {
+    color: #b0b0b0;
+    font-size: 12px;
+    white-space: nowrap;
 }
 
 #toolrail-overview .toolrail-ov-bar {
@@ -1086,24 +1111,116 @@ span.toolrail-ov-crumb {
     align-items: center;
 }
 
+.toolrail-ov-zoomlabel {
+    min-width: 40px;
+    text-align: center;
+    color: #b0b0b0;
+    font-variant-numeric: tabular-nums;
+}
+
 .toolrail-ov-empty {
     margin: 0;
     color: #b0b0b0;
 }
 
+/* The list has no box of its own; boxes position against the overlay. */
 .toolrail-ov-list {
     list-style: none;
     margin: 0;
     padding: 0;
 }
 
-.toolrail-ov-chip {
-    pointer-events: auto;
+/* An outline box IS its block (v2, owner feedback 2026-08-27): lines
+   around the content instead of a bar over it. The white backing —
+   outside AND inside the blue line — is what keeps the line visible
+   over any content, dark or light; a bare 2px blue vanished on blue
+   imagery. The box itself takes no pointer events; its full-cover pick
+   button does. */
+.toolrail-ov-box {
     position: absolute;
+    border: 2px solid #3858e9;
+    border-radius: 4px;
+    box-shadow:
+        0 0 0 2px rgba(255, 255, 255, 0.85),
+        inset 0 0 0 2px rgba(255, 255, 255, 0.85);
+    pointer-events: none;
+    list-style: none;
+}
+
+.toolrail-ov-box.is-selected {
+    z-index: 1;
+    border-color: #1d35b4;
+    box-shadow:
+        0 0 0 2px rgba(255, 255, 255, 0.95),
+        inset 0 0 0 2px rgba(255, 255, 255, 0.95);
+}
+
+/* The whole box is one focusable disclosure. Transparent — the content
+   below stays readable; hover gets a faint wash as the pointer
+   affordance. The focus ring is two-tone (blue on its own white halo,
+   5.61:1 — the pressed-fg:pressed pair already measured) because it
+   draws over arbitrary canvas content. */
+.toolrail-ov-selectbtn {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    pointer-events: auto;
+}
+
+.toolrail-ov-selectbtn:hover {
+    background: rgba(56, 88, 233, 0.08);
+}
+
+.toolrail-ov-selectbtn:focus-visible {
+    outline: 2px solid #3858e9;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.9);
+}
+
+/* Small corner tag naming the block — visible at rest so a sighted
+   author knows what each outline is without clicking. Deliberately
+   tiny; the full black bar this replaces obscured the content (owner
+   feedback, post 446). White on the blended worst case (over white
+   content) still measures ≈10:1. */
+.toolrail-ov-tag {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    max-width: calc(100% - 8px);
+    padding: 1px 6px;
+    background: rgba(30, 30, 30, 0.85);
+    color: #fff;
+    border-radius: 3px;
+    font-size: 11px;
+    line-height: 16px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+.toolrail-ov-box.is-selected .toolrail-ov-tag {
+    display: none;
+}
+
+/* The reorder controls, revealed inside the lines when a box is picked.
+   Floats at the box's top-left and may overflow a short box — the strip
+   matters more than the geometry there. */
+.toolrail-ov-controls {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    z-index: 1;
     display: flex;
     align-items: center;
     gap: 6px;
-    max-width: 360px;
+    max-width: max-content;
     padding: 6px;
     background: #1e1e1e;
     color: #e0e0e0;
@@ -1111,7 +1228,39 @@ span.toolrail-ov-crumb {
     border-radius: 6px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
     font-size: 13px;
-    list-style: none;
+    pointer-events: auto;
+}
+
+/* Author-origin display beats the UA's [hidden] rule regardless of
+   specificity (the wp-admin lesson) — restate it. */
+.toolrail-ov-controls[hidden] {
+    display: none;
+}
+
+/* Drag-to-reorder (pointer sugar — the arrows are the keyboard path).
+   The drop line marks the gap a release would move the section into;
+   same two-tone discipline as the outlines so it reads on any content. */
+.toolrail-ov-dropline {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    height: 0;
+    border-top: 3px solid #3858e9;
+    border-radius: 2px;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
+    pointer-events: none;
+    z-index: 2;
+}
+
+.toolrail-ov-box.is-dragging {
+    opacity: 0.6;
+}
+
+body.toolrail-ov-dragging,
+body.toolrail-ov-dragging * {
+    cursor: grabbing !important;
+    -webkit-user-select: none;
+    user-select: none;
 }
 
 .toolrail-ov-label {
@@ -1212,12 +1361,24 @@ span.toolrail-ov-crumb {
     .toolrail-settings,
     .toolrail-help,
     #toolrail-overview .toolrail-ov-bar,
-    .toolrail-ov-chip {
+    .toolrail-ov-controls {
         border: 1px solid CanvasText;
     }
 
+    /* The outline boxes' white-backing shadows do not survive forced
+       colors; the 2px border does, in the system palette. Same for the
+       mode frame. */
+    .toolrail-ov-box {
+        border: 2px solid Highlight;
+    }
+
+    #toolrail-overview::after {
+        border-color: Highlight;
+    }
+
     .toolrail-ov-btn:focus-visible,
-    .toolrail-ov-crumb:focus-visible {
+    .toolrail-ov-crumb:focus-visible,
+    .toolrail-ov-selectbtn:focus-visible {
         outline: 2px solid Highlight;
     }
 

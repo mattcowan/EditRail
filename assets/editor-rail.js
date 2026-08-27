@@ -784,7 +784,14 @@
       id: 'shape',
       label: __('Shape', 'toolrail'),
       icon: ICONS.shape,
-      children: SHAPES
+      children: SHAPES,
+      // SHELVED with Phase 4 (owner decision 2026-08-27): shapes wait
+      // until after the .org submission, so the tool does not render.
+      // The entry STAYS in BUILTIN_TOOLS so allToolIds keeps 'shape'
+      // and the shape-* child ids reserved — a provider must not be
+      // able to squat on them before Phase 4 reclaims them. Flip this
+      // flag to bring the tool back.
+      shelved: true
     },
     {
       id: 'section',
@@ -1189,7 +1196,9 @@
    * an unknown parent falls back to top level rather than vanishing.
    */
   function railModel() {
-    var topLevel = BUILTIN_TOOLS.map(function (t) {
+    var topLevel = BUILTIN_TOOLS.filter(function (t) {
+      return !t.shelved;
+    }).map(function (t) {
       return {
         id: t.id,
         label: t.label,
@@ -2392,6 +2401,25 @@
     // clearing it would re-arm the upgrade path.
     var restoreRow = settingsRow('div', 'toolrail-settings-restorerow');
     restoreRow.appendChild(settingsButton(__('Restore default tools', 'toolrail'), function () {
+      // A corrupt stored list must not be silently replaced (review
+      // 2026-08-27, finding 3): loadSlots() returns [] for key-absent,
+      // key-empty AND unparseable alike, and "restore" overwriting a
+      // corrupt-but-still-stored value would be a reset wearing
+      // restore's label. Bail with an honest message instead.
+      var raw = readKey(SLOTS_KEY);
+      if (raw !== null) {
+        var parseFailed = false;
+        try {
+          JSON.parse(raw);
+        } catch (err) {
+          parseFailed = true;
+        }
+        if (parseFailed) {
+          pinnedStatus = __('Your saved pinned list could not be read, so nothing was changed. Pin a block or load a saved set to start a fresh list.', 'toolrail');
+          refreshSettings('.toolrail-settings-restore');
+          return;
+        }
+      }
       var current = loadSlots();
       var missing = DEFAULT_SLOTS.filter(function (name) {
         return current.indexOf(name) === -1;
@@ -2822,8 +2850,8 @@
       {
         title: __('Section overview', 'toolrail'),
         body: [
-          __('The Section overview tool zooms the canvas out and puts a chip on every top-level block. Use a chip\'s arrow buttons to reorder, or Enter a section to reorder the blocks inside it.', 'toolrail'),
-          __('Escape steps back up one level, and closes the overview from the top. Closing returns you to where you were scrolled.', 'toolrail')
+          __('The Section overview tool zooms the canvas out and outlines every top-level block. Click an outline to show its reorder controls — arrows to move it, "Reorder inside" to step into a section — or simply drag an outline to a new spot. Zoom with the +/− buttons and pan long documents with the mouse wheel.', 'toolrail'),
+          __('Escape collapses the open controls, then steps up one level, then closes the overview. Closing returns you to where you were scrolled.', 'toolrail')
         ]
       },
       {
@@ -2981,11 +3009,38 @@
 
   var overviewOpen = false;
   var overviewRoot = '';
+  // The one box whose reorder controls are shown ('' = none). The v2
+  // interaction (owner feedback 2026-08-27, from post 446): boxes are
+  // OUTLINES around each block, and the commands appear only after
+  // clicking/entering a box — the always-on chip bars obscured content.
+  var overviewSelected = '';
+  // Pan offset (visual px, ≥0) down the current root, and the author's
+  // explicit zoom (0 = fit the current root). Together they make a very
+  // long document SCROLLABLE in the overview instead of shrinking it
+  // past legibility.
+  var overviewPan = 0;
+  var overviewUserScale = 0;
+  var overviewMetrics = { k: 1, rootTop: 0, fitHeight: 0 };
   var overviewEntryScroll = null;
   var overviewSignature = '';
   var overviewUnsubscribe = null;
   var overviewRepositionTimer = null;
+  var overviewPanFrame = null;
   var overviewHadFrame = false;
+  var overviewMedia = null;
+  // In-flight box drag ({clientId, startX, startY, active, toIndex}).
+  // Drag-to-reorder is POINTER SUGAR over the same public move the
+  // arrows dispatch (owner ask 2026-08-27) — the keyboard path is the
+  // arrows, and nothing here is reachable only by dragging.
+  var overviewDrag = null;
+  // Latched for one tick after a completed drag so the click the
+  // browser fires on the same button cannot ALSO toggle its controls.
+  var overviewDragConsumedClick = false;
+  // The block that was selected when the overview opened — its floating
+  // toolbar stays alive over the zoomed canvas otherwise (owner
+  // feedback 2026-08-27), so the selection is cleared for the
+  // overview's lifetime and put back on close.
+  var overviewPriorSelection = '';
 
   function contentRegion() {
     return document.querySelector('.interface-interface-skeleton__content');
@@ -3004,12 +3059,22 @@
     return rail ? rail.querySelector('[data-tool="overview"]') : null;
   }
 
-  /** Block title for chip labels and announcements. */
+  /** Block title for box tags and announcements. A custom name the
+      author gave the block (List View rename → attributes.metadata.name)
+      wins over the type title — a page of Groups otherwise tags every
+      box "Group" (seen on post 446). */
   function overviewBlockLabel(clientId) {
     var sel = wp.data.select('core/block-editor');
     var name = sel ? sel.getBlockName(clientId) : null;
     var type = name ? wp.blocks.getBlockType(name) : null;
-    return (type && type.title) || name || __('Block', 'toolrail');
+    var custom = '';
+    if (sel && typeof sel.getBlockAttributes === 'function') {
+      var attrs = sel.getBlockAttributes(clientId);
+      if (attrs && attrs.metadata && typeof attrs.metadata.name === 'string') {
+        custom = attrs.metadata.name;
+      }
+    }
+    return custom || (type && type.title) || name || __('Block', 'toolrail');
   }
 
   /** clientIds at the current root, in document order. */
@@ -3109,11 +3174,42 @@
       }
     }
 
-    var k = 1;
-    if (fitHeight > 0 && content.clientHeight > 0) {
-      k = Math.min(1, (content.clientHeight - 24) / fitHeight);
+    // Fit unless the author has zoomed explicitly — but never fit past
+    // the point of legibility. The floor is computed FROM THE CONTENT
+    // (owner feedback 2026-08-27, post 773: a fixed floor zoomed a very
+    // long post out too far): the MEDIAN block at the current root must
+    // render at least OVERVIEW_MIN_BLOCK_PX tall on screen. Median, not
+    // minimum — one spacer must not veto the zoom. A page of large
+    // sections still reaches the absolute 0.25 floor (post 446 fits at
+    // 25% and stays there); whatever a floored fit leaves off-screen is
+    // reachable by PANNING (wheel, or focusing a box), not by shrinking
+    // further. Manual −/+ zoom may still go below this.
+    var viewport = Math.max(0, content.clientHeight - 24);
+    var k = overviewUserScale;
+    if (!k) {
+      var heights = [];
+      overviewOrder().forEach(function (id) {
+        var el = doc.querySelector('[data-block="' + String(id).replace(/"/g, '') + '"]');
+        if (el && el.offsetHeight) {
+          heights.push(el.offsetHeight);
+        }
+      });
+      heights.sort(function (a, b) {
+        return a - b;
+      });
+      var medianH = heights.length ? heights[Math.floor(heights.length / 2)] : 0;
+      var floorK = 0.25;
+      if (medianH > 0) {
+        floorK = Math.min(1, Math.max(0.25, OVERVIEW_MIN_BLOCK_PX / medianH));
+      }
+      k = 1;
+      if (fitHeight > 0 && viewport > 0) {
+        k = viewport / fitHeight;
+      }
+      k = Math.min(1, Math.max(floorK, k));
     }
-    k = Math.max(0.25, k);
+    overviewMetrics = { k: k, rootTop: rootTop, fitHeight: fitHeight };
+    overviewPan = Math.min(Math.max(0, overviewPan), Math.max(0, fitHeight * k - viewport));
 
     var style = document.body.style;
     style.setProperty('--toolrail-overview-scale', String(k));
@@ -3121,7 +3217,54 @@
     // Keeps the scale-container's layout footprint at the VISUAL size,
     // for any build whose wrappers do size from their children.
     style.setProperty('--toolrail-ov-mb', (-(1 - k) * docHeight) + 'px');
-    style.setProperty('--toolrail-ov-ty', (-(rootTop * k)) + 'px');
+    style.setProperty('--toolrail-ov-ty', (-(rootTop * k + overviewPan)) + 'px');
+    updateOverviewZoomLabel();
+  }
+
+  /** Pan the overview (visual px from the current root's top), clamped
+      to the content that exists. Box repositioning rides one rAF so a
+      wheel burst costs one layout pass per frame, not per event. */
+  function setOverviewPan(next) {
+    var content = contentRegion();
+    var viewport = content ? Math.max(0, content.clientHeight - 24) : 0;
+    var maxPan = Math.max(0, overviewMetrics.fitHeight * overviewMetrics.k - viewport);
+    overviewPan = Math.min(Math.max(0, next), maxPan);
+    document.body.style.setProperty(
+      '--toolrail-ov-ty',
+      (-(overviewMetrics.rootTop * overviewMetrics.k + overviewPan)) + 'px'
+    );
+    if (!overviewPanFrame) {
+      overviewPanFrame = window.requestAnimationFrame(function () {
+        overviewPanFrame = null;
+        positionOverviewBoxes();
+      });
+    }
+  }
+
+  var OVERVIEW_MIN_SCALE = 0.15;
+
+  /** The default zoom never renders the median block at the current
+      root below this on-screen height — the content-derived floor. */
+  var OVERVIEW_MIN_BLOCK_PX = 48;
+
+  function setOverviewZoom(nextK, announceIt) {
+    overviewUserScale = Math.min(1, Math.max(OVERVIEW_MIN_SCALE, nextK));
+    applyOverviewScale();
+    positionOverviewBoxes();
+    if (announceIt) {
+      speak(sprintf(
+        /* translators: %d: zoom percentage. */
+        __('Zoom %d%%.', 'toolrail'),
+        Math.round(overviewMetrics.k * 100)
+      ));
+    }
+  }
+
+  function updateOverviewZoomLabel() {
+    var label = document.querySelector('#toolrail-overview .toolrail-ov-zoomlabel');
+    if (label) {
+      label.textContent = Math.round(overviewMetrics.k * 100) + '%';
+    }
   }
 
   function clearOverviewScale() {
@@ -3155,33 +3298,225 @@
   }
 
   /**
-   * Pin each chip to its block's on-screen position, in document order,
-   * with a simple overlap-avoid (a chip never starts above the previous
-   * chip's bottom — short blocks would otherwise stack their chips on
-   * top of each other). A block with no DOM element yet falls into the
-   * flow below its predecessor instead of vanishing.
+   * Size each outline box to its block's on-screen rect, in document
+   * order. Boxes ARE the blocks now (v2) — no overlap-avoid needed,
+   * because blocks don't overlap. A short block keeps a 24px hit floor;
+   * a block with no DOM element yet simply hides until the next pass.
    */
-  function positionOverviewChips() {
+  function positionOverviewBoxes() {
     var overlay = overviewNode();
     if (!overlay) {
       return;
     }
     var oRect = overlay.getBoundingClientRect();
-    var bar = overlay.querySelector('.toolrail-ov-bar');
-    var prevBottom = bar ? (bar.offsetTop + bar.offsetHeight + 8) : 8;
-    Array.prototype.slice.call(overlay.querySelectorAll('.toolrail-ov-chip')).forEach(function (chip) {
-      var rect = overviewBlockViewportRect(chip.dataset.clientid);
-      var left = 12;
-      var top = prevBottom + 4;
-      if (rect) {
-        left = Math.max(4, Math.min(rect.left - oRect.left + 8, oRect.width - chip.offsetWidth - 8));
-        top = rect.top - oRect.top + 8;
+    Array.prototype.slice.call(overlay.querySelectorAll('.toolrail-ov-box')).forEach(function (box) {
+      var rect = overviewBlockViewportRect(box.dataset.clientid);
+      if (!rect) {
+        box.style.display = 'none';
+        return;
       }
-      top = Math.max(top, prevBottom + 4);
-      chip.style.left = left + 'px';
-      chip.style.top = top + 'px';
-      prevBottom = top + chip.offsetHeight;
+      box.style.display = '';
+      var left = Math.max(0, rect.left - oRect.left);
+      box.style.left = left + 'px';
+      box.style.top = (rect.top - oRect.top) + 'px';
+      box.style.width = Math.max(0, Math.min(rect.width, oRect.width - left)) + 'px';
+      box.style.height = Math.max(rect.height, 24) + 'px';
     });
+  }
+
+  function overviewBoxFor(clientId) {
+    var overlay = overviewNode();
+    return overlay
+      ? overlay.querySelector('.toolrail-ov-box[data-clientid="' + String(clientId).replace(/"/g, '') + '"]')
+      : null;
+  }
+
+  /** Paint the selection state onto every box: is-selected class, the
+      pick button's aria-expanded, and the controls strip's hidden. ONE
+      box may be selected at a time. */
+  function syncOverviewSelection() {
+    var overlay = overviewNode();
+    if (!overlay) {
+      return;
+    }
+    Array.prototype.slice.call(overlay.querySelectorAll('.toolrail-ov-box')).forEach(function (box) {
+      var selected = box.dataset.clientid === overviewSelected;
+      box.classList.toggle('is-selected', selected);
+      var pick = box.querySelector('[data-ov-action="pick"]');
+      if (pick) {
+        pick.setAttribute('aria-expanded', selected ? 'true' : 'false');
+      }
+      var controls = box.querySelector('.toolrail-ov-controls');
+      if (controls) {
+        controls.hidden = !selected;
+      }
+    });
+  }
+
+  /** Open a box's reorder controls and move focus to the first usable
+      one. The controls are a DISCLOSURE on the box's pick button —
+      the outline stays clean until the author asks. */
+  function selectOverviewBox(clientId) {
+    overviewSelected = clientId;
+    syncOverviewSelection();
+    var box = overviewBoxFor(clientId);
+    if (!box) {
+      return;
+    }
+    var target = focusableIn(box, '[data-ov-action="down"]')
+      || focusableIn(box, '[data-ov-action="up"]')
+      || focusableIn(box, '[data-ov-action="enter"]')
+      || box.querySelector('[data-ov-action="pick"]');
+    if (target) {
+      target.focus();
+    }
+  }
+
+  function deselectOverviewBox(refocusPick) {
+    if (!overviewSelected) {
+      return;
+    }
+    var box = overviewBoxFor(overviewSelected);
+    overviewSelected = '';
+    syncOverviewSelection();
+    if (refocusPick && box) {
+      var pick = box.querySelector('[data-ov-action="pick"]');
+      if (pick) {
+        pick.focus();
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Drag-to-reorder — pointer sugar over moveOverviewBlockTo. A press
+  // that moves past a small threshold becomes a drag with a drop line at
+  // the target gap; a press that doesn't is the ordinary click (the
+  // controls disclosure). Locked blocks refuse the drag the way their
+  // arrows are disabled. Escape cancels (handled in onOverviewKeydown —
+  // the drag has no listener of its own there, because the overview's
+  // Escape handler registered first and would run first regardless).
+  // -------------------------------------------------------------------
+
+  function startOverviewDrag(e, clientId) {
+    if (e.button !== 0 || overviewDrag) {
+      return;
+    }
+    var sel = wp.data.select('core/block-editor');
+    if (sel && typeof sel.canMoveBlocks === 'function') {
+      try {
+        if (!sel.canMoveBlocks([clientId], overviewRoot)) {
+          return;
+        }
+      } catch (err) {
+        /* Selector newer than this WP — assume movable, the verify in
+           moveOverviewBlockTo still guards the announcement. */
+      }
+    }
+    overviewDrag = { clientId: clientId, startX: e.clientX, startY: e.clientY, active: false, toIndex: -1 };
+    document.addEventListener('mousemove', onOverviewDragMove, true);
+    document.addEventListener('mouseup', onOverviewDragEnd, true);
+  }
+
+  function onOverviewDragMove(e) {
+    if (!overviewDrag) {
+      return;
+    }
+    if (!overviewDrag.active) {
+      if (Math.abs(e.clientX - overviewDrag.startX) < 5 && Math.abs(e.clientY - overviewDrag.startY) < 5) {
+        return;
+      }
+      overviewDrag.active = true;
+      document.body.classList.add('toolrail-ov-dragging');
+      var box = overviewBoxFor(overviewDrag.clientId);
+      if (box) {
+        box.classList.add('is-dragging');
+      }
+    }
+    e.preventDefault();
+    updateOverviewDropline(e.clientY);
+  }
+
+  /** Place the drop line at the gap the pointer is over, and remember
+      the move index a release would dispatch. */
+  function updateOverviewDropline(clientY) {
+    var overlay = overviewNode();
+    if (!overlay || !overviewDrag) {
+      return;
+    }
+    var order = overviewOrder();
+    var idx = order.indexOf(overviewDrag.clientId);
+    var rects = order.map(function (id) {
+      var box = overviewBoxFor(id);
+      return box && box.style.display !== 'none' ? box.getBoundingClientRect() : null;
+    });
+    var insertIndex = 0;
+    rects.forEach(function (r) {
+      if (r && r.top + r.height / 2 < clientY) {
+        insertIndex++;
+      }
+    });
+    overviewDrag.toIndex = insertIndex > idx ? insertIndex - 1 : insertIndex;
+
+    var oRect = overlay.getBoundingClientRect();
+    var y = 0;
+    if (insertIndex >= order.length) {
+      var last = rects[rects.length - 1];
+      y = last ? last.bottom + 2 - oRect.top : 0;
+    } else {
+      var at = rects[insertIndex];
+      y = at ? at.top - 4 - oRect.top : 0;
+    }
+    var line = overlay.querySelector('.toolrail-ov-dropline');
+    if (!line) {
+      line = document.createElement('div');
+      line.className = 'toolrail-ov-dropline';
+      line.setAttribute('aria-hidden', 'true');
+      overlay.appendChild(line);
+    }
+    line.style.top = y + 'px';
+  }
+
+  function finishOverviewDrag() {
+    if (!overviewDrag) {
+      return;
+    }
+    var line = document.querySelector('#toolrail-overview .toolrail-ov-dropline');
+    if (line) {
+      line.remove();
+    }
+    document.body.classList.remove('toolrail-ov-dragging');
+    var box = overviewBoxFor(overviewDrag.clientId);
+    if (box) {
+      box.classList.remove('is-dragging');
+    }
+    document.removeEventListener('mousemove', onOverviewDragMove, true);
+    document.removeEventListener('mouseup', onOverviewDragEnd, true);
+    overviewDrag = null;
+  }
+
+  function onOverviewDragEnd(e) {
+    if (!overviewDrag) {
+      return;
+    }
+    var wasActive = overviewDrag.active;
+    var clientId = overviewDrag.clientId;
+    var to = overviewDrag.toIndex;
+    finishOverviewDrag();
+    if (!wasActive) {
+      // A plain click — let the disclosure toggle proceed.
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    // The browser still fires click on the button under the release —
+    // one latch keeps a completed drag from ALSO toggling the controls.
+    overviewDragConsumedClick = true;
+    window.setTimeout(function () {
+      overviewDragConsumedClick = false;
+    }, 0);
+    if (to !== -1) {
+      moveOverviewBlockTo(clientId, to, null);
+    }
   }
 
   /**
@@ -3194,20 +3529,24 @@
   function scheduleOverviewSettle() {
     window.requestAnimationFrame(function () {
       if (overviewOpen) {
-        positionOverviewChips();
+        positionOverviewBoxes();
       }
     });
     window.setTimeout(function () {
       if (!overviewOpen) {
         return;
       }
-      positionOverviewChips();
+      // Refit too, not just reposition: the canvas flush after a reorder
+      // (or any content change a dispatch made) can change the document
+      // height the scale and pan clamp were computed from.
+      applyOverviewScale();
+      positionOverviewBoxes();
     }, 220);
   }
 
   /**
-   * Rebuild the overlay's content (breadcrumb bar + chips) from the
-   * store. With no explicit focus candidates, focus inside the overlay
+   * Rebuild the overlay's content (breadcrumb bar + outline boxes) from
+   * the store. With no explicit focus candidates, focus inside the overlay
    * is preserved by re-deriving candidates from the control it was on —
    * a store-driven rebuild must never silently drop the keyboard user
    * on the floor.
@@ -3220,15 +3559,17 @@
     if (!overlay) {
       return;
     }
+    // A rebuild replaces every box a drag is measuring — abandon it.
+    finishOverviewDrag();
     var sel = wp.data.select('core/block-editor');
 
     if (!focusSelectors && overlay.contains(document.activeElement)) {
       var active = document.activeElement;
-      var activeChip = active.closest ? active.closest('.toolrail-ov-chip') : null;
+      var activeBox = active.closest ? active.closest('.toolrail-ov-box') : null;
       var action = active.dataset ? active.dataset.ovAction : '';
-      if (activeChip && action) {
-        var chipSel = '.toolrail-ov-chip[data-clientid="' + activeChip.dataset.clientid + '"] ';
-        focusSelectors = [chipSel + '[data-ov-action="' + action + '"]', chipSel + 'button'];
+      if (activeBox && action) {
+        var boxSel = '.toolrail-ov-box[data-clientid="' + activeBox.dataset.clientid + '"] ';
+        focusSelectors = [boxSel + '[data-ov-action="' + action + '"]', boxSel + 'button'];
       } else if (action) {
         focusSelectors = ['[data-ov-action="' + action + '"]'];
       }
@@ -3236,8 +3577,15 @@
 
     overlay.textContent = '';
 
-    // --- Bar: breadcrumb + up-one-level + close ---
+    // --- Bar: mode title + breadcrumb + up-one-level + zoom + Done ---
     var bar = settingsRow('div', 'toolrail-ov-bar');
+
+    // The bar names the MODE, and the exit is a labeled button plus a
+    // visible Esc hint (owner feedback 2026-08-27: make it clearer that
+    // this is a modal-like state and how to leave it).
+    var modeTitle = settingsRow('strong', 'toolrail-ov-title');
+    modeTitle.textContent = __('Section overview', 'toolrail');
+    bar.appendChild(modeTitle);
 
     var crumbs = document.createElement('nav');
     crumbs.className = 'toolrail-ov-crumbs';
@@ -3292,37 +3640,118 @@
       bar.appendChild(up);
     }
 
+    // Zoom controls + a visible percentage. Panning covers whatever a
+    // floored fit leaves off-screen: the wheel over the overlay, or
+    // simply focusing a box (the focusin handler pans it into view).
+    var zoomOut = document.createElement('button');
+    zoomOut.type = 'button';
+    zoomOut.className = 'toolrail-ov-btn toolrail-ov-zoom';
+    zoomOut.dataset.ovAction = 'zoom-out';
+    zoomOut.textContent = '−';
+    zoomOut.setAttribute('aria-label', __('Zoom out', 'toolrail'));
+    zoomOut.addEventListener('click', function () {
+      setOverviewZoom(overviewMetrics.k / 1.25, true);
+    });
+    bar.appendChild(zoomOut);
+
+    var zoomLabel = settingsRow('span', 'toolrail-ov-zoomlabel');
+    zoomLabel.setAttribute('aria-hidden', 'true');
+    zoomLabel.textContent = Math.round(overviewMetrics.k * 100) + '%';
+    bar.appendChild(zoomLabel);
+
+    var zoomIn = document.createElement('button');
+    zoomIn.type = 'button';
+    zoomIn.className = 'toolrail-ov-btn toolrail-ov-zoom';
+    zoomIn.dataset.ovAction = 'zoom-in';
+    zoomIn.textContent = '+';
+    zoomIn.setAttribute('aria-label', __('Zoom in', 'toolrail'));
+    zoomIn.addEventListener('click', function () {
+      setOverviewZoom(overviewMetrics.k * 1.25, true);
+    });
+    bar.appendChild(zoomIn);
+
+    var escHint = settingsRow('span', 'toolrail-ov-esc');
+    escHint.textContent = __('Esc exits', 'toolrail');
+    bar.appendChild(escHint);
+
     var close = document.createElement('button');
     close.type = 'button';
     close.className = 'toolrail-ov-btn toolrail-ov-close';
     close.dataset.ovAction = 'close';
-    close.textContent = '×';
-    close.setAttribute('aria-label', __('Close section overview', 'toolrail'));
+    // A labeled exit, not a bare × — the visible text IS the accessible
+    // name, so speech input's "click Done" just works.
+    close.textContent = __('Done', 'toolrail');
     close.addEventListener('click', function () {
       closeOverview(true);
     });
     bar.appendChild(close);
     overlay.appendChild(bar);
 
-    // --- Chips, one per block, DOM order = document order ---
+    // --- Outline boxes, one per block, DOM order = document order.
+    // A box is lines around the block plus a small corner tag; the
+    // reorder controls appear only after the box is picked (owner
+    // feedback 2026-08-27: the always-on chip bars obscured content). ---
     var order = overviewOrder();
     if (!order.length) {
       var empty = settingsRow('p', 'toolrail-ov-empty');
       empty.textContent = __('Nothing to reorder here.', 'toolrail');
       bar.appendChild(empty);
     }
+    if (overviewSelected && order.indexOf(overviewSelected) === -1) {
+      overviewSelected = '';
+    }
 
     var list = document.createElement('ul');
     list.className = 'toolrail-ov-list';
     order.forEach(function (clientId, i) {
       var label = overviewBlockLabel(clientId);
+      var selected = clientId === overviewSelected;
       var li = document.createElement('li');
-      li.className = 'toolrail-ov-chip';
+      li.className = 'toolrail-ov-box' + (selected ? ' is-selected' : '');
       li.dataset.clientid = clientId;
+
+      // The whole box is one focusable disclosure: click it (or press
+      // Enter on it) and the reorder controls appear inside the lines.
+      var pick = document.createElement('button');
+      pick.type = 'button';
+      pick.className = 'toolrail-ov-selectbtn';
+      pick.dataset.ovAction = 'pick';
+      pick.setAttribute('aria-expanded', selected ? 'true' : 'false');
+      pick.setAttribute('aria-label', sprintf(
+        /* translators: 1: block title, 2: its position, 3: count. */
+        __('%1$s, position %2$d of %3$d — show reorder controls', 'toolrail'),
+        label,
+        i + 1,
+        order.length
+      ));
+      pick.addEventListener('mousedown', function (e) {
+        startOverviewDrag(e, clientId);
+      });
+      pick.addEventListener('click', function () {
+        // A completed drag's release fires a click on this same button;
+        // the latch keeps it from also toggling the controls.
+        if (overviewDragConsumedClick) {
+          return;
+        }
+        if (overviewSelected === clientId) {
+          deselectOverviewBox(true);
+        } else {
+          selectOverviewBox(clientId);
+        }
+      });
+      li.appendChild(pick);
+
+      var tag = settingsRow('span', 'toolrail-ov-tag');
+      tag.textContent = label;
+      tag.setAttribute('aria-hidden', 'true');
+      li.appendChild(tag);
+
+      var controls = settingsRow('div', 'toolrail-ov-controls');
+      controls.hidden = !selected;
 
       var name = settingsRow('span', 'toolrail-ov-label');
       name.textContent = label;
-      li.appendChild(name);
+      controls.appendChild(name);
 
       var pos = settingsRow('span', 'toolrail-ov-pos');
       pos.textContent = sprintf(
@@ -3331,7 +3760,21 @@
         i + 1,
         order.length
       );
-      li.appendChild(pos);
+      controls.appendChild(pos);
+
+      // canMoveBlocks: core's own moveBlocksToPosition refuses (silently)
+      // for a movement-locked block, so the arrows must not offer a move
+      // core will refuse — announcing an unperformed move would lie to a
+      // screen-reader user (review 2026-08-27, finding 1; the selector
+      // is guarded because it is newer than this plugin's floor).
+      var movable = true;
+      if (sel && typeof sel.canMoveBlocks === 'function') {
+        try {
+          movable = !!sel.canMoveBlocks([clientId], overviewRoot);
+        } catch (e) {
+          movable = true;
+        }
+      }
 
       var upBtn = document.createElement('button');
       upBtn.type = 'button';
@@ -3344,11 +3787,11 @@
         label,
         i + 1
       ));
-      upBtn.disabled = i === 0;
+      upBtn.disabled = i === 0 || !movable;
       upBtn.addEventListener('click', function () {
         moveOverviewBlock(clientId, -1);
       });
-      li.appendChild(upBtn);
+      controls.appendChild(upBtn);
 
       var downBtn = document.createElement('button');
       downBtn.type = 'button';
@@ -3361,36 +3804,39 @@
         label,
         i + 1
       ));
-      downBtn.disabled = i === order.length - 1;
+      downBtn.disabled = i === order.length - 1 || !movable;
       downBtn.addEventListener('click', function () {
         moveOverviewBlock(clientId, 1);
       });
-      li.appendChild(downBtn);
+      controls.appendChild(downBtn);
 
       if (sel && sel.getBlockCount(clientId) > 0) {
         var enter = document.createElement('button');
         enter.type = 'button';
         enter.className = 'toolrail-ov-btn toolrail-ov-enter';
         enter.dataset.ovAction = 'enter';
-        // "Enter" is the visible text and leads the accessible name
-        // (WCAG 2.5.3 Label in Name).
-        enter.textContent = __('Enter', 'toolrail');
+        // "Reorder inside", not "Enter" (owner feedback 2026-08-27: on
+        // a keyboard-driven surface "Enter" reads as the key, not the
+        // action). The visible text leads the accessible name (WCAG
+        // 2.5.3 Label in Name).
+        enter.textContent = __('Reorder inside', 'toolrail');
         enter.setAttribute('aria-label', sprintf(
           /* translators: 1: block title, 2: its position. */
-          __('Enter %1$s, position %2$d, to reorder the blocks inside it', 'toolrail'),
+          __('Reorder inside %1$s, position %2$d', 'toolrail'),
           label,
           i + 1
         ));
         enter.addEventListener('click', function () {
           drillTo(clientId);
         });
-        li.appendChild(enter);
+        controls.appendChild(enter);
       }
 
+      li.appendChild(controls);
       list.appendChild(li);
     });
     overlay.appendChild(list);
-    positionOverviewChips();
+    positionOverviewBoxes();
 
     if (focusSelectors) {
       var candidates = Array.isArray(focusSelectors) ? focusSelectors.slice() : [focusSelectors];
@@ -3406,10 +3852,10 @@
     }
   }
 
-  /** The default focus candidates for a freshly (re)built level. */
+  /** The default focus candidates for a freshly (re)built level: the
+      first box's pick disclosure, then the bar. */
   var OVERVIEW_FOCUS_CANDIDATES = [
-    '.toolrail-ov-chip [data-ov-action="down"]',
-    '.toolrail-ov-chip [data-ov-action="enter"]',
+    '.toolrail-ov-box [data-ov-action="pick"]',
     '[data-ov-action="up-level"]',
     '[data-ov-action="close"]'
   ];
@@ -3423,21 +3869,50 @@
    * candidate for a chip that just reached an end); the store
    * subscription is pre-empted by writing the new signature first.
    */
-  function moveOverviewBlock(clientId, delta) {
+  /**
+   * @param {string}      clientId    Block to move within the current root.
+   * @param {number}      to          Target index.
+   * @param {string|null} focusAction 'up'/'down' when an arrow drove the
+   *                                  move (keeps the box selected with
+   *                                  focus on that arrow — the
+   *                                  settings-arrows contract); null for
+   *                                  a drag, which preserves focus
+   *                                  generically and leaves the
+   *                                  selection as it was.
+   */
+  function moveOverviewBlockTo(clientId, to, focusAction) {
     var order = overviewOrder();
     var idx = order.indexOf(clientId);
-    var to = idx + delta;
-    if (idx === -1 || to < 0 || to >= order.length) {
+    if (idx === -1 || to < 0 || to >= order.length || to === idx) {
       return;
     }
     wp.data.dispatch('core/block-editor').moveBlocksToPosition([clientId], overviewRoot, overviewRoot, to);
+
+    // VERIFY before announcing: core's action has its own canMoveBlocks
+    // guard and returns early — silently — for a locked block. The
+    // arrows are disabled (and the drag refused) for those, but
+    // belt-and-braces: never tell a screen-reader user a move happened
+    // when the order did not change (review 2026-08-27, finding 1).
+    if (overviewOrder()[to] !== clientId) {
+      speak(sprintf(
+        /* translators: %s: block title. */
+        __('%s cannot be moved.', 'toolrail'),
+        overviewBlockLabel(clientId)
+      ));
+      return;
+    }
     overviewSignature = overviewCurrentSignature();
 
-    var chipSel = '.toolrail-ov-chip[data-clientid="' + clientId + '"] ';
-    buildOverviewContent([
-      chipSel + '[data-ov-action="' + (delta < 0 ? 'up' : 'down') + '"]',
-      chipSel + '[data-ov-action="' + (delta < 0 ? 'down' : 'up') + '"]'
-    ]);
+    if (focusAction) {
+      overviewSelected = clientId;
+      var boxSel = '.toolrail-ov-box[data-clientid="' + clientId + '"] ';
+      buildOverviewContent([
+        boxSel + '[data-ov-action="' + focusAction + '"]',
+        boxSel + '[data-ov-action="' + (focusAction === 'up' ? 'down' : 'up') + '"]'
+      ]);
+    } else {
+      buildOverviewContent();
+    }
     scheduleOverviewSettle();
 
     speak(sprintf(
@@ -3449,39 +3924,57 @@
     ));
   }
 
+  function moveOverviewBlock(clientId, delta) {
+    var idx = overviewOrder().indexOf(clientId);
+    if (idx === -1) {
+      return;
+    }
+    moveOverviewBlockTo(clientId, idx + delta, delta < 0 ? 'up' : 'down');
+  }
+
   /**
    * Re-root the overview ('' = top level) — the drill-in machinery. The
    * SAME chips reorder children inside a section; the root change is
    * announced, and the zoom refits to the new root.
    */
-  function drillTo(root) {
+  function drillTo(root, announcePrefix) {
     overviewRoot = root || '';
+    // Each level gets its own zoom, pan and selection.
+    overviewSelected = '';
+    overviewPan = 0;
+    overviewUserScale = 0;
     overviewSignature = overviewCurrentSignature();
     applyOverviewScale();
     buildOverviewContent(OVERVIEW_FOCUS_CANDIDATES);
     scheduleOverviewSettle();
 
     var count = overviewOrder().length;
+    var message;
     if (overviewRoot) {
-      speak(sprintf(
+      message = sprintf(
         /* translators: 1: block title, 2: number of blocks inside it. */
         _n('Viewing inside %1$s — %2$d block.', 'Viewing inside %1$s — %2$d blocks.', count, 'toolrail'),
         overviewBlockLabel(overviewRoot),
         count
-      ));
+      );
     } else {
-      speak(sprintf(
+      message = sprintf(
         /* translators: %d: number of top-level sections. */
         _n('Viewing all sections — %d section.', 'Viewing all sections — %d sections.', count, 'toolrail'),
         count
-      ));
+      );
     }
+    // wp.a11y.speak REPLACES the region's text, so a forced root change
+    // (the drilled-into block was deleted) composes its reason into ONE
+    // message instead of racing two.
+    speak(announcePrefix ? announcePrefix + ' ' + message : message);
   }
 
   /**
-   * Escape climbs one level, and closes from the top — but ONLY when
-   * focus is inside the overlay (the help panel lesson: an Escape aimed
-   * at the inserter or a sidebar must never be hijacked).
+   * Escape walks back out one layer at a time — collapse the open
+   * controls, then climb a level, then close — but ONLY when focus is
+   * inside the overlay (the help panel lesson: an Escape aimed at the
+   * inserter or a sidebar must never be hijacked).
    */
   function onOverviewKeydown(e) {
     if (e.key !== 'Escape' || !overviewOpen) {
@@ -3493,7 +3986,12 @@
     }
     e.preventDefault();
     e.stopPropagation();
-    if (overviewRoot) {
+    if (overviewDrag) {
+      // Abandon an in-flight drag; nothing moves.
+      finishOverviewDrag();
+    } else if (overviewSelected) {
+      deselectOverviewBox(true);
+    } else if (overviewRoot) {
       var sel = wp.data.select('core/block-editor');
       drillTo((sel && sel.getBlockRootClientId(overviewRoot)) || '');
     } else {
@@ -3519,7 +4017,8 @@
         return;
       }
       placeOverviewOverlay();
-      positionOverviewChips();
+      applyOverviewScale();
+      positionOverviewBoxes();
     }, 50);
   }
 
@@ -3532,13 +4031,22 @@
     }
     var sel = wp.data.select('core/block-editor');
     if (overviewRoot && sel && !sel.getBlock(overviewRoot)) {
-      overviewRoot = '';
+      // A forced root change is a root change like any other — announce
+      // it (review 2026-08-27, finding 5), composed with the reason.
+      drillTo('', __('The section you were viewing was removed.', 'toolrail'));
+      return;
     }
     var sig = overviewCurrentSignature();
     if (sig === overviewSignature) {
       return;
     }
     overviewSignature = sig;
+    // Refit as well as rebuild: content changes move the document
+    // height the scale and pan clamp were computed from (review
+    // 2026-08-27, finding 6 — the overlay now captures pointer events,
+    // so canvas edits mid-overview are rare, but dispatches from other
+    // code are not).
+    applyOverviewScale();
     buildOverviewContent();
     scheduleOverviewSettle();
   }
@@ -3548,9 +4056,58 @@
     overlay.id = 'toolrail-overview';
     overlay.setAttribute('role', 'region');
     overlay.setAttribute('aria-label', __('Section overview', 'toolrail'));
+
+    // The overview is a MODE: while it is open the overlay captures all
+    // pointer events over the canvas (CSS pointer-events: auto), so a
+    // click can never fall through and edit — or, with a tool armed,
+    // INSERT INTO — the zoomed-out document underneath (review
+    // 2026-08-27, finding 4's surface). The wheel pans; a click on
+    // empty space collapses the open controls; focusing a box pans it
+    // into view (the keyboard's path to off-screen content).
+    overlay.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      var delta = e.deltaY;
+      if (e.deltaMode === 1) {
+        delta *= 16;
+      }
+      setOverviewPan(overviewPan + delta);
+    }, { passive: false });
+
+    overlay.addEventListener('mousedown', function (e) {
+      if (e.target === overlay || (e.target.classList && e.target.classList.contains('toolrail-ov-list'))) {
+        deselectOverviewBox(false);
+      }
+    });
+
+    overlay.addEventListener('focusin', function (e) {
+      var box = e.target.closest ? e.target.closest('.toolrail-ov-box') : null;
+      if (!box) {
+        return;
+      }
+      var oRect = overlay.getBoundingClientRect();
+      var bRect = box.getBoundingClientRect();
+      var bar = overlay.querySelector('.toolrail-ov-bar');
+      var topEdge = oRect.top + (bar ? bar.offsetHeight + 16 : 8);
+      if (bRect.top < topEdge) {
+        setOverviewPan(overviewPan - (topEdge - bRect.top));
+      } else if (bRect.bottom > oRect.bottom - 8) {
+        setOverviewPan(overviewPan + Math.min(bRect.bottom - (oRect.bottom - 8), bRect.top - topEdge));
+      }
+    });
+
     body.appendChild(overlay);
     placeOverviewOverlay();
     return overlay;
+  }
+
+  function onOverviewMediaChange(e) {
+    // Below the admin small-screen breakpoint the rail AND the overlay
+    // are display:none — without this, the author would be stranded in
+    // a scaled canvas with no Escape surface left (review 2026-08-27,
+    // finding 2). Close cleanly instead.
+    if (e.matches) {
+      closeOverview(false);
+    }
   }
 
   function toggleOverview() {
@@ -3570,10 +4127,23 @@
     if (!body || !content) {
       return;
     }
+    // Below the small-screen breakpoint the overlay cannot render — do
+    // not open into a state with no close surface.
+    if (window.matchMedia && window.matchMedia('(max-width: 782px)').matches) {
+      return;
+    }
     closeFlyout(false);
+    // Disarm: an armed tool's canvas insertion must never stay live
+    // under the overview (review 2026-08-27, finding 4).
+    if (activeTool !== 'select') {
+      setActiveTool('select');
+    }
 
     overviewOpen = true;
     overviewRoot = '';
+    overviewSelected = '';
+    overviewPan = 0;
+    overviewUserScale = 0;
     // The canvas scrolls INSIDE its iframe on iframed editors (measured:
     // the parent content region never overflows) — that scroll position
     // is what "exiting restores where you were" means. Growing the
@@ -3589,6 +4159,18 @@
       overviewEntryScroll = content.scrollTop;
     }
     overviewHadFrame = !!frame;
+    // A selected block keeps its floating toolbar alive over the zoomed
+    // canvas — clear the selection for the overview's lifetime (the
+    // reorder chrome is the only chrome this mode shows) and put it
+    // back on close. Selection is editor state, not content: neither
+    // direction dirties the post.
+    var editorSel = wp.data.select('core/block-editor');
+    overviewPriorSelection = editorSel && typeof editorSel.getSelectedBlockClientId === 'function'
+      ? (editorSel.getSelectedBlockClientId() || '')
+      : '';
+    if (wp.data.dispatch('core/block-editor').clearSelectedBlock) {
+      wp.data.dispatch('core/block-editor').clearSelectedBlock();
+    }
     document.body.classList.add('toolrail-overview-on');
 
     createOverviewOverlay(body);
@@ -3611,6 +4193,12 @@
     document.addEventListener('keydown', onOverviewKeydown, true);
     document.addEventListener('scroll', onOverviewViewportChange, true);
     window.addEventListener('resize', onOverviewViewportChange);
+    if (window.matchMedia) {
+      overviewMedia = window.matchMedia('(max-width: 782px)');
+      if (typeof overviewMedia.addEventListener === 'function') {
+        overviewMedia.addEventListener('change', onOverviewMediaChange);
+      }
+    }
     if (wp.data && typeof wp.data.subscribe === 'function') {
       overviewUnsubscribe = wp.data.subscribe(onOverviewStoreChange, 'core/block-editor');
     }
@@ -3620,8 +4208,8 @@
     speak(sprintf(
       /* translators: %d: number of top-level sections. */
       _n(
-        'Section overview — %d section. Use each chip\'s arrow buttons to reorder; Escape closes.',
-        'Section overview — %d sections. Use each chip\'s arrow buttons to reorder; Escape closes.',
+        'Section overview — %d section. Choose a section to show its reorder controls; Escape steps back out.',
+        'Section overview — %d sections. Choose a section to show its reorder controls; Escape steps back out.',
         count,
         'toolrail'
       ),
@@ -3634,6 +4222,7 @@
       return;
     }
     overviewOpen = false;
+    finishOverviewDrag();
     var overlay = overviewNode();
     if (overlay) {
       overlay.remove();
@@ -3660,9 +4249,18 @@
     }
     overviewEntryScroll = null;
     overviewRoot = '';
+    overviewSelected = '';
+    overviewPan = 0;
+    overviewUserScale = 0;
     document.removeEventListener('keydown', onOverviewKeydown, true);
     document.removeEventListener('scroll', onOverviewViewportChange, true);
     window.removeEventListener('resize', onOverviewViewportChange);
+    if (overviewMedia) {
+      if (typeof overviewMedia.removeEventListener === 'function') {
+        overviewMedia.removeEventListener('change', onOverviewMediaChange);
+      }
+      overviewMedia = null;
+    }
     if (overviewUnsubscribe) {
       overviewUnsubscribe();
       overviewUnsubscribe = null;
@@ -3670,6 +4268,20 @@
     if (overviewRepositionTimer) {
       window.clearTimeout(overviewRepositionTimer);
       overviewRepositionTimer = null;
+    }
+    if (overviewPanFrame) {
+      window.cancelAnimationFrame(overviewPanFrame);
+      overviewPanFrame = null;
+    }
+    // Restore the selection the overview cleared on open, if the block
+    // is still there (a dispatched selectBlock takes no DOM focus, so
+    // this never fights the refocus below).
+    if (overviewPriorSelection) {
+      var editorSel = wp.data.select('core/block-editor');
+      if (editorSel && editorSel.getBlock(overviewPriorSelection)) {
+        wp.data.dispatch('core/block-editor').selectBlock(overviewPriorSelection);
+      }
+      overviewPriorSelection = '';
     }
     syncPressed(true);
     if (refocus) {
@@ -4224,22 +4836,39 @@
     var scrollArea = document.createElement('div');
     scrollArea.className = 'toolrail-scroll';
 
-    // Order: Select, then the pinned slots (Text/Heading/Image ship as
-    // defaults there), then the remaining built-ins (Shape, Section), then
-    // registered top-level tools — so the default rail reads select · text
-    // · heading · image exactly as it did when those were built-ins.
-    scrollArea.appendChild(buildToolButton(model.tools[0], wrapper));
+    // Order (owner decision 2026-08-27): Select first; SECTION leads the
+    // pinned group — it inserts the container the pinned blocks go into,
+    // so it reads as part of that family; then the pinned slots
+    // (Text/Heading/Image ship as defaults there); then the Section
+    // overview behind a separator; then registered top-level tools. The
+    // Shape tool is shelved with Phase 4 and does not render (see
+    // BUILTIN_TOOLS).
+    var builtinIds = {};
+    var byId = {};
+    BUILTIN_TOOLS.forEach(function (t) {
+      builtinIds[t.id] = true;
+    });
+    model.tools.forEach(function (t) {
+      byId[t.id] = t;
+    });
+
+    scrollArea.appendChild(buildToolButton(byId.select, wrapper));
+    if (byId.section) {
+      scrollArea.appendChild(buildToolButton(byId.section, wrapper));
+    }
 
     model.slots.forEach(function (slot) {
       scrollArea.appendChild(buildToolButton(slot, wrapper));
     });
 
     scrollArea.appendChild(buildSeparator());
-    model.tools.slice(1, BUILTIN_TOOLS.length).forEach(function (tool) {
-      scrollArea.appendChild(buildToolButton(tool, wrapper));
-    });
+    if (byId.overview) {
+      scrollArea.appendChild(buildToolButton(byId.overview, wrapper));
+    }
 
-    var registeredTop = model.tools.slice(BUILTIN_TOOLS.length);
+    var registeredTop = model.tools.filter(function (t) {
+      return !builtinIds[t.id];
+    });
     if (registeredTop.length) {
       scrollArea.appendChild(buildSeparator());
       registeredTop.forEach(function (tool) {
