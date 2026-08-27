@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.1.12
+Stable tag: 0.1.13
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -16,7 +16,8 @@ Editor Tool Rail adds a toolbar to the post editor, docked to the left edge by d
 
 Everything the rail inserts is an ordinary core block. Deactivating this plugin changes nothing about how authored content renders or stays editable.
 
-* Built-in tools: Select, Shape (circle, rounded rectangle, hexagon, star), Section. Text, Heading and Image ship as ordinary pinned blocks, so you can reorder or remove them like anything else you pin.
+* Built-in tools: Select, Shape (circle, rounded rectangle, hexagon, star), Section, and Section overview. Text, Heading and Image ship as ordinary pinned blocks, so you can reorder or remove them like anything else you pin. If you unpin the defaults, a "Restore default tools" button in Toolbar settings brings back the missing ones without touching your own pins.
+* Section overview: one tool zooms the canvas out and puts a chip on every top-level block. Each chip has arrow buttons to reorder, and an Enter button to step inside a section and reorder its blocks the same way, with a breadcrumb back out. Every move works by keyboard and is announced to screen readers. Reordering is an ordinary editing action — the saved post is exactly what the List View would have written.
 * Pin any block type as a quick-insert tool: search for it in Toolbar settings, drag it from the inserter onto the rail, or use "Pin to toolbar" in the block's options menu. Pins, the toolbar position and saved sets are saved to your user account on the site — set the toolbar up once and it follows you across browsers and devices.
 * Save pinned arrangements as named sets, and move them between sites as small JSON files (Export/Import in Toolbar settings). A set may name blocks a site doesn't have — those stay in the set and appear when their plugin or theme is active.
 * Move the toolbar where you want it: it starts on the left edge, and can dock to the right edge (past the settings side panel), to a full-width bar across the top or the bottom, or float free as a Photoshop-style palette. Drag it by the grip and release near an edge to snap it there, or pick a position in Toolbar settings. Flyouts and panels open away from the docked edge — a top toolbar opens downward, a bottom one upward.
@@ -37,6 +38,10 @@ Against your user account on this site, the same as pinned blocks and saved sets
 Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a position under "Toolbar position".
 
 == Changelog ==
+
+= 0.1.13 =
+* Add Section overview: a toolbar tool that zooms the canvas out and overlays a chip on every top-level block. Reorder with each chip's arrow buttons (fully keyboard-operable, every move announced), press Enter on a section to reorder the blocks inside it at its own zoom, and step back out with Escape or the breadcrumb. Closing the overview returns you to where you were scrolled. Reordering is an ordinary editing action, so the saved post is exactly what reordering in List View would produce — and deactivating the plugin still changes nothing about your content.
+* Add "Restore default tools" to the Pinned blocks section of Toolbar settings: it re-pins whichever of Text, Heading and Image are missing, in their default order, and leaves every pin you chose exactly where it is. If nothing is missing, it says so.
 
 = 0.1.12 =
 * Wide mode is now controlled from Toolbar settings ("Tool names"), and the on-toolbar expand/contract button is opt-in from the same place — a permanent button at the toolbar's head cost space every author paid for a toggle few use often.

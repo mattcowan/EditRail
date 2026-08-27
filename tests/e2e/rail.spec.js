@@ -1211,6 +1211,12 @@ test.describe('regressions', () => {
         }
         for (const rule of rules) {
           if (!rule.selectorText || rule.selectorText.indexOf(':focus-visible') === -1) continue;
+          // The Section overview's chips draw on the EDITOR, not on the
+          // rail, and deliberately sit on a fixed palette instead of
+          // the appearance tokens (the 0.1.4 snap-preview boundary) —
+          // and they only exist while the overview is open. Their ring
+          // is measured by its own test in the overview suite.
+          if (rule.selectorText.indexOf('.toolrail-ov-') !== -1) continue;
           const declared = rule.style.getPropertyValue('outline');
           if (!declared) continue;
           // Every focus ring must go through the shared token, or it is
@@ -1643,8 +1649,9 @@ test.describe('help panel', () => {
     await expect(panel.locator('#toolrail-help-title')).toHaveText('Toolbar help');
     await expect(helpBtn).toHaveAttribute('aria-expanded', 'true');
 
-    // All five sections render as headed text.
-    await expect(panel.locator('h3')).toHaveCount(5);
+    // All six sections render as headed text (Section overview joined
+    // in 0.1.13).
+    await expect(panel.locator('h3')).toHaveCount(6);
 
     // An explicit open moves focus into the panel…
     const focusInPanel = await page.evaluate(() => {
@@ -2048,5 +2055,356 @@ test.describe('appearance', () => {
     expect(darkBand.ring).toBeGreaterThanOrEqual(3);
     expect(darkBand.pressedEdge).toBeGreaterThanOrEqual(3);
     expect(darkBand.status).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+/** Seed a known document for the overview specs: two paragraphs around a
+    group with two children. resetBlocks touches only unsaved editor
+    state — nothing is ever saved (this spec's standing rule). */
+async function seedOverviewBlocks(page) {
+  await page.evaluate(() => {
+    const { createBlock } = window.wp.blocks;
+    window.wp.data.dispatch('core/block-editor').resetBlocks([
+      createBlock('core/paragraph', { content: 'ALPHA' }),
+      createBlock('core/group', {}, [
+        createBlock('core/paragraph', { content: 'INNER-ONE' }),
+        createBlock('core/heading', { content: 'INNER-TWO' }),
+      ]),
+      createBlock('core/paragraph', { content: 'OMEGA' }),
+    ]);
+  });
+  await expect.poll(async () => (await blockNames(page)).length).toBe(3);
+}
+
+function overviewChipButton(page, clientId, action) {
+  return page.locator(
+    `#toolrail-overview .toolrail-ov-chip[data-clientid="${clientId}"] [data-ov-action="${action}"]`
+  );
+}
+
+test.describe('section overview (R6)', () => {
+  test('the Overview tool zooms a tall document fully into view with chips in document order; closing restores everything', async ({ page }) => {
+    await openNewPost(page);
+
+    // A document several viewports tall — the case the zoom exists for.
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        Array.from({ length: 30 }, (_, i) =>
+          createBlock('core/paragraph', { content: 'PARA-' + i })
+        )
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(30);
+
+    const tool = page.locator('#toolrail-rail [data-tool="overview"]');
+    await tool.click();
+
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    await expect(tool).toHaveAttribute('aria-pressed', 'true');
+
+    // The point of the zoom: the LAST block of a 30-block document is on
+    // screen. (Behavior, not mechanism — the scale/height plumbing can
+    // change; a below-the-fold document may not.)
+    await expect.poll(async () => page.evaluate(() => {
+      const frame = document.querySelector('iframe[name="editor-canvas"]');
+      const blocks = frame.contentDocument.querySelectorAll('[data-block]');
+      const last = blocks[blocks.length - 1];
+      const r = last.getBoundingClientRect();
+      const f = frame.getBoundingClientRect();
+      const k = f.width / frame.offsetWidth;
+      return f.top + (r.top + r.height) * k <= window.innerHeight + 1;
+    })).toBe(true);
+
+    // One chip per top-level block, chip DOM order = document order.
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    const chipIds = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#toolrail-overview .toolrail-ov-chip')).map(
+        (c) => c.dataset.clientid
+      )
+    );
+    expect(chipIds).toEqual(ids);
+
+    // Toggle off: overlay gone, pressed off, the canvas handed back —
+    // no scale host left stamped, and the iframe scrolls internally
+    // again (the document is taller than its restored viewport).
+    await tool.click();
+    await expect(page.locator('#toolrail-overview')).toHaveCount(0);
+    await expect(tool).toHaveAttribute('aria-pressed', 'false');
+    const restored = await page.evaluate(() => {
+      const frame = document.querySelector('iframe[name="editor-canvas"]');
+      const html = frame.contentDocument.documentElement;
+      return {
+        scaleHosts: document.querySelectorAll('.toolrail-ov-scale-host').length,
+        internallyScrollable: html.scrollHeight > html.clientHeight + 1,
+      };
+    });
+    expect(restored.scaleHosts).toBe(0);
+    expect(restored.internallyScrollable).toBe(true);
+  });
+
+  test('a chip moves its block, announces the move, and keeps focus on that chip', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewBlocks(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    await overviewChipButton(page, ids[0], 'down').click();
+
+    // ALPHA (a paragraph) moved below the group.
+    await expect.poll(async () => await blockNames(page)).toEqual([
+      'core/group',
+      'core/paragraph',
+      'core/paragraph',
+    ]);
+
+    // Announced through wp.a11y's persistent live region, with the real
+    // position — never a visual-only reorder.
+    await expect.poll(async () => page.evaluate(() => {
+      const region = document.getElementById('a11y-speak-polite');
+      return region ? region.textContent : '';
+    })).toContain('Moved Paragraph to position 2 of 3.');
+
+    // The rebuild keeps focus on the moved chip's own button (the
+    // settings-arrows contract) — a keyboard user is never dropped.
+    const focus = await page.evaluate(() => ({
+      action: document.activeElement.dataset ? document.activeElement.dataset.ovAction : null,
+      chip: document.activeElement.closest
+        ? (document.activeElement.closest('.toolrail-ov-chip') || {}).dataset
+        : null,
+    }));
+    expect(focus.action).toBe('down');
+    expect(focus.chip.clientid).toBe(ids[0]);
+  });
+
+  test('keyboard-only: Enter drills into a section, arrows reorder inside it, Escape climbs then closes', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewBlocks(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+
+    const topIds = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    const groupId = topIds[1];
+
+    // Enter the group by keyboard.
+    await overviewChipButton(page, groupId, 'enter').focus();
+    await page.keyboard.press('Enter');
+
+    const innerIds = await page.evaluate((gid) =>
+      window.wp.data.select('core/block-editor').getBlockOrder(gid), groupId
+    );
+    expect(innerIds.length).toBe(2);
+    await expect(page.locator('#toolrail-overview .toolrail-ov-chip')).toHaveCount(2);
+    // The breadcrumb names the level; the current crumb is text, not a button.
+    await expect(page.locator('#toolrail-overview [aria-current="location"]')).toHaveText('Group');
+
+    // Reorder the heading above the paragraph, by keyboard.
+    await overviewChipButton(page, innerIds[1], 'up').focus();
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => page.evaluate((gid) =>
+      window.wp.data.select('core/block-editor').getBlockOrder(gid), groupId
+    )).toEqual([innerIds[1], innerIds[0]]);
+
+    // Escape climbs one level (focus is inside the overlay)…
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#toolrail-overview .toolrail-ov-chip')).toHaveCount(3);
+    await expect(page.locator('#toolrail-overview [aria-current="location"]')).toHaveText('All sections');
+
+    // …and from the top level Escape closes, returning focus to the tool.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#toolrail-overview')).toHaveCount(0);
+    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('overview');
+  });
+
+  test('the chip focus ring clears 3:1 on the chip surface', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewBlocks(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview .toolrail-ov-chip').first()).toBeVisible();
+
+    // The chips are excluded from the token-sweep test on purpose: they
+    // draw on the editor and use a FIXED palette (the 0.1.4 snap-preview
+    // boundary), so their ring is pinned here instead — the DECLARED
+    // ring color from the stylesheet, against the chip's real computed
+    // surface, so an appearance change can never silently break it.
+    const m = await page.evaluate(() => {
+      const lum = (rgb) => {
+        const [r, g, b] = rgb.map((v) => {
+          v /= 255;
+          return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const parse = (c) => {
+        const el = document.createElement('div');
+        el.style.color = c;
+        document.body.appendChild(el);
+        const v = getComputedStyle(el).color.match(/rgba?\(([^)]+)\)/);
+        el.remove();
+        return v ? v[1].split(',').slice(0, 3).map(parseFloat) : null;
+      };
+
+      let declared = '';
+      for (const sheet of Array.from(document.styleSheets)) {
+        if (!sheet.href || sheet.href.indexOf('toolrail') === -1) continue;
+        let rules;
+        try { rules = Array.from(sheet.cssRules); } catch (e) { continue; }
+        for (const rule of rules) {
+          if (rule.selectorText
+            && rule.selectorText.indexOf('.toolrail-ov-btn:focus-visible') !== -1
+            && rule.style && rule.style.outlineColor) {
+            declared = rule.style.outlineColor;
+          }
+        }
+      }
+      if (!declared) return { declared };
+
+      const chip = document.querySelector('#toolrail-overview .toolrail-ov-chip');
+      const ring = parse(declared);
+      const surface = parse(getComputedStyle(chip).backgroundColor);
+      const l1 = lum(ring);
+      const l2 = lum(surface);
+      return {
+        declared,
+        ratio: +((Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05)).toFixed(2),
+      };
+    });
+
+    // Guard the guard: the rule must have been found and parsed.
+    expect(m.declared).toBeTruthy();
+    expect(m.ratio).toBeGreaterThanOrEqual(3);
+  });
+
+  test('an overview reorder serializes byte-identically to the same move made directly', async ({ page }) => {
+    await openNewPost(page);
+
+    // The overview path.
+    await seedOverviewBlocks(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    await overviewChipButton(page, ids[0], 'down').click();
+    await expect.poll(async () => (await blockNames(page))[0]).toBe('core/group');
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const viaOverview = await page.evaluate(() =>
+      window.wp.data.select('core/editor').getEditedPostContent()
+    );
+
+    // The direct dispatch — what List View's reorder resolves to.
+    await seedOverviewBlocks(page);
+    await page.evaluate(() => {
+      const order = window.wp.data.select('core/block-editor').getBlockOrder('');
+      window.wp.data.dispatch('core/block-editor').moveBlocksToPosition([order[0]], '', '', 1);
+    });
+    const viaDispatch = await page.evaluate(() =>
+      window.wp.data.select('core/editor').getEditedPostContent()
+    );
+
+    expect(viaOverview).toBe(viaDispatch);
+  });
+
+  test('entering and leaving neither dirties the post nor loses the scroll position', async ({ page }) => {
+    await openNewPost(page);
+
+    // A fresh, untouched post: the overview alone must not dirty it.
+    expect(await page.evaluate(() =>
+      window.wp.data.select('core/editor').isEditedPostDirty()
+    )).toBe(false);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toHaveCount(0);
+    expect(await page.evaluate(() =>
+      window.wp.data.select('core/editor').isEditedPostDirty()
+    )).toBe(false);
+
+    // Scroll restore: the canvas scrolls INSIDE its iframe on this
+    // editor (measured — the parent content region never overflows), so
+    // that is the position that must survive the round trip.
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        Array.from({ length: 30 }, (_, i) =>
+          createBlock('core/paragraph', { content: 'PARA-' + i })
+        )
+      );
+    });
+    await expect.poll(async () => page.evaluate(() => {
+      const html = document.querySelector('iframe[name="editor-canvas"]').contentDocument.documentElement;
+      return html.scrollHeight > html.clientHeight;
+    })).toBe(true);
+
+    // Guard the guard: the scroll must genuinely take, or restore-to-0
+    // would pass vacuously.
+    const scrolled = await page.evaluate(() => {
+      const win = document.querySelector('iframe[name="editor-canvas"]').contentWindow;
+      win.scrollTo(0, 300);
+      return win.scrollY;
+    });
+    expect(scrolled).toBeGreaterThan(0);
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    // The grown iframe has no internal scroll range left — the whole
+    // document is its viewport.
+    await expect.poll(async () => page.evaluate(() =>
+      document.querySelector('iframe[name="editor-canvas"]').contentWindow.scrollY
+    )).toBe(0);
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect.poll(async () => page.evaluate(() =>
+      document.querySelector('iframe[name="editor-canvas"]').contentWindow.scrollY
+    )).toBe(scrolled);
+  });
+});
+
+test.describe('restore default tools', () => {
+  test('restores exactly the missing defaults, appended in default order, never a reset', async ({ page }) => {
+    await openNewPost(page);
+
+    // One default missing, one extra pin present: restore must return
+    // ONLY Heading, appended, with the author's arrangement intact —
+    // this is the assertion a refactor-to-reset flattens.
+    await page.evaluate(() => {
+      window.toolrail.unpinBlock('core/heading');
+      window.toolrail.pinBlock('core/quote');
+    });
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('.toolrail-settings-restore').click();
+
+    await expect(page.locator('#toolrail-settings-pinned-status')).toHaveText('Restored 1 default tool.');
+    expect(JSON.parse(await getPref(page, 'toolrail-quick-slots'))).toEqual([
+      'core/paragraph', 'core/image', 'core/quote', 'core/heading',
+    ]);
+
+    // Nothing missing: says so, changes nothing.
+    await page.locator('.toolrail-settings-restore').click();
+    await expect(page.locator('#toolrail-settings-pinned-status')).toHaveText('All default tools are already pinned.');
+    expect(JSON.parse(await getPref(page, 'toolrail-quick-slots'))).toEqual([
+      'core/paragraph', 'core/image', 'core/quote', 'core/heading',
+    ]);
+
+    // All three missing: all three come back, in DEFAULT_SLOTS order,
+    // after the pin the author kept.
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => {
+      ['core/paragraph', 'core/heading', 'core/image'].forEach((n) =>
+        window.toolrail.unpinBlock(n)
+      );
+    });
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('.toolrail-settings-restore').click();
+    await expect(page.locator('#toolrail-settings-pinned-status')).toHaveText('Restored 3 default tools.');
+    expect(JSON.parse(await getPref(page, 'toolrail-quick-slots'))).toEqual([
+      'core/quote', 'core/paragraph', 'core/heading', 'core/image',
+    ]);
+
+    // The migration stamp is not this button's to touch.
+    expect(await getPref(page, 'toolrail-slots-migrated')).toBe('1');
   });
 });

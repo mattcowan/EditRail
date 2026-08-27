@@ -50,7 +50,9 @@
    than a dependency on theirs. */
 .toolrail-region,
 .toolrail-region *,
-#toolrail-snap-preview {
+#toolrail-snap-preview,
+#toolrail-overview,
+#toolrail-overview * {
     box-sizing: border-box;
 }
 
@@ -971,9 +973,200 @@ body.toolrail-dragging * {
     color: inherit;
 }
 
+/* ------------------------------------------------------------------
+   Section overview (R6). The canvas's parent-document container is
+   scaled by a factor the JS computes (fit the current root, clamped to
+   [0.25, 1]); the transform is keyed to a body class + custom property
+   so removing the class hands the canvas back byte-for-byte. Transforms
+   change no layout, so scroll geometry and the editor's flex row are
+   untouched.
+
+   The chips draw ON THE EDITOR, not on the rail, so — like the drag
+   snap-preview (the 0.1.4 boundary) — they are deliberately NOT on the
+   appearance tokens: a fixed dark palette whose ratios are already
+   measured (the Dark preset: fg 12.63:1, ring #7b90ff 5.78:1 on
+   #1e1e1e). The chip's 6px padding is load-bearing: it keeps the focus
+   ring (2px stroke + 2px offset) fully on the chip's own dark surface,
+   where its ratio is measured — bleeding onto a white canvas would put
+   #7b90ff at ~2.7:1.
+   ------------------------------------------------------------------ */
+
+/* Grow the iframe to its DOCUMENT height so the whole document renders
+   at once (its internal scrolling — the only scrolling this editor has,
+   measured — clamps to 0 for the overview's lifetime). min-height is
+   the property that actually takes: core's zoom hook holds the iframe's
+   height with a FILLING web animation, and a filling animation outranks
+   any inline or stylesheet height, !important included (measured:
+   height:1861px!important computed back to 591px) — but it cannot beat
+   min-height's clamp. */
+body.toolrail-overview-on iframe[name="editor-canvas"] {
+    height: var(--toolrail-ov-frameh, 100%) !important;
+    min-height: var(--toolrail-ov-frameh, 0) !important;
+    flex: none !important;
+}
+
+/* The scale lives on the iframe's PARENT (stamped .toolrail-ov-scale-host
+   by the JS — core's own scale-container on current builds), never the
+   iframe: the same core animation pins the iframe's transform at
+   identity (measured: an inline !important scale computed to the
+   identity matrix). translateY brings a drilled-in root to the top —
+   the wrapper chain is fixed viewport-height boxes, so nothing in the
+   parent document scrolls the canvas. The negative margin keeps the
+   layout footprint at the visual size for any build whose wrappers size
+   from their children. */
+body.toolrail-overview-on .toolrail-ov-scale-host {
+    transform: translateY(var(--toolrail-ov-ty, 0px)) scale(var(--toolrail-overview-scale, 1));
+    transform-origin: top center;
+    margin-bottom: var(--toolrail-ov-mb, 0px);
+}
+
+/* The zoom transition is presentation only, so it exists only where
+   motion is welcome. */
+@media (prefers-reduced-motion: no-preference) {
+    body.toolrail-overview-on .toolrail-ov-scale-host {
+        transition: transform 0.15s ease;
+    }
+}
+
+/* Covers the content region's LAYOUT box (inline geometry from the JS).
+   z-index 30 on purpose: over the canvas, UNDER core's side panels and
+   modals (both at 100000) — the overview never needs to beat them, so
+   the modal-veto machinery needs no special case here. */
+#toolrail-overview {
+    position: absolute;
+    z-index: 30;
+    pointer-events: none;
+}
+
+#toolrail-overview .toolrail-ov-bar {
+    pointer-events: auto;
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    max-width: calc(100% - 16px);
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 6px 8px;
+    background: #1e1e1e;
+    color: #e0e0e0;
+    border: 1px solid #3f3f3f;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    font-size: 13px;
+}
+
+.toolrail-ov-crumbs {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.toolrail-ov-crumb {
+    min-height: 44px;
+    padding: 4px 10px;
+    background: #2a2a2a;
+    color: #e0e0e0;
+    border: 1px solid #4f4f4f;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+/* The current level is text, not a control. */
+span.toolrail-ov-crumb {
+    background: transparent;
+    border-color: transparent;
+    color: #fff;
+    font-weight: 600;
+    cursor: default;
+    display: inline-flex;
+    align-items: center;
+}
+
+.toolrail-ov-empty {
+    margin: 0;
+    color: #b0b0b0;
+}
+
+.toolrail-ov-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.toolrail-ov-chip {
+    pointer-events: auto;
+    position: absolute;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 360px;
+    padding: 6px;
+    background: #1e1e1e;
+    color: #e0e0e0;
+    border: 1px solid #3f3f3f;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    font-size: 13px;
+    list-style: none;
+}
+
+.toolrail-ov-label {
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+}
+
+.toolrail-ov-pos {
+    color: #b0b0b0;
+    white-space: nowrap;
+}
+
+/* 44px targets (roadmap R6) — the ↑/↓ buttons ARE the keyboard path,
+   never pointer sugar. */
+.toolrail-ov-btn {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 4px 10px;
+    display: grid;
+    place-items: center;
+    background: #2a2a2a;
+    color: #e0e0e0;
+    border: 1px solid #4f4f4f;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.toolrail-ov-btn:hover,
+.toolrail-ov-crumb:hover {
+    background: #3a3a3a;
+    color: #fff;
+}
+
+.toolrail-ov-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.toolrail-ov-btn:focus-visible,
+.toolrail-ov-crumb:focus-visible {
+    outline: 2px solid #7b90ff;
+    outline-offset: 2px;
+}
+
 /* The admin small-screen breakpoint: below it the editor is already tight. */
 @media (max-width: 782px) {
     .toolrail-region {
+        display: none;
+    }
+
+    #toolrail-overview {
         display: none;
     }
 }
@@ -1017,8 +1210,15 @@ body.toolrail-dragging * {
 
     .toolrail-flyout,
     .toolrail-settings,
-    .toolrail-help {
+    .toolrail-help,
+    #toolrail-overview .toolrail-ov-bar,
+    .toolrail-ov-chip {
         border: 1px solid CanvasText;
+    }
+
+    .toolrail-ov-btn:focus-visible,
+    .toolrail-ov-crumb:focus-visible {
+        outline: 2px solid Highlight;
     }
 
     /* The grip is a radial-gradient dot pattern; gradients do not survive
