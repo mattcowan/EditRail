@@ -3331,7 +3331,14 @@
     rail.setAttribute('aria-orientation', isVertical() ? 'vertical' : 'horizontal');
     rail.setAttribute('aria-label', __('Tools', 'toolrail'));
 
-    rail.appendChild(buildGrip());
+    // The head shares the scroll/tail container grammar (and, crucially,
+    // their cross-axis padding): the chevron is a .toolrail-tool, so
+    // wide mode sizes it width:100% — as a DIRECT rail child it measured
+    // 199px against 191px tool rows and its pressed edge bar rendered
+    // outside the rail onto the editor (review 2026-08-27, finding 1).
+    var head = document.createElement('div');
+    head.className = 'toolrail-head';
+    head.appendChild(buildGrip());
 
     // Wide-mode chevron, at the rail's head beside the grip — OPT-IN
     // via Toolbar settings (isWideToggleShown; owner decision
@@ -3368,8 +3375,9 @@
         // settings checkbox).
         setWide(!isWide());
       });
-      rail.appendChild(wideToggle);
+      head.appendChild(wideToggle);
     }
+    rail.appendChild(head);
 
     var model = railModel();
 
@@ -3427,6 +3435,14 @@
       btn.tabIndex = -1;
       btn.title = __('Scroll the tools', 'toolrail');
       btn.hidden = true;
+      // A real <button> takes focus on mousedown even at tabIndex -1 —
+      // the grip never had this problem only because it is a <div>. An
+      // aria-hidden element must never HOLD focus (it vanishes from the
+      // accessibility tree while focused), so refuse the focus while
+      // keeping the click (review 2026-08-27, finding 2).
+      btn.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+      });
       btn.addEventListener('click', function () {
         var delta = dir === 'prev' ? -1 : 1;
         // Instant, not smooth — a smooth scroll here would need the
@@ -3434,7 +3450,10 @@
         if (isVertical()) {
           scrollArea.scrollBy(0, delta * Math.max(88, scrollArea.clientHeight * 0.6));
         } else {
-          scrollArea.scrollBy(delta * Math.max(88, scrollArea.clientWidth * 0.6), 0);
+          // RTL x-scrolling runs NEGATIVE from the right edge, so
+          // "forward through the tools" flips sign there.
+          var rtl = getComputedStyle(scrollArea).direction === 'rtl';
+          scrollArea.scrollBy((rtl ? -delta : delta) * Math.max(88, scrollArea.clientWidth * 0.6), 0);
         }
       });
       return btn;
@@ -3444,7 +3463,9 @@
 
     function syncScrollSteps() {
       var vertical = isVertical();
-      var pos = vertical ? scrollArea.scrollTop : scrollArea.scrollLeft;
+      // abs() because RTL reports scrollLeft as 0..-max; the distance
+      // from the start is what the buttons care about on either side.
+      var pos = vertical ? scrollArea.scrollTop : Math.abs(scrollArea.scrollLeft);
       var max = vertical
         ? scrollArea.scrollHeight - scrollArea.clientHeight
         : scrollArea.scrollWidth - scrollArea.clientWidth;
@@ -3461,6 +3482,12 @@
       railScrollObserver.observe(scrollArea);
     }
     syncScrollSteps();
+    // Post-insertion pass: mount() inserts the rail synchronously after
+    // buildRail returns, so this reads real sizes even in a browser
+    // with no ResizeObserver — with native scrollbars hidden, the step
+    // buttons are the ONLY scroll affordance and must not depend on the
+    // observer alone.
+    window.setTimeout(syncScrollSteps, 0);
 
     rail.appendChild(scrollPrev);
     rail.appendChild(scrollArea);

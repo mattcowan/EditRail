@@ -1730,15 +1730,28 @@ test.describe('wide mode', () => {
     await page.evaluate(() => window.toolrail.pinBlock('core/latest-comments'));
     const geometry = await page.evaluate(() => {
       const region = document.getElementById('toolrail-region');
-      const rail = document.getElementById('toolrail-rail');
+      // The scroll container, not the rail: the rail is overflow
+      // visible and cannot scroll, so measuring it would pass
+      // vacuously (review 2026-08-27, finding 6).
+      const scroll = document.querySelector('#toolrail-rail .toolrail-scroll');
       return {
         regionWidth: region.getBoundingClientRect().width,
-        horizontalOverflow: rail.scrollWidth > rail.clientWidth,
+        horizontalOverflow: scroll.scrollWidth > scroll.clientWidth,
       };
     });
     expect(geometry.regionWidth).toBe(200);
     expect(geometry.horizontalOverflow).toBe(false);
     await page.evaluate(() => window.toolrail.unpinBlock('core/latest-comments'));
+
+    // The chevron row matches the tool rows: as a direct rail child it
+    // outgrew them (199px vs 191px) and its pressed edge bar rendered
+    // outside the rail (review 2026-08-27, finding 1 — the head
+    // container carries the same cross-axis padding now).
+    const rowWidths = await page.evaluate(() => ({
+      chevron: document.querySelector('#toolrail-rail [data-tool="wide-toggle"]').getBoundingClientRect().width,
+      select: document.querySelector('#toolrail-rail [data-tool="select"]').getBoundingClientRect().width,
+    }));
+    expect(Math.abs(rowWidths.chevron - rowWidths.select)).toBeLessThanOrEqual(1);
 
     expect(await getPref(page, 'toolrail-wide')).toBe('1');
     await page.reload();
@@ -1870,6 +1883,19 @@ test.describe('rail overflow', () => {
     expect(bars.scrollbarWidth).toBe('none');
     expect(bars.stealsWidth).toBe(0);
     expect(bars.xOverflow).toBe(0);
+
+    // The first tool sits ≥4px inside the scroll container: an overflow
+    // container clips descendant painting at its padding box, and the
+    // focus ring (2px stroke + 2px offset) needs those 4px — at inset 0
+    // the initial tab stop's ring lost its outer stroke (review
+    // 2026-08-27, finding 3, confirmed by measurement).
+    const ringInset = await page.evaluate(() => {
+      const scroll = document.querySelector('#toolrail-rail .toolrail-scroll');
+      scroll.scrollTop = 0;
+      const first = scroll.querySelector('.toolrail-tool');
+      return first.getBoundingClientRect().top - scroll.getBoundingClientRect().top;
+    });
+    expect(ringInset).toBeGreaterThanOrEqual(4);
 
     // The step buttons are the affordance: only "more below" shows at
     // the top, both directions mid-scroll, only "more above" at the end.

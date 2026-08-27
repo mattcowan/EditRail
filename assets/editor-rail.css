@@ -88,11 +88,12 @@
     z-index: 30;
 }
 
-/* 53, not 52: the sum is exact — 44px tools + 8px rail padding + the
-   1px dock-edge border (inside the box under border-box). At 52 the
-   tools overflowed the rail by 1px, which is what summoned the stray
-   horizontal scrollbar strip whenever the rail also scrolled
-   vertically (owner screenshot 2026-08-27). */
+/* 53, not 52: the sum is exact — 44px tools + 8px cross-axis padding on
+   the head/scroll/tail containers + the 1px dock-edge border (inside
+   the box under border-box). At 52 the tools overflowed the rail by
+   1px, which is what summoned the stray horizontal scrollbar strip
+   whenever the rail also scrolled vertically (owner screenshot
+   2026-08-27). */
 .toolrail-region[data-dock="left"],
 .toolrail-region[data-dock="right"] {
     flex: 0 0 53px;
@@ -214,6 +215,7 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
    in a 671px editor). min-width/min-height: 0 beat the flex automatic
    minimum, which would otherwise refuse to let the section shrink and
    push the tail out anyway. */
+.toolrail-head,
 .toolrail-scroll,
 .toolrail-tail {
     display: flex;
@@ -228,10 +230,14 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
     flex: 1 1 auto;
 }
 
+.toolrail-head,
 .toolrail-tail {
     flex: 0 0 auto;
 }
 
+.toolrail-region[data-dock="left"] .toolrail-head,
+.toolrail-region[data-dock="right"] .toolrail-head,
+.toolrail-region[data-dock="float"] .toolrail-head,
 .toolrail-region[data-dock="left"] .toolrail-scroll,
 .toolrail-region[data-dock="right"] .toolrail-scroll,
 .toolrail-region[data-dock="float"] .toolrail-scroll,
@@ -239,7 +245,11 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
 .toolrail-region[data-dock="right"] .toolrail-tail,
 .toolrail-region[data-dock="float"] .toolrail-tail {
     flex-direction: column;
-    /* The cross-axis padding the rail gave up — see the rail comment. */
+    /* The cross-axis padding the rail gave up — see the rail comment.
+       The head carries it too, or the wide-mode chevron (a full-width
+       .toolrail-tool) outgrows the tool rows and its pressed edge bar
+       renders outside the rail (measured: 199px vs 191px rows, review
+       2026-08-27 finding 1). */
     padding: 0 4px;
 }
 
@@ -264,8 +274,16 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
 .toolrail-region[data-dock="float"] .toolrail-scroll {
     overflow-y: auto;
     overflow-x: hidden;
+    /* MAIN-axis padding too — an overflow container clips descendant
+       painting at its padding box, and the first tool's focus ring (2px
+       stroke + 2px offset) needs exactly this 4px or its outer stroke
+       is shaved off (review 2026-08-27, finding 3 — confirmed: the
+       first tool sat at inset 0). */
+    padding: 4px;
 }
 
+.toolrail-region[data-dock="top"] .toolrail-head,
+.toolrail-region[data-dock="bottom"] .toolrail-head,
 .toolrail-region[data-dock="top"] .toolrail-scroll,
 .toolrail-region[data-dock="bottom"] .toolrail-scroll,
 .toolrail-region[data-dock="top"] .toolrail-tail,
@@ -278,6 +296,7 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
 .toolrail-region[data-dock="bottom"] .toolrail-scroll {
     overflow-x: auto;
     overflow-y: hidden;
+    padding: 4px;
 }
 
 /* Step buttons for the hidden-scrollbar tools section. Rendered by the
