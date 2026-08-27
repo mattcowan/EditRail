@@ -160,8 +160,7 @@ test.describe('armed-tool insertion', () => {
     // "click empty space to start a paragraph" behaviour quietly added a
     // second, empty one alongside the inserted block — the assertion could
     // not tell the stray from the real insert because both were paragraphs.
-    await expect.poll(async () => (await blockNames(page)).length).toBe(1);
-    expect(await blockNames(page)).toEqual(['core/paragraph']);
+    await expect.poll(async () => await blockNames(page)).toEqual(['core/paragraph']);
     await expect(page.locator('#toolrail-rail [data-tool="select"]')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveAttribute('aria-pressed', 'false');
   });
@@ -176,8 +175,7 @@ test.describe('armed-tool insertion', () => {
     await canvas(page).locator('body').click({ position: { x: 300, y: 450 } });
     // Two headings and NOTHING else: filtering to core/heading before
     // counting used to hide any stray core added on the way.
-    await expect.poll(async () => (await blockNames(page)).length).toBe(2);
-    expect(await blockNames(page)).toEqual(['core/heading', 'core/heading']);
+    await expect.poll(async () => await blockNames(page)).toEqual(['core/heading', 'core/heading']);
     await expect(page.locator('#toolrail-rail [data-tool="select"]')).toHaveAttribute('aria-pressed', 'true');
   });
 
