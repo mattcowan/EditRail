@@ -1714,7 +1714,7 @@ test.describe('help panel', () => {
     await expect(helpBtn).toHaveAttribute('aria-expanded', 'true');
 
     // All six sections render as headed text (Section overview joined
-    // in 0.1.13).
+    // in 0.1.14).
     await expect(panel.locator('h3')).toHaveCount(6);
 
     // An explicit open moves focus into the panel…
