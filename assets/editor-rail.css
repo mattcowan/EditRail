@@ -50,7 +50,9 @@
    than a dependency on theirs. */
 .toolrail-region,
 .toolrail-region *,
-#toolrail-snap-preview {
+#toolrail-snap-preview,
+#toolrail-overview,
+#toolrail-overview * {
     box-sizing: border-box;
 }
 
@@ -971,9 +973,369 @@ body.toolrail-dragging * {
     color: inherit;
 }
 
+/* ------------------------------------------------------------------
+   Section overview (R6). The canvas's parent-document container is
+   scaled by a factor the JS computes (fit the current root, clamped to
+   [0.25, 1]); the transform is keyed to a body class + custom property
+   so removing the class hands the canvas back byte-for-byte. Transforms
+   change no layout, so scroll geometry and the editor's flex row are
+   untouched.
+
+   The chips draw ON THE EDITOR, not on the rail, so — like the drag
+   snap-preview (the 0.1.4 boundary) — they are deliberately NOT on the
+   appearance tokens: a fixed dark palette whose ratios are already
+   measured (the Dark preset: fg 12.63:1, ring #7b90ff 5.78:1 on
+   #1e1e1e). The chip's 6px padding is load-bearing: it keeps the focus
+   ring (2px stroke + 2px offset) fully on the chip's own dark surface,
+   where its ratio is measured — bleeding onto a white canvas would put
+   #7b90ff at ~2.7:1.
+   ------------------------------------------------------------------ */
+
+/* Grow the iframe to its DOCUMENT height so the whole document renders
+   at once (its internal scrolling — the only scrolling this editor has,
+   measured — clamps to 0 for the overview's lifetime). min-height is
+   the property that actually takes: core's zoom hook holds the iframe's
+   height with a FILLING web animation, and a filling animation outranks
+   any inline or stylesheet height, !important included (measured:
+   height:1861px!important computed back to 591px) — but it cannot beat
+   min-height's clamp. */
+body.toolrail-overview-on iframe[name="editor-canvas"] {
+    height: var(--toolrail-ov-frameh, 100%) !important;
+    min-height: var(--toolrail-ov-frameh, 0) !important;
+    flex: none !important;
+    /* Core puts a 0.4s all-property transition on this iframe, which
+       ANIMATED the height growth — the canvas background visibly
+       "fell down the page" on entry (measured: live CSSTransitions on
+       height and min-height). The overview's resize must be instant. */
+    transition: none !important;
+}
+
+/* The scale lives on the iframe's PARENT (stamped .toolrail-ov-scale-host
+   by the JS — core's own scale-container on current builds), never the
+   iframe: the same core animation pins the iframe's transform at
+   identity (measured: an inline !important scale computed to the
+   identity matrix). translateY brings a drilled-in root to the top —
+   the wrapper chain is fixed viewport-height boxes, so nothing in the
+   parent document scrolls the canvas. The negative margin keeps the
+   layout footprint at the visual size for any build whose wrappers size
+   from their children. */
+body.toolrail-overview-on .toolrail-ov-scale-host {
+    transform: translateY(var(--toolrail-ov-ty, 0px)) scale(var(--toolrail-overview-scale, 1));
+    transform-origin: top center;
+    margin-bottom: var(--toolrail-ov-mb, 0px);
+}
+
+/* Covers the content region's LAYOUT box (inline geometry from the JS).
+   z-index 30 on purpose: over the canvas, UNDER core's side panels and
+   modals (both at 100000) — the overview never needs to beat them, so
+   the modal-veto machinery needs no special case here.
+
+   pointer-events: auto — the overview is a MODE: while it is open, no
+   click can fall through and edit (or, with a tool armed, insert into)
+   the zoomed-out document underneath; the wheel pans instead of
+   scrolling something else. overflow: hidden clips panned-away boxes;
+   the focusin handler pans a focused box back into view, so keyboard
+   reachability never depends on what happens to be on screen. */
+#toolrail-overview {
+    position: absolute;
+    z-index: 30;
+    overflow: hidden;
+    pointer-events: auto;
+}
+
+/* The mode frame: a visible boundary around the whole overview area, so
+   the state reads as a mode with an inside and an outside (owner
+   feedback 2026-08-27). Painted by a pseudo so it sits ABOVE the boxes
+   and never intercepts the pointer. */
+#toolrail-overview::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 3px solid #3858e9;
+    pointer-events: none;
+    z-index: 3;
+}
+
+.toolrail-ov-title {
+    color: #fff;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.toolrail-ov-esc {
+    color: #b0b0b0;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+#toolrail-overview .toolrail-ov-bar {
+    pointer-events: auto;
+    position: absolute;
+    z-index: 4;
+    top: 8px;
+    left: 8px;
+    max-width: calc(100% - 16px);
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 6px 8px;
+    background: #1e1e1e;
+    color: #e0e0e0;
+    border: 1px solid #3f3f3f;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    font-size: 13px;
+}
+
+.toolrail-ov-crumbs {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.toolrail-ov-crumb {
+    min-height: 44px;
+    padding: 4px 10px;
+    background: #2a2a2a;
+    color: #e0e0e0;
+    border: 1px solid #4f4f4f;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+/* The current level is text, not a control. */
+span.toolrail-ov-crumb {
+    background: transparent;
+    border-color: transparent;
+    color: #fff;
+    font-weight: 600;
+    cursor: default;
+    display: inline-flex;
+    align-items: center;
+}
+
+.toolrail-ov-zoomlabel {
+    min-width: 40px;
+    text-align: center;
+    color: #b0b0b0;
+    font-variant-numeric: tabular-nums;
+}
+
+.toolrail-ov-empty {
+    margin: 0;
+    color: #b0b0b0;
+}
+
+/* The list has no box of its own; boxes position against the overlay. */
+.toolrail-ov-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+/* Drilled in, four strips veil everything OUTSIDE the root at 50%
+   (owner ask), so what can be reordered is the only thing at full
+   strength. Visual only: pointer-events none, so clicks land on the
+   overlay (deselect) and the wheel still pans; the boxes come later in
+   the DOM and stack above. Under forced colors this background would be
+   FORCED to the opaque system Canvas color — not dropped — painting the
+   document out entirely instead of dimming it, so the forced-colors
+   block below hides the veil (review 2026-08-27, finding 2). */
+.toolrail-ov-veil {
+    position: absolute;
+    background: rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+}
+
+/* An outline box IS its block (v2, owner feedback 2026-08-27): lines
+   around the content instead of a bar over it. The white backing —
+   outside AND inside the blue line — is what keeps the line visible
+   over any content, dark or light; a bare 2px blue vanished on blue
+   imagery. The box itself takes no pointer events; its full-cover pick
+   button does. */
+.toolrail-ov-box {
+    position: absolute;
+    border: 2px solid #3858e9;
+    border-radius: 4px;
+    box-shadow:
+        0 0 0 2px rgba(255, 255, 255, 0.85),
+        inset 0 0 0 2px rgba(255, 255, 255, 0.85);
+    pointer-events: none;
+    list-style: none;
+}
+
+.toolrail-ov-box.is-selected {
+    z-index: 1;
+    border-color: #1d35b4;
+    box-shadow:
+        0 0 0 2px rgba(255, 255, 255, 0.95),
+        inset 0 0 0 2px rgba(255, 255, 255, 0.95);
+}
+
+/* The whole box is one focusable disclosure. Transparent — the content
+   below stays readable; hover gets a faint wash as the pointer
+   affordance. The focus ring is two-tone (blue on its own white halo,
+   5.61:1 — the pressed-fg:pressed pair already measured) because it
+   draws over arbitrary canvas content. */
+.toolrail-ov-selectbtn {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    pointer-events: auto;
+}
+
+.toolrail-ov-selectbtn:hover {
+    background: rgba(56, 88, 233, 0.08);
+}
+
+.toolrail-ov-selectbtn:focus-visible {
+    outline: 2px solid #3858e9;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.9);
+}
+
+/* Small corner tag naming the block — visible at rest so a sighted
+   author knows what each outline is without clicking. Deliberately
+   tiny; the full black bar this replaces obscured the content (owner
+   feedback, post 446). White on the blended worst case (over white
+   content) still measures ≈10:1. */
+.toolrail-ov-tag {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    max-width: calc(100% - 8px);
+    padding: 1px 6px;
+    background: rgba(30, 30, 30, 0.85);
+    color: #fff;
+    border-radius: 3px;
+    font-size: 11px;
+    line-height: 16px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+.toolrail-ov-box.is-selected .toolrail-ov-tag {
+    display: none;
+}
+
+/* The reorder controls, revealed inside the lines when a box is picked.
+   Floats at the box's top-left and may overflow a short box — the strip
+   matters more than the geometry there. */
+.toolrail-ov-controls {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: max-content;
+    padding: 6px;
+    background: #1e1e1e;
+    color: #e0e0e0;
+    border: 1px solid #3f3f3f;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    font-size: 13px;
+    pointer-events: auto;
+}
+
+/* Author-origin display beats the UA's [hidden] rule regardless of
+   specificity (the wp-admin lesson) — restate it. */
+.toolrail-ov-controls[hidden] {
+    display: none;
+}
+
+/* Drag-to-reorder (pointer sugar — the arrows are the keyboard path).
+   The drop line marks the gap a release would move the section into;
+   same two-tone discipline as the outlines so it reads on any content. */
+.toolrail-ov-dropline {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    height: 0;
+    border-top: 3px solid #3858e9;
+    border-radius: 2px;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
+    pointer-events: none;
+    z-index: 2;
+}
+
+.toolrail-ov-box.is-dragging {
+    opacity: 0.6;
+}
+
+body.toolrail-ov-dragging,
+body.toolrail-ov-dragging * {
+    cursor: grabbing !important;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.toolrail-ov-label {
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+}
+
+.toolrail-ov-pos {
+    color: #b0b0b0;
+    white-space: nowrap;
+}
+
+/* 44px targets (roadmap R6) — the ↑/↓ buttons ARE the keyboard path,
+   never pointer sugar. */
+.toolrail-ov-btn {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 4px 10px;
+    display: grid;
+    place-items: center;
+    background: #2a2a2a;
+    color: #e0e0e0;
+    border: 1px solid #4f4f4f;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.toolrail-ov-btn:hover,
+.toolrail-ov-crumb:hover {
+    background: #3a3a3a;
+    color: #fff;
+}
+
+.toolrail-ov-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.toolrail-ov-btn:focus-visible,
+.toolrail-ov-crumb:focus-visible {
+    outline: 2px solid #7b90ff;
+    outline-offset: 2px;
+}
+
 /* The admin small-screen breakpoint: below it the editor is already tight. */
 @media (max-width: 782px) {
     .toolrail-region {
+        display: none;
+    }
+
+    #toolrail-overview {
         display: none;
     }
 }
@@ -1017,8 +1379,35 @@ body.toolrail-dragging * {
 
     .toolrail-flyout,
     .toolrail-settings,
-    .toolrail-help {
+    .toolrail-help,
+    #toolrail-overview .toolrail-ov-bar,
+    .toolrail-ov-controls {
         border: 1px solid CanvasText;
+    }
+
+    /* The outline boxes' white-backing shadows do not survive forced
+       colors; the 2px border does, in the system palette. Same for the
+       mode frame. */
+    .toolrail-ov-box {
+        border: 2px solid Highlight;
+    }
+
+    #toolrail-overview::after {
+        border-color: Highlight;
+    }
+
+    /* Forced colors make the veil's translucent background an OPAQUE
+       system color, which would hide the document instead of dimming
+       it — the mode frame, outlines and breadcrumb carry the drilled
+       state there instead. */
+    .toolrail-ov-veil {
+        display: none;
+    }
+
+    .toolrail-ov-btn:focus-visible,
+    .toolrail-ov-crumb:focus-visible,
+    .toolrail-ov-selectbtn:focus-visible {
+        outline: 2px solid Highlight;
     }
 
     /* The grip is a radial-gradient dot pattern; gradients do not survive

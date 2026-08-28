@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.1.12
+Stable tag: 0.1.15
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -16,7 +16,8 @@ Editor Tool Rail adds a toolbar to the post editor, docked to the left edge by d
 
 Everything the rail inserts is an ordinary core block. Deactivating this plugin changes nothing about how authored content renders or stays editable.
 
-* Built-in tools: Select, Shape (circle, rounded rectangle, hexagon, star), Section. Text, Heading and Image ship as ordinary pinned blocks, so you can reorder or remove them like anything else you pin.
+* Built-in tools: Select, Section, and Section overview. Text, Heading and Image ship as ordinary pinned blocks, so you can reorder or remove them like anything else you pin. If you unpin the defaults, a "Restore default tools" button in Toolbar settings brings back the missing ones without touching your own pins.
+* Section overview: one tool zooms the canvas out and draws an outline around every top-level block, with a small name tag in the corner. Drag an outline to reorder it, or click it to reveal reorder controls inside the lines — arrows to move it, and a "Reorder inside" button to step into a section and reorder its blocks the same way, with a breadcrumb back out. Zoom with the +/− buttons and pan long documents with the mouse wheel. Every move works by keyboard and is announced to screen readers — dragging is a shortcut, never the only way — and closing returns you to where you were scrolled. Reordering is an ordinary editing action — the saved post is exactly what the List View would have written.
 * Pin any block type as a quick-insert tool: search for it in Toolbar settings, drag it from the inserter onto the rail, or use "Pin to toolbar" in the block's options menu. Pins, the toolbar position and saved sets are saved to your user account on the site — set the toolbar up once and it follows you across browsers and devices.
 * Save pinned arrangements as named sets, and move them between sites as small JSON files (Export/Import in Toolbar settings). A set may name blocks a site doesn't have — those stay in the set and appear when their plugin or theme is active.
 * Move the toolbar where you want it: it starts on the left edge, and can dock to the right edge (past the settings side panel), to a full-width bar across the top or the bottom, or float free as a Photoshop-style palette. Drag it by the grip and release near an edge to snap it there, or pick a position in Toolbar settings. Flyouts and panels open away from the docked edge — a top toolbar opens downward, a bottom one upward.
@@ -37,6 +38,19 @@ Against your user account on this site, the same as pinned blocks and saved sets
 Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a position under "Toolbar position".
 
 == Changelog ==
+
+= 0.1.15 =
+* "Reorder inside" now isolates the section you stepped into: it is centered in the viewport and everything outside it is veiled at 50%, so what you can move is the only thing at full strength.
+* Fix: on entry the canvas background could visibly creep down the page for a second or more — the editor's own iframe transition was animating the overview's resize, and the measurement it was based on chased its own result. The zoom now sizes itself to the actual content, instantly, which also removes the dead space that could sit under the last section.
+
+= 0.1.14 =
+* Add Section overview: a toolbar tool that zooms the canvas out and outlines every top-level block, with a small name tag in the corner. Drag an outline to a new spot, or click it to reveal its reorder controls inside the lines — the content stays readable until you ask. Arrows move the block (fully keyboard-operable, every move announced; dragging is a shortcut, never the only way), "Reorder inside" steps into a section to reorder its blocks at their own zoom with a breadcrumb back out, +/− buttons zoom, and the mouse wheel pans long documents. While the overview is open, clicks cannot fall through to the document. Closing returns you to where you were scrolled. Reordering is an ordinary editing action, so the saved post is exactly what reordering in List View would produce — and deactivating the plugin still changes nothing about your content.
+* The overview's zoom never shrinks a page's typical section below a usable size — on very long posts it stops at a floor computed from the content and lets the mouse wheel cover the rest, instead of fitting everything into one unreadable screen.
+* Opening the overview sets aside the selected block (and its floating toolbar) for the mode's lifetime and restores the selection on close; the bar names the mode, and exiting is a labeled Done button with an Esc hint, inside a visible frame around the whole overview.
+* Add "Restore default tools" to the Pinned blocks section of Toolbar settings: it re-pins whichever of Text, Heading and Image are missing, in their default order, and leaves every pin you chose exactly where it is. If nothing is missing, it says so; if the saved list cannot be read, nothing is changed and it says that instead.
+* The Section tool now sits at the head of the pinned blocks, right after Select.
+* The Shape tool is set aside until a later release; its spot on the toolbar is reserved.
+* A block whose movement is locked shows disabled arrows in the overview instead of announcing a move that did not happen; the overview closes itself if the window becomes too narrow to show it.
 
 = 0.1.12 =
 * Wide mode is now controlled from Toolbar settings ("Tool names"), and the on-toolbar expand/contract button is opt-in from the same place — a permanent button at the toolbar's head cost space every author paid for a toggle few use often.
