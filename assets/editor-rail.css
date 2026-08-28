@@ -1272,6 +1272,17 @@ span.toolrail-ov-crumb {
     z-index: 2;
 }
 
+/* Inside a multi-box row (grid, columns) the target gap is BETWEEN
+   columns: the line turns vertical, spanning the row's band. Inline
+   left/top/height come from the JS; borders survive forced colors the
+   same way the horizontal edge does. */
+.toolrail-ov-dropline.is-vertical {
+    right: auto;
+    width: 0;
+    border-top: 0;
+    border-left: 3px solid #3858e9;
+}
+
 .toolrail-ov-box.is-dragging {
     opacity: 0.6;
 }
