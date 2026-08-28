@@ -1140,8 +1140,10 @@ span.toolrail-ov-crumb {
    (owner ask), so what can be reordered is the only thing at full
    strength. Visual only: pointer-events none, so clicks land on the
    overlay (deselect) and the wheel still pans; the boxes come later in
-   the DOM and stack above. A background does not survive forced
-   colors — there, the mode frame and outlines carry the state. */
+   the DOM and stack above. Under forced colors this background would be
+   FORCED to the opaque system Canvas color — not dropped — painting the
+   document out entirely instead of dimming it, so the forced-colors
+   block below hides the veil (review 2026-08-27, finding 2). */
 .toolrail-ov-veil {
     position: absolute;
     background: rgba(0, 0, 0, 0.5);
@@ -1392,6 +1394,14 @@ body.toolrail-ov-dragging * {
 
     #toolrail-overview::after {
         border-color: Highlight;
+    }
+
+    /* Forced colors make the veil's translucent background an OPAQUE
+       system color, which would hide the document instead of dimming
+       it — the mode frame, outlines and breadcrumb carry the drilled
+       state there instead. */
+    .toolrail-ov-veil {
+        display: none;
     }
 
     .toolrail-ov-btn:focus-visible,

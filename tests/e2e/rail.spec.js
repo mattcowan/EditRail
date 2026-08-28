@@ -2325,17 +2325,32 @@ test.describe('section overview (R6)', () => {
       const f = frame.getBoundingClientRect();
       const k = f.width / frame.offsetWidth;
       const rootMid = f.top + (r.top + r.height / 2) * k;
+      const rootRect = {
+        top: f.top + r.top * k,
+        bottom: f.top + (r.top + r.height) * k,
+        left: f.left + r.left * k,
+        right: f.left + (r.left + r.width) * k,
+      };
       const veils = Array.from(overlay.querySelectorAll('.toolrail-ov-veil'))
         .filter((v) => v.style.display !== 'none');
+      // The HOLE is the point (review 2026-08-27, finding 5): no strip
+      // may cover the drilled root itself.
+      const overlapsRoot = veils.some((v) => {
+        const b = v.getBoundingClientRect();
+        return b.left < rootRect.right - 1 && b.right > rootRect.left + 1
+          && b.top < rootRect.bottom - 1 && b.bottom > rootRect.top + 1;
+      });
       return {
         veils: veils.length,
         bg: veils.length ? getComputedStyle(veils[0]).backgroundColor : '',
         offCenter: Math.abs(rootMid - (o.top + o.height / 2)),
+        overlapsRoot,
       };
     }, groupId);
     expect(iso.veils).toBeGreaterThanOrEqual(2);
     expect(iso.bg).toBe('rgba(0, 0, 0, 0.5)');
     expect(iso.offCenter).toBeLessThan(60);
+    expect(iso.overlapsRoot).toBe(false);
 
     // Reorder the heading above the paragraph, by keyboard.
     await overviewBoxButton(page, innerIds[1], 'pick').focus();
@@ -2725,6 +2740,68 @@ test.describe('section overview (R6)', () => {
     )).toBe(picked);
   });
 
+  test('a drilled root taller than the viewport is top-aligned and pans — never centered', async ({ page }) => {
+    await openNewPost(page);
+
+    // A group of many short paragraphs: the children's median floors the
+    // drill-in zoom at ~1, making the root taller than the viewport —
+    // the branch where centering must NOT engage (review 2026-08-27,
+    // finding 5: this path was never exercised).
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks([
+        createBlock('core/paragraph', { content: 'BEFORE' }),
+        createBlock('core/group', {},
+          Array.from({ length: 30 }, (_, i) =>
+            createBlock('core/paragraph', { content: 'TALL-' + i })
+          )),
+        createBlock('core/paragraph', { content: 'AFTER' }),
+      ]);
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(3);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+
+    const groupId = (await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    ))[1];
+    await overviewBoxButton(page, groupId, 'pick').click();
+    await overviewBoxButton(page, groupId, 'enter').click();
+    await expect(page.locator('#toolrail-overview [aria-current="location"]')).toHaveText('Group');
+    await page.waitForTimeout(300);
+
+    const m = await page.evaluate((gid) => {
+      const overlay = document.getElementById('toolrail-overview');
+      const o = overlay.getBoundingClientRect();
+      const frame = document.querySelector('iframe[name="editor-canvas"]');
+      const el = frame.contentDocument.querySelector(`[data-block="${gid}"]`);
+      const r = el.getBoundingClientRect();
+      const f = frame.getBoundingClientRect();
+      const k = f.width / frame.offsetWidth;
+      return {
+        rootTopOffset: f.top + r.top * k - o.top,
+        rootTallerThanViewport: r.height * k > o.height,
+        ty: parseFloat(document.body.style.getPropertyValue('--toolrail-ov-ty')) || 0,
+      };
+    }, groupId);
+
+    // Guard the guard: the root must genuinely overflow the viewport.
+    expect(m.rootTallerThanViewport).toBe(true);
+    // Top-aligned (small positive offset), not centered.
+    expect(m.rootTopOffset).toBeGreaterThanOrEqual(-2);
+    expect(m.rootTopOffset).toBeLessThan(80);
+
+    // And the remainder is reachable by panning.
+    const c = await page.evaluate(() => {
+      const r = document.getElementById('toolrail-overview').getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    });
+    await page.mouse.move(c.x, c.y);
+    await page.mouse.wheel(0, 400);
+    await expect.poll(async () => page.evaluate(() =>
+      parseFloat(document.body.style.getPropertyValue('--toolrail-ov-ty')) || 0
+    )).toBeLessThan(m.ty);
+  });
+
   test('growing the canvas is instant and stable — no creeping background, no dead tail space', async ({ page }) => {
     await openNewPost(page);
     await page.evaluate(() => {
@@ -2742,17 +2819,20 @@ test.describe('section overview (R6)', () => {
     await page.locator('#toolrail-rail [data-tool="overview"]').click();
     await expect(page.locator('#toolrail-overview .toolrail-ov-box').first()).toBeVisible();
 
-    // Past the settle pass, the frame height must HOLD: core's 0.4s
+    // The frame height must be INSTANT and then HOLD: core's 0.4s
     // all-property iframe transition animated the growth, and measuring
     // body.scrollHeight (whose ~40vh click-to-append tail chases the
     // iframe's own height) re-targeted it in a feedback loop — the
     // canvas background visibly crept down the page (owner report,
-    // 1707×898).
-    await page.waitForTimeout(400);
+    // 1707×898). Sampling at 120ms — well INSIDE where core's 0.4s
+    // transition would still be mid-flight — is what proves
+    // instantaneity, not merely eventual stability (review 2026-08-27,
+    // finding 5).
+    await page.waitForTimeout(120);
     const s1 = await page.evaluate(() =>
       document.querySelector('iframe[name="editor-canvas"]').offsetHeight
     );
-    await page.waitForTimeout(900);
+    await page.waitForTimeout(1100);
     const state = await page.evaluate(() => {
       const frame = document.querySelector('iframe[name="editor-canvas"]');
       const idoc = frame.contentDocument;
@@ -2773,6 +2853,36 @@ test.describe('section overview (R6)', () => {
     // exclusion to mean anything.
     expect(Math.abs(state.s2 - (state.contentExtent + 32))).toBeLessThanOrEqual(2);
     expect(state.bodyScrollH).toBeGreaterThan(state.s2 + 100);
+
+    // The reviewer's variant (2026-08-27, finding 1): a full-height
+    // (100vh) Cover resolves against the iframe's own height — the same
+    // feedback mechanism as the appender tail, through a different
+    // door. With the extent measured un-grown and cached, the frame
+    // must hold here too instead of roughly doubling.
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toHaveCount(0);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks([
+        createBlock('core/paragraph', { content: 'ABOVE' }),
+        createBlock('core/cover', { minHeight: 100, minHeightUnit: 'vh' },
+          [createBlock('core/paragraph', { content: 'HERO' })]),
+        createBlock('core/paragraph', { content: 'BELOW' }),
+      ]);
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(3);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview .toolrail-ov-box').first()).toBeVisible();
+    await page.waitForTimeout(120);
+    const c1 = await page.evaluate(() =>
+      document.querySelector('iframe[name="editor-canvas"]').offsetHeight
+    );
+    // Outlive the settle pass and a full transition length.
+    await page.waitForTimeout(1100);
+    const c2 = await page.evaluate(() =>
+      document.querySelector('iframe[name="editor-canvas"]').offsetHeight
+    );
+    expect(c2).toBe(c1);
   });
 
   test('a section can be dragged to a new spot — pointer sugar over the same move', async ({ page }) => {

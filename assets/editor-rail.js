@@ -3113,6 +3113,56 @@
     return { left: r.left, top: r.top, width: r.width, height: r.height };
   }
 
+  // Content extent cache. The extent is re-measured only when marked
+  // dirty (open, store change, viewport resize) — the settle/zoom/pan
+  // paths reuse the cache, so no measurement can ever react to a growth
+  // it caused.
+  var overviewExtent = 0;
+  var overviewExtentDirty = true;
+
+  /**
+   * The document's CONTENT height: the bottom edge of the lowest
+   * top-level block, measured with the iframe at its NATURAL height.
+   *
+   * Never body.scrollHeight, and never measured while grown — anything
+   * viewport-relative inside the canvas resolves against the iframe's
+   * OWN height, so a grown-state measurement is a feedback loop. Two
+   * confirmed sources (both 2026-08-27): the canvas's ~40vh
+   * click-to-append tail (measured live: 3938 → 5191 over 1.2s — the
+   * "background falls down the page" report), and a full-height (100vh)
+   * Cover block re-inflating through the settle re-measure (review
+   * finding 1 — the same mechanism, through a different door). Blanking
+   * the height var for the measurement makes it growth-independent, so
+   * every pass computes the same number.
+   *
+   * Known limitation, documented not fixed: a 100vh block has no
+   * "natural" size that survives the grow — it fills whatever viewport
+   * exists, so after growing it renders taller than measured and can
+   * push content below it past the frame's bottom edge. Stable and
+   * honest beats unbounded growth.
+   */
+  function measureOverviewExtent(doc) {
+    var style = document.body.style;
+    var grown = style.getPropertyValue('--toolrail-ov-frameh');
+    if (grown) {
+      style.removeProperty('--toolrail-ov-frameh');
+    }
+    var editorSel = wp.data.select('core/block-editor');
+    var win = doc.defaultView;
+    var extent = 0;
+    (editorSel ? editorSel.getBlockOrder('') : []).forEach(function (id) {
+      var el = doc.querySelector('[data-block="' + String(id).replace(/"/g, '') + '"]');
+      if (el) {
+        var r = el.getBoundingClientRect();
+        extent = Math.max(extent, r.top + r.height + (win ? (win.scrollY || 0) : 0));
+      }
+    });
+    if (grown) {
+      style.setProperty('--toolrail-ov-frameh', grown);
+    }
+    return extent;
+  }
+
   /**
    * Fit the current root into the content viewport. Top level fits the
    * whole DOCUMENT; a drilled-in root fits THAT block's height, which is
@@ -3160,29 +3210,21 @@
       host.classList.add('toolrail-ov-scale-host');
     }
 
-    // The document height comes from the CONTENT — the bottom edge of
-    // the last top-level block — never from body.scrollHeight: the
-    // canvas pads its tail with a viewport-relative click-to-append
-    // area (~40vh INSIDE the iframe), so scrollHeight chases the
-    // iframe's own height. Measuring it while growing the iframe is a
-    // feedback loop (measured 2026-08-27 at 1707×898: 3938 → 5191 over
-    // 1.2s — the "background slowly falls down the page" report), and
-    // the inflated number also padded the fit with dead tail space.
-    var editorSel = wp.data.select('core/block-editor');
-    var scrollY = doc.defaultView ? (doc.defaultView.scrollY || 0) : 0;
-    var extent = 0;
-    (editorSel ? editorSel.getBlockOrder('') : []).forEach(function (id) {
-      var el = doc.querySelector('[data-block="' + String(id).replace(/"/g, '') + '"]');
-      if (el) {
-        var r = el.getBoundingClientRect();
-        extent = Math.max(extent, r.top + r.height + scrollY);
+    if (overviewExtentDirty) {
+      var measured = measureOverviewExtent(doc);
+      if (measured > 0) {
+        overviewExtent = measured;
+        overviewExtentDirty = false;
       }
-    });
-    if (extent <= 0) {
-      // Empty canvas: nothing to fit or grow.
+    }
+    if (overviewExtent <= 0) {
+      // Nothing measurable yet (blocks not mounted after a heal, or an
+      // emptied canvas): leave NO stale scale/height/translate applied
+      // (review 2026-08-27, finding 3) — the next dirty pass refits.
+      clearOverviewScale();
       return;
     }
-    var docHeight = Math.ceil(extent) + 32;
+    var docHeight = Math.ceil(overviewExtent) + 32;
     var fitHeight = docHeight;
     var rootTop = 0;
     if (overviewRoot) {
@@ -3258,6 +3300,14 @@
     var content = contentRegion();
     var viewport = content ? Math.max(0, content.clientHeight - 24) : 0;
     var maxPan = Math.max(0, overviewMetrics.fitHeight * overviewMetrics.k - viewport);
+    // Centered means it fits — centering and panning NEVER combine.
+    // Recomputing maxPan from live viewport while metrics are a beat
+    // stale could otherwise allow both at once (review 2026-08-27,
+    // finding 4); a centered view pins the pan at zero until the next
+    // refit decides otherwise.
+    if (overviewMetrics.centerOffset) {
+      maxPan = 0;
+    }
     overviewPan = Math.min(Math.max(0, next), maxPan);
     document.body.style.setProperty(
       '--toolrail-ov-ty',
@@ -4114,6 +4164,9 @@
         return;
       }
       placeOverviewOverlay();
+      // A viewport change can resize viewport-relative content — the
+      // one legitimate reason to re-measure the extent.
+      overviewExtentDirty = true;
       applyOverviewScale();
       positionOverviewBoxes();
     }, 50);
@@ -4143,6 +4196,7 @@
     // 2026-08-27, finding 6 — the overlay now captures pointer events,
     // so canvas edits mid-overview are rare, but dispatches from other
     // code are not).
+    overviewExtentDirty = true;
     applyOverviewScale();
     buildOverviewContent();
     scheduleOverviewSettle();
@@ -4241,6 +4295,7 @@
     overviewSelected = '';
     overviewPan = 0;
     overviewUserScale = 0;
+    overviewExtentDirty = true;
     // The canvas scrolls INSIDE its iframe on iframed editors (measured:
     // the parent content region never overflows) — that scroll position
     // is what "exiting restores where you were" means. Growing the
@@ -4349,6 +4404,8 @@
     overviewSelected = '';
     overviewPan = 0;
     overviewUserScale = 0;
+    overviewExtent = 0;
+    overviewExtentDirty = true;
     document.removeEventListener('keydown', onOverviewKeydown, true);
     document.removeEventListener('scroll', onOverviewViewportChange, true);
     window.removeEventListener('resize', onOverviewViewportChange);
