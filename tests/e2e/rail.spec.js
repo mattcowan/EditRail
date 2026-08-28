@@ -15,32 +15,46 @@ const AUTH = path.join(__dirname, '.auth', 'admin.json');
 
 test.use({ storageState: AUTH });
 
-async function openNewPost(page) {
-  await page.goto('/wp-admin/post-new.php');
+/**
+ * Every rail preference this suite is allowed to write, in both stores.
+ *
+ * Deliberately NOT including `toolrail-help-seen`: clearing that one
+ * auto-opens the help panel over whatever runs next, so resetRailPrefs
+ * SETS it instead of clearing it.
+ */
+const RAIL_PREF_KEYS = [
+  'toolrail-position',
+  'toolrail-quick-slots',
+  'toolrail-slot-configs',
+  'toolrail-slots-migrated',
+  'toolrail-help-hidden',
+  'toolrail-wide',
+  'toolrail-wide-toggle',
+  'toolrail-appearance',
+];
 
-  // Dock, pins and saved sets are per-user preferences — since the
-  // account-persistence change they live in the core/preferences store
-  // (synced to user meta), with localStorage as the migration source and
-  // fallback. Clear BOTH, or a spec's changes leak into every later spec
-  // through the shared admin account. Clearing also restores the DEFAULT
-  // pinned slots (Text/Heading/Image), which several tests rely on.
-  //
-  // The slot-migration stamp MUST be cleared with the rest: it stops the
-  // one-time slot migration from re-running, which is what seeds the
-  // defaults — leave it set with the data wiped and the rail comes back
-  // empty instead of default. (The local-to-account lift has no stamp of
-  // its own — it's a per-key check against the account, safe to re-run.)
-  const hadState = await page.evaluate(() => {
-    const keys = [
-      'toolrail-position',
-      'toolrail-quick-slots',
-      'toolrail-slot-configs',
-      'toolrail-slots-migrated',
-      'toolrail-help-hidden',
-      'toolrail-wide',
-      'toolrail-wide-toggle',
-      'toolrail-appearance',
-    ];
+/**
+ * Return the rail's stored state to a fresh-install baseline, in the page
+ * currently loaded.
+ *
+ * Dock, pins and saved sets are per-user preferences — since the
+ * account-persistence change they live in the core/preferences store
+ * (synced to user meta), with localStorage as the migration source and
+ * fallback. Clear BOTH, or a spec's changes leak into every later spec
+ * through the shared admin account. Clearing also restores the DEFAULT
+ * pinned slots (Text/Heading/Image), which several tests rely on.
+ *
+ * The slot-migration stamp MUST be cleared with the rest: it stops the
+ * one-time slot migration from re-running, which is what seeds the
+ * defaults — leave it set with the data wiped and the rail comes back
+ * empty instead of default. (The local-to-account lift has no stamp of
+ * its own — it's a per-key check against the account, safe to re-run.)
+ *
+ * @param {import('@playwright/test').Page} page Page with the editor loaded.
+ * @return {Promise<boolean>} Whether anything was actually stored.
+ */
+function resetRailPrefs(page) {
+  return page.evaluate((keys) => {
     let had = false;
     keys.forEach((k) => {
       if (window.localStorage.getItem(k) !== null) {
@@ -71,7 +85,92 @@ async function openNewPost(page) {
       /* Store not ready — nothing stored there either, then. */
     }
     return had;
-  });
+  }, RAIL_PREF_KEYS);
+}
+
+/**
+ * Leave the shared admin account clean when the run ends.
+ *
+ * resetRailPrefs runs as SETUP inside openNewPost, which protects each
+ * spec from the one before it but leaves the LAST spec's writes stranded
+ * in wp_persisted_preferences — server-side user meta, shared with the
+ * human's own browser on this site. That is not hypothetical: the
+ * corrupt-list spec below is the last in this file, and its `not-json{{{`
+ * fixture survived a passing run into the real account, emptying the rail
+ * of every pinned tool and making "Restore default tools" refuse to run
+ * (diagnosed 2026-08-28). Before pins moved to the account store the
+ * damage was confined to the Playwright browser profile; it is not any
+ * more, so the suite must clean up after itself.
+ *
+ * A FRESH context, not the finished test's page: two specs leave
+ * Storage.prototype.getItem/setItem throwing, and one swaps in a no-op
+ * persistence layer — a reset run in that realm would either throw or
+ * write nowhere. One clean editor load costs a few seconds per run.
+ *
+ * Teardown WRITES the baseline rather than clearing and trusting the slot
+ * migration to reseed it, because that reseed happens at boot(), not at
+ * clear time. Clearing alone measurably strands the account in the one
+ * state the setup comment above warns about — stamp set, slot list gone,
+ * so migrateSlots() returns early and the rail renders with no pinned
+ * tools at all. (Observed on the first cut of this hook: the boot-race
+ * watcher re-stamped while the cleared slot list was what the debounced
+ * REST write carried up.) Setting both keys together cannot land
+ * half-applied.
+ *
+ * This is per FILE, which is the right granularity while the suite is one
+ * serial spec file. Adding a second file, or parallel mode, would need
+ * this to move to a globalTeardown instead — otherwise one worker's
+ * cleanup lands mid-test in another.
+ */
+test.afterAll(async ({ browser }) => {
+  const context = await browser.newContext({ storageState: AUTH });
+  try {
+    const page = await context.newPage();
+    await page.goto('/wp-admin/post-new.php');
+    // The store has to be attached before a reset can reach the account.
+    await page.waitForFunction(
+      () => window.wp && window.wp.data && !!window.wp.data.select('core/preferences'),
+      null,
+      { timeout: 20000 }
+    );
+    await resetRailPrefs(page);
+    await page.evaluate((keys) => {
+      const disp = window.wp.data.dispatch('core/preferences');
+      keys.forEach((k) => disp.set('toolrail', k, undefined));
+      // DEFAULT_SLOTS, spelled out: the account must end in the state a
+      // migrated install is in, not in a half-migrated one.
+      disp.set(
+        'toolrail',
+        'toolrail-quick-slots',
+        JSON.stringify(['core/paragraph', 'core/heading', 'core/image'])
+      );
+      disp.set('toolrail', 'toolrail-slots-migrated', '1');
+      disp.set('toolrail', 'toolrail-help-seen', '1');
+    }, RAIL_PREF_KEYS);
+    // Give the preferences store's debounced REST write time to land —
+    // closing the context first would drop it and leave the account dirty.
+    await page.waitForTimeout(3000);
+
+    // Prove it landed in user meta, not just in this page's store: the
+    // localStorage cache was cleared above, so a fresh load can only get
+    // the pins from the preloaded account preferences.
+    await page.reload();
+    await expect(page.locator('#toolrail-rail [data-tool^="pin:"]')).toHaveCount(3, {
+      timeout: 20000,
+    });
+  } catch (e) {
+    /* Editor unreachable at teardown — report it, do not fail the run. */
+    // eslint-disable-next-line no-console
+    console.warn('[toolrail] preference teardown did not run:', e.message);
+  } finally {
+    await context.close();
+  }
+});
+
+async function openNewPost(page) {
+  await page.goto('/wp-admin/post-new.php');
+
+  const hadState = await resetRailPrefs(page);
   if (hadState) {
     await page.reload();
   }
