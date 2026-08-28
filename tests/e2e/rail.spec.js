@@ -3311,6 +3311,130 @@ test.describe('overview drag stress (grids, columns, notices)', () => {
       return Math.abs(overlay.top - content.top) < 2;
     })).toBe(true);
   });
+
+  test('a stack of SHORT blocks at floor zoom still drags vertically — the 24px box floor must not fuse the column into one row', async ({ page }) => {
+    await openNewPost(page);
+    // Separators are the worst case for the row grouping: their painted
+    // boxes hit positionOverviewBoxes' 24px minimum height at low zoom,
+    // so every box in the column overlaps its neighbors vertically. A
+    // vertical-only row test grouped the whole stack into ONE row and
+    // handed a straight-down drag to the sideways X math (review
+    // 2026-08-28, finding 1).
+    //
+    // A tall group LEADS the document: at floor zoom a bare stack of
+    // separators is ~70px tall and sits entirely under the overview's
+    // own bar, where no pointer can reach a box (elementFromPoint at
+    // the first box's grab strip returns the zoom button). The group
+    // pushes the separator stack below the bar.
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks([
+        createBlock('core/group', {},
+          Array.from({ length: 10 }, (_, i) =>
+            createBlock('core/paragraph', { content: 'LEAD-' + i })
+          )),
+      ].concat(Array.from({ length: 12 }, () => createBlock('core/separator'))));
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(13);
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    // The separators are ids[1..12]; the group at ids[0] stays put.
+    const FIRST_SEP = 1;
+
+    // Zoom all the way out — the floor is where the box heights clamp,
+    // which is the state the bug needs.
+    const scale = () => page.evaluate(() =>
+      parseFloat(document.body.style.getPropertyValue('--toolrail-overview-scale')) || 0
+    );
+    let k = await scale();
+    for (let i = 0; i < 15; i += 1) {
+      await page.locator('#toolrail-overview [data-ov-action="zoom-out"]').click();
+      const next = await scale();
+      const stalled = next >= k - 0.0001;
+      k = next;
+      if (stalled) {
+        break;
+      }
+    }
+
+    // Rects are only trustworthy once the zoom's reposition pass has run.
+    await expect.poll(async () => page.evaluate((list) => list.every((id) => {
+      const b = document.querySelector(`#toolrail-overview .toolrail-ov-box[data-clientid="${id}"]`);
+      return b && b.style.display !== 'none' && b.getBoundingClientRect().width > 10;
+    }), ids)).toBe(true);
+    // Painted boxes, in current document order. Floored boxes OVERLAP
+    // and the later one paints on top, so a box's only grabbable strip
+    // is the sliver above its successor's top — press anywhere lower and
+    // the gesture drags the wrong block.
+    const geometry = () => page.evaluate(() => {
+      const sel = window.wp.data.select('core/block-editor');
+      return sel.getBlockOrder('').map((id) => {
+        const r = document
+          .querySelector(`#toolrail-overview .toolrail-ov-box[data-clientid="${id}"]`)
+          .getBoundingClientRect();
+        return { id: id, top: r.top, bottom: r.bottom, height: r.height, x: r.left + r.width / 2 };
+      });
+    });
+    const grabPoint = (boxes, i) => ({
+      x: Math.round(boxes[i].x),
+      y: Math.round(boxes[i].top + (i + 1 < boxes.length
+        ? Math.max(1, Math.min(12, (boxes[i + 1].top - boxes[i].top) / 2))
+        : 12)),
+    });
+
+    let boxes = await geometry();
+    // The premise of the test: the separator boxes really are at the
+    // 24px floor (plus at most the 2px borders, depending on
+    // box-sizing), they overlap their neighbors by more than half
+    // because of it — exactly what a vertical-only row test would fuse
+    // — and they sit BELOW the bar where the pointer can reach them.
+    expect(Math.round(boxes[FIRST_SEP].height)).toBeLessThanOrEqual(30);
+    expect(boxes[FIRST_SEP].bottom - boxes[FIRST_SEP + 1].top)
+      .toBeGreaterThan(boxes[FIRST_SEP].height / 2);
+    const barBottom = await page.evaluate(() =>
+      document.querySelector('#toolrail-overview .toolrail-ov-bar').getBoundingClientRect().bottom
+    );
+    expect(boxes[FIRST_SEP].top).toBeGreaterThan(barBottom);
+
+    // Straight down the SAME X, to a gap INSIDE the stack — the drop
+    // target has to come from the pointer's Y. With the column fused
+    // into one row the marker turns vertical and the X math hands back
+    // the row's own first index, so the block never moves at all.
+    const target = FIRST_SEP + 6;
+    const from = grabPoint(boxes, FIRST_SEP);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(from.x, Math.round(boxes[target].top + boxes[target].height / 2 + 1), { steps: 10 });
+    await expect(page.locator('.toolrail-ov-dropline:not(.is-vertical)')).toBeVisible();
+    await expect(page.locator('.toolrail-ov-dropline.is-vertical')).toHaveCount(0);
+    await page.mouse.up();
+
+    await expect.poll(async () => page.evaluate((id) =>
+      window.wp.data.select('core/block-editor').getBlockOrder('').indexOf(id), ids[FIRST_SEP]
+    )).toBeGreaterThan(FIRST_SEP);
+    const landed = await page.evaluate((id) =>
+      window.wp.data.select('core/block-editor').getBlockOrder('').indexOf(id), ids[FIRST_SEP]
+    );
+    expect(landed).toBeLessThan(ids.length - 1);
+
+    // And the same gesture carried past the last box still means "after
+    // everything", the way it does for a stack of tall sections.
+    boxes = await geometry();
+    const again = grabPoint(boxes, landed);
+    await page.mouse.move(again.x, again.y);
+    await page.mouse.down();
+    await page.mouse.move(again.x, Math.round(boxes[boxes.length - 1].bottom + 6), { steps: 10 });
+    await expect(page.locator('.toolrail-ov-dropline:not(.is-vertical)')).toBeVisible();
+    await page.mouse.up();
+
+    await expect.poll(async () => page.evaluate((id) =>
+      window.wp.data.select('core/block-editor').getBlockOrder('').indexOf(id), ids[FIRST_SEP]
+    )).toBe(ids.length - 1);
+  });
 });
 
 test.describe('restore default tools', () => {

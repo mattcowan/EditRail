@@ -3033,6 +3033,9 @@
   // dismissed resizes it with NO resize/scroll event fired, and the
   // viewport math reads that chrome's height.
   var overviewResizeObserver = null;
+  // The node that observer is actually watching, so healOverview can
+  // tell a React-replaced visual editor from the one observed at open.
+  var overviewResizeTarget = null;
   // In-flight box drag ({clientId, startX, startY, active, toIndex}).
   // Drag-to-reorder is POINTER SUGAR over the same public move the
   // arrows dispatch (owner ask 2026-08-27) — the keyboard path is the
@@ -3056,6 +3059,22 @@
   }
 
   /**
+   * The visual editor's own node inside the content region — the box the
+   * overview measures its viewport against and observes for resizes.
+   *
+   * Both class names on purpose: the plugin declares Requires at least:
+   * 6.5, and `edit-post-visual-editor` is the class that build may still
+   * carry. This machine runs WP 7.1, so the 6.5 markup could not be
+   * measured here — the second selector is insurance, not a measurement.
+   */
+  function visualEditorNode() {
+    var content = contentRegion();
+    return content
+      ? content.querySelector('.editor-visual-editor, .edit-post-visual-editor')
+      : null;
+  }
+
+  /**
    * Where the CANVAS actually starts inside the content region, as an
    * offset (px, ≥0) from the region's top. Editor notices — the "There
    * is an autosave" warning above all — render INSIDE the content
@@ -3070,7 +3089,7 @@
    */
   function overviewCanvasTop() {
     var content = contentRegion();
-    var visual = content ? content.querySelector('.editor-visual-editor') : null;
+    var visual = visualEditorNode();
     if (!content || !visual) {
       return 0;
     }
@@ -3613,6 +3632,22 @@
     updateOverviewDropline(e.clientX, e.clientY);
   }
 
+  /** True when the CANVAS is laid out right to left. The boxes are
+      painted from block rects read inside the iframe, so the admin
+      document's own direction is the wrong one to ask — and a direction
+      set by a stylesheet leaves no `dir` attribute to read, which is why
+      this is computed style and not an attribute (review 2026-08-28,
+      finding 3). A cross-origin canvas falls back to the admin
+      document. */
+  function overviewIsRtl() {
+    try {
+      var doc = canvasDoc() || document;
+      return window.getComputedStyle(doc.documentElement).direction === 'rtl';
+    } catch (e) {
+      return window.getComputedStyle(document.documentElement).direction === 'rtl';
+    }
+  }
+
   /** Place the drop line at the gap the pointer is over, and remember
       the move index a release would dispatch.
 
@@ -3620,9 +3655,9 @@
       drags across a grid weren't seamless — the old index came from Y
       midpoints alone, so side-by-side boxes could never be targeted
       sideways). Boxes are grouped into visual ROWS in document order
-      (a new row starts when a box no longer vertically overlaps the
-      current row's band by half — grid, columns and gallery children
-      all flow row-major, so document order within a row IS the visual
+      (a row-mate overlaps the row's band vertically by half AND sits
+      beside it horizontally — grid, columns and gallery children all
+      flow row-major, so document order within a row IS the visual
       order, mirrored under RTL). The pointer's Y picks the row; inside
       a multi-box row the pointer's X picks the gap, marked by a
       VERTICAL drop line spanning the row's band. A single-box row
@@ -3635,7 +3670,7 @@
     }
     var order = overviewOrder();
     var idx = order.indexOf(overviewDrag.clientId);
-    var rtl = document.documentElement.dir === 'rtl';
+    var rtl = overviewIsRtl();
 
     // Visible boxes in document order, each with its order index —
     // boxes with no DOM yet take no part, exactly as before.
@@ -3662,27 +3697,54 @@
     }
     line.style.display = '';
 
+    // A row-mate must overlap the row's band vertically AND sit beside
+    // it horizontally. The second test is load-bearing: these are the
+    // PAINTED boxes, which positionOverviewBoxes floors at 24px tall,
+    // so at low zoom (the 0.25 auto floor, the 0.15 manual floor) a
+    // stack of short blocks — separators, spacers — overlaps its
+    // neighbors vertically and a vertical-only test would cascade the
+    // whole column into one "row" and hand vertical drags to the X
+    // math (review 2026-08-28, finding 1). Stacked boxes share their
+    // horizontal span; side-by-side cells never do, in either writing
+    // direction.
     var rows = [];
     entries.forEach(function (en) {
       var row = rows[rows.length - 1];
       if (row) {
-        var overlap = Math.min(row.bottom, en.rect.bottom) - Math.max(row.top, en.rect.top);
-        if (overlap >= Math.min(en.rect.height, row.bottom - row.top) / 2) {
+        var overlapY = Math.min(row.bottom, en.rect.bottom) - Math.max(row.top, en.rect.top);
+        var overlapX = Math.min(row.right, en.rect.right) - Math.max(row.left, en.rect.left);
+        if (overlapY >= Math.min(en.rect.height, row.bottom - row.top) / 2 && overlapX <= 1) {
           row.entries.push(en);
           row.top = Math.min(row.top, en.rect.top);
           row.bottom = Math.max(row.bottom, en.rect.bottom);
+          row.left = Math.min(row.left, en.rect.left);
+          row.right = Math.max(row.right, en.rect.right);
           return;
         }
       }
-      rows.push({ top: en.rect.top, bottom: en.rect.bottom, entries: [en] });
+      rows.push({
+        top: en.rect.top,
+        bottom: en.rect.bottom,
+        left: en.rect.left,
+        right: en.rect.right,
+        entries: [en]
+      });
     });
 
-    // The row the pointer is in (or heading toward): the first one
-    // whose band bottom is still below the pointer; past the last band
-    // the insertion is "after everything".
+    // The row the pointer is in (or heading toward); past the last one
+    // the insertion is "after everything". A multi-box row claims the
+    // pointer anywhere above its band's bottom (X then picks the gap).
+    // A single-box row claims it only above its MIDPOINT — the original
+    // "passed once the pointer is below the middle" rule, which is what
+    // keeps a stack of floored, mutually overlapping boxes targeting the
+    // box under the pointer instead of one two slots up (the bottoms of
+    // several overlapping boxes all sit below the pointer at once).
     var row = null;
     for (var r = 0; r < rows.length; r++) {
-      if (clientY < rows[r].bottom) {
+      var claim = rows[r].entries.length > 1
+        ? rows[r].bottom
+        : (rows[r].top + rows[r].bottom) / 2;
+      if (clientY < claim) {
         row = rows[r];
         break;
       }
@@ -3690,38 +3752,51 @@
 
     var oRect = overlay.getBoundingClientRect();
     var insertIndex;
+    // How many of the row's boxes the pointer has already passed —
+    // also the position WITHIN the row, which the drop line needs.
+    var passed = 0;
     if (!row) {
       insertIndex = entries[entries.length - 1].index + 1;
     } else if (row.entries.length > 1) {
-      var passed = 0;
       row.entries.forEach(function (en) {
         var cx = en.rect.left + en.rect.width / 2;
         if (rtl ? cx > clientX : cx < clientX) {
           passed++;
         }
       });
-      insertIndex = row.entries[0].index + passed;
+      // A row's entries are NOT guaranteed to carry contiguous order
+      // indices — `entries` skips any box whose element is hidden or not
+      // yet mounted — so the index has to come off the entry the
+      // insertion actually lands on, never off the row's first index
+      // plus a count (review 2026-08-28, finding 2).
+      insertIndex = passed < row.entries.length
+        ? row.entries[passed].index
+        : row.entries[row.entries.length - 1].index + 1;
     } else {
-      var only = row.entries[0];
-      insertIndex = only.index
-        + (only.rect.top + only.rect.height / 2 < clientY ? 1 : 0);
+      // A single-box row only claimed the pointer above its midpoint,
+      // so the insertion is always BEFORE it.
+      insertIndex = row.entries[0].index;
     }
     overviewDrag.toIndex = insertIndex > idx ? insertIndex - 1 : insertIndex;
 
     if (row && row.entries.length > 1) {
       // Vertical line at the gap: the leading edge of the box the
       // insertion lands before, or the trailing edge of the row's last.
-      var pos = insertIndex - row.entries[0].index;
       var x;
-      if (pos < row.entries.length) {
-        var before = row.entries[pos].rect;
+      if (passed < row.entries.length) {
+        var before = row.entries[passed].rect;
         x = rtl ? before.right + 1 : before.left - 4;
       } else {
         var after = row.entries[row.entries.length - 1].rect;
         x = rtl ? after.left - 4 : after.right + 1;
       }
       line.classList.add('is-vertical');
-      line.style.left = (x - oRect.left) + 'px';
+      // The overlay clips at overflow:hidden, so the -4px lead-in at a
+      // row's first box (and the +1 past its last) would put the marker
+      // out of sight exactly where a drop needs it most (review
+      // 2026-08-28, finding 6). 5 = the marker's own 3px width plus the
+      // 2px inset kept at the other edge.
+      line.style.left = Math.min(Math.max(2, x - oRect.left), oRect.width - 5) + 'px';
       line.style.top = (row.top - oRect.top) + 'px';
       line.style.height = (row.bottom - row.top) + 'px';
     } else {
@@ -4485,10 +4560,11 @@
     // properties when nothing changed, so the observer settles after
     // one debounced pass rather than looping on its own writes.
     if (typeof window.ResizeObserver === 'function') {
-      var visual = content.querySelector('.editor-visual-editor');
+      var visual = visualEditorNode();
       if (visual) {
         overviewResizeObserver = new window.ResizeObserver(onOverviewViewportChange);
         overviewResizeObserver.observe(visual);
+        overviewResizeTarget = visual;
       }
     }
     if (window.matchMedia) {
@@ -4559,6 +4635,7 @@
       overviewResizeObserver.disconnect();
       overviewResizeObserver = null;
     }
+    overviewResizeTarget = null;
     if (overviewMedia) {
       if (typeof overviewMedia.removeEventListener === 'function') {
         overviewMedia.removeEventListener('change', onOverviewMediaChange);
@@ -4614,6 +4691,18 @@
     // re-render can replace the iframe's wrapper, taking the
     // scale-host class with it.
     applyOverviewScale();
+    // Same reasoning for the resize observer: it holds the NODE it was
+    // given at open time, and a replaced visual editor leaves it
+    // watching a detached box that never resizes again (review
+    // 2026-08-28, finding 5).
+    if (overviewResizeObserver) {
+      var visual = visualEditorNode();
+      if (visual && visual !== overviewResizeTarget) {
+        overviewResizeObserver.disconnect();
+        overviewResizeObserver.observe(visual);
+        overviewResizeTarget = visual;
+      }
+    }
     if (!overviewNode()) {
       createOverviewOverlay(body);
       buildOverviewContent();
