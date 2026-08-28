@@ -3160,7 +3160,29 @@
       host.classList.add('toolrail-ov-scale-host');
     }
 
-    var docHeight = doc.body.scrollHeight;
+    // The document height comes from the CONTENT — the bottom edge of
+    // the last top-level block — never from body.scrollHeight: the
+    // canvas pads its tail with a viewport-relative click-to-append
+    // area (~40vh INSIDE the iframe), so scrollHeight chases the
+    // iframe's own height. Measuring it while growing the iframe is a
+    // feedback loop (measured 2026-08-27 at 1707×898: 3938 → 5191 over
+    // 1.2s — the "background slowly falls down the page" report), and
+    // the inflated number also padded the fit with dead tail space.
+    var editorSel = wp.data.select('core/block-editor');
+    var scrollY = doc.defaultView ? (doc.defaultView.scrollY || 0) : 0;
+    var extent = 0;
+    (editorSel ? editorSel.getBlockOrder('') : []).forEach(function (id) {
+      var el = doc.querySelector('[data-block="' + String(id).replace(/"/g, '') + '"]');
+      if (el) {
+        var r = el.getBoundingClientRect();
+        extent = Math.max(extent, r.top + r.height + scrollY);
+      }
+    });
+    if (extent <= 0) {
+      // Empty canvas: nothing to fit or grow.
+      return;
+    }
+    var docHeight = Math.ceil(extent) + 32;
     var fitHeight = docHeight;
     var rootTop = 0;
     if (overviewRoot) {
@@ -3208,8 +3230,16 @@
       }
       k = Math.min(1, Math.max(floorK, k));
     }
-    overviewMetrics = { k: k, rootTop: rootTop, fitHeight: fitHeight };
-    overviewPan = Math.min(Math.max(0, overviewPan), Math.max(0, fitHeight * k - viewport));
+    // A drilled-in root that FITS the viewport is CENTERED in it (owner
+    // feedback 2026-08-27) — isolation should read as "this section, on
+    // its own". A root taller than the viewport stays top-aligned and
+    // pans instead; the two never combine.
+    var maxPan = Math.max(0, fitHeight * k - viewport);
+    var centerOffset = overviewRoot && maxPan === 0
+      ? Math.max(0, (viewport - fitHeight * k) / 2)
+      : 0;
+    overviewMetrics = { k: k, rootTop: rootTop, fitHeight: fitHeight, centerOffset: centerOffset };
+    overviewPan = Math.min(Math.max(0, overviewPan), maxPan);
 
     var style = document.body.style;
     style.setProperty('--toolrail-overview-scale', String(k));
@@ -3217,7 +3247,7 @@
     // Keeps the scale-container's layout footprint at the VISUAL size,
     // for any build whose wrappers do size from their children.
     style.setProperty('--toolrail-ov-mb', (-(1 - k) * docHeight) + 'px');
-    style.setProperty('--toolrail-ov-ty', (-(rootTop * k + overviewPan)) + 'px');
+    style.setProperty('--toolrail-ov-ty', (-(rootTop * k + overviewPan) + centerOffset) + 'px');
     updateOverviewZoomLabel();
   }
 
@@ -3231,7 +3261,7 @@
     overviewPan = Math.min(Math.max(0, next), maxPan);
     document.body.style.setProperty(
       '--toolrail-ov-ty',
-      (-(overviewMetrics.rootTop * overviewMetrics.k + overviewPan)) + 'px'
+      (-(overviewMetrics.rootTop * overviewMetrics.k + overviewPan) + (overviewMetrics.centerOffset || 0)) + 'px'
     );
     if (!overviewPanFrame) {
       overviewPanFrame = window.requestAnimationFrame(function () {
@@ -3321,6 +3351,58 @@
       box.style.top = (rect.top - oRect.top) + 'px';
       box.style.width = Math.max(0, Math.min(rect.width, oRect.width - left)) + 'px';
       box.style.height = Math.max(rect.height, 24) + 'px';
+    });
+    positionOverviewVeil(oRect);
+  }
+
+  /** Punch the veil's hole at the drilled root's rect: four strips
+      covering everything the current level is NOT. No-op at top level
+      (buildOverviewContent only creates the strips when drilled). */
+  function positionOverviewVeil(oRect) {
+    var overlay = overviewNode();
+    if (!overlay) {
+      return;
+    }
+    var veils = Array.prototype.slice.call(overlay.querySelectorAll('.toolrail-ov-veil'));
+    if (!veils.length) {
+      return;
+    }
+    var rect = overviewRoot ? overviewBlockViewportRect(overviewRoot) : null;
+    if (!rect) {
+      veils.forEach(function (v) {
+        v.style.display = 'none';
+      });
+      return;
+    }
+    var top = Math.max(0, rect.top - oRect.top);
+    var bottom = Math.min(oRect.height, rect.top + rect.height - oRect.top);
+    var left = Math.max(0, rect.left - oRect.left);
+    var right = Math.min(oRect.width, rect.left + rect.width - oRect.left);
+    var place = function (v, x, y, w, h) {
+      if (w <= 0 || h <= 0) {
+        v.style.display = 'none';
+        return;
+      }
+      v.style.display = '';
+      v.style.left = x + 'px';
+      v.style.top = y + 'px';
+      v.style.width = w + 'px';
+      v.style.height = h + 'px';
+    };
+    veils.forEach(function (v) {
+      switch (v.dataset.veil) {
+        case 'top':
+          place(v, 0, 0, oRect.width, top);
+          break;
+        case 'bottom':
+          place(v, 0, bottom, oRect.width, oRect.height - bottom);
+          break;
+        case 'left':
+          place(v, 0, top, left, Math.max(0, bottom - top));
+          break;
+        default:
+          place(v, right, top, oRect.width - right, Math.max(0, bottom - top));
+      }
     });
   }
 
@@ -3699,6 +3781,21 @@
     }
     if (overviewSelected && order.indexOf(overviewSelected) === -1) {
       overviewSelected = '';
+    }
+
+    // Drilled in, everything OUTSIDE the root gets a 50% veil (owner
+    // feedback 2026-08-27): four strips punched around the root's rect,
+    // so what can be reordered is the only thing at full strength. Pure
+    // overlay chrome — the canvas document is untouched, and removing
+    // the overlay removes the veil. Appended BEFORE the boxes so DOM
+    // order stacks the boxes above it; the bar carries its own z-index.
+    if (overviewRoot) {
+      ['top', 'bottom', 'left', 'right'].forEach(function (side) {
+        var veil = settingsRow('div', 'toolrail-ov-veil');
+        veil.dataset.veil = side;
+        veil.setAttribute('aria-hidden', 'true');
+        overlay.appendChild(veil);
+      });
     }
 
     var list = document.createElement('ul');

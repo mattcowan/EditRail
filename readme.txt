@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.1.14
+Stable tag: 0.1.15
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -38,6 +38,10 @@ Against your user account on this site, the same as pinned blocks and saved sets
 Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a position under "Toolbar position".
 
 == Changelog ==
+
+= 0.1.15 =
+* "Reorder inside" now isolates the section you stepped into: it is centered in the viewport and everything outside it is veiled at 50%, so what you can move is the only thing at full strength.
+* Fix: on entry the canvas background could visibly creep down the page for a second or more — the editor's own iframe transition was animating the overview's resize, and the measurement it was based on chased its own result. The zoom now sizes itself to the actual content, instantly, which also removes the dead space that could sit under the last section.
 
 = 0.1.14 =
 * Add Section overview: a toolbar tool that zooms the canvas out and outlines every top-level block, with a small name tag in the corner. Drag an outline to a new spot, or click it to reveal its reorder controls inside the lines — the content stays readable until you ask. Arrows move the block (fully keyboard-operable, every move announced; dragging is a shortcut, never the only way), "Reorder inside" steps into a section to reorder its blocks at their own zoom with a breadcrumb back out, +/− buttons zoom, and the mouse wheel pans long documents. While the overview is open, clicks cannot fall through to the document. Closing returns you to where you were scrolled. Reordering is an ordinary editing action, so the saved post is exactly what reordering in List View would produce — and deactivating the plugin still changes nothing about your content.

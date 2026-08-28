@@ -2312,6 +2312,31 @@ test.describe('section overview (R6)', () => {
     // The breadcrumb names the level; the current crumb is text, not a button.
     await expect(page.locator('#toolrail-overview [aria-current="location"]')).toHaveText('Group');
 
+    // Isolation: the drilled root sits centered in the viewport and
+    // everything outside it is veiled at 50% (owner ask 2026-08-27) —
+    // the veil is overlay chrome, the canvas document is untouched.
+    await page.waitForTimeout(300);
+    const iso = await page.evaluate((gid) => {
+      const overlay = document.getElementById('toolrail-overview');
+      const o = overlay.getBoundingClientRect();
+      const frame = document.querySelector('iframe[name="editor-canvas"]');
+      const el = frame.contentDocument.querySelector(`[data-block="${gid}"]`);
+      const r = el.getBoundingClientRect();
+      const f = frame.getBoundingClientRect();
+      const k = f.width / frame.offsetWidth;
+      const rootMid = f.top + (r.top + r.height / 2) * k;
+      const veils = Array.from(overlay.querySelectorAll('.toolrail-ov-veil'))
+        .filter((v) => v.style.display !== 'none');
+      return {
+        veils: veils.length,
+        bg: veils.length ? getComputedStyle(veils[0]).backgroundColor : '',
+        offCenter: Math.abs(rootMid - (o.top + o.height / 2)),
+      };
+    }, groupId);
+    expect(iso.veils).toBeGreaterThanOrEqual(2);
+    expect(iso.bg).toBe('rgba(0, 0, 0, 0.5)');
+    expect(iso.offCenter).toBeLessThan(60);
+
     // Reorder the heading above the paragraph, by keyboard.
     await overviewBoxButton(page, innerIds[1], 'pick').focus();
     await page.keyboard.press('Enter');
@@ -2698,6 +2723,56 @@ test.describe('section overview (R6)', () => {
     expect(await page.evaluate(() =>
       window.wp.data.select('core/block-editor').getSelectedBlockClientId()
     )).toBe(picked);
+  });
+
+  test('growing the canvas is instant and stable — no creeping background, no dead tail space', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        Array.from({ length: 6 }, (_, s) =>
+          createBlock('core/group', {},
+            Array.from({ length: 6 }, (_, i) =>
+              createBlock('core/paragraph', { content: 'G' + s + '-P' + i })
+            ))
+        )
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(6);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview .toolrail-ov-box').first()).toBeVisible();
+
+    // Past the settle pass, the frame height must HOLD: core's 0.4s
+    // all-property iframe transition animated the growth, and measuring
+    // body.scrollHeight (whose ~40vh click-to-append tail chases the
+    // iframe's own height) re-targeted it in a feedback loop — the
+    // canvas background visibly crept down the page (owner report,
+    // 1707×898).
+    await page.waitForTimeout(400);
+    const s1 = await page.evaluate(() =>
+      document.querySelector('iframe[name="editor-canvas"]').offsetHeight
+    );
+    await page.waitForTimeout(900);
+    const state = await page.evaluate(() => {
+      const frame = document.querySelector('iframe[name="editor-canvas"]');
+      const idoc = frame.contentDocument;
+      const order = window.wp.data.select('core/block-editor').getBlockOrder('');
+      const last = idoc.querySelector(`[data-block="${order[order.length - 1]}"]`);
+      const r = last.getBoundingClientRect();
+      return {
+        s2: frame.offsetHeight,
+        transitionProperty: getComputedStyle(frame).transitionProperty,
+        contentExtent: Math.round(r.top + r.height + (idoc.defaultView.scrollY || 0)),
+        bodyScrollH: idoc.body.scrollHeight,
+      };
+    });
+    expect(state.s2).toBe(s1);
+    expect(state.transitionProperty).toBe('none');
+    // The frame is sized to the CONTENT, not to the padded scrollHeight
+    // — guard the guard: the padded tail must actually exist for the
+    // exclusion to mean anything.
+    expect(Math.abs(state.s2 - (state.contentExtent + 32))).toBeLessThanOrEqual(2);
+    expect(state.bodyScrollH).toBeGreaterThan(state.s2 + 100);
   });
 
   test('a section can be dragged to a new spot — pointer sugar over the same move', async ({ page }) => {
