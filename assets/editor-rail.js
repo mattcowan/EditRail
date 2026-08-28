@@ -3028,6 +3028,11 @@
   var overviewPanFrame = null;
   var overviewHadFrame = false;
   var overviewMedia = null;
+  // Watches the visual editor's box while the overview is open: editor
+  // chrome above the canvas (the autosave notice) appearing or being
+  // dismissed resizes it with NO resize/scroll event fired, and the
+  // viewport math reads that chrome's height.
+  var overviewResizeObserver = null;
   // In-flight box drag ({clientId, startX, startY, active, toIndex}).
   // Drag-to-reorder is POINTER SUGAR over the same public move the
   // arrows dispatch (owner ask 2026-08-27) — the keyboard path is the
@@ -3048,6 +3053,39 @@
 
   function canvasFrame() {
     return document.querySelector('iframe[name="editor-canvas"]');
+  }
+
+  /**
+   * Where the CANVAS actually starts inside the content region, as an
+   * offset (px, ≥0) from the region's top. Editor notices — the "There
+   * is an autosave" warning above all — render INSIDE the content
+   * region, above the visual editor, and push the canvas down (measured
+   * 88.7px on post 433). The scale host sits at the visual editor's
+   * top, so every viewport the overview fits, pans, or clamps against
+   * must start THERE, not at the region's top — the region's own
+   * clientHeight overstates the room by exactly the notice height,
+   * which is how the bottom block became unreachable. A rect
+   * difference, not offsetTop: it needs no shared offsetParent, and no
+   * transformed element sits between the two.
+   */
+  function overviewCanvasTop() {
+    var content = contentRegion();
+    var visual = content ? content.querySelector('.editor-visual-editor') : null;
+    if (!content || !visual) {
+      return 0;
+    }
+    return Math.max(0, visual.getBoundingClientRect().top - content.getBoundingClientRect().top);
+  }
+
+  /** The vertical space actually available to the scaled canvas: the
+      content region minus any chrome above the canvas, minus the 24px
+      breathing margin every fit has always kept. */
+  function overviewViewportHeight() {
+    var content = contentRegion();
+    if (!content) {
+      return 0;
+    }
+    return Math.max(0, content.clientHeight - overviewCanvasTop() - 24);
   }
 
   function overviewNode() {
@@ -3248,7 +3286,7 @@
     // 25% and stays there); whatever a floored fit leaves off-screen is
     // reachable by PANNING (wheel, or focusing a box), not by shrinking
     // further. Manual −/+ zoom may still go below this.
-    var viewport = Math.max(0, content.clientHeight - 24);
+    var viewport = overviewViewportHeight();
     var k = overviewUserScale;
     if (!k) {
       var heights = [];
@@ -3297,8 +3335,7 @@
       to the content that exists. Box repositioning rides one rAF so a
       wheel burst costs one layout pass per frame, not per event. */
   function setOverviewPan(next) {
-    var content = contentRegion();
-    var viewport = content ? Math.max(0, content.clientHeight - 24) : 0;
+    var viewport = overviewViewportHeight();
     var maxPan = Math.max(0, overviewMetrics.fitHeight * overviewMetrics.k - viewport);
     // Centered means it fits — centering and panning NEVER combine.
     // Recomputing maxPan from live viewport while metrics are a beat
@@ -3361,8 +3398,15 @@
       });
   }
 
-  /** Size the overlay to the content region's LAYOUT box (offsets are
-      unaffected by the transform, unlike getBoundingClientRect). Chip
+  /** Size the overlay to the CANVAS AREA's layout box: the content
+      region's box (offsets are unaffected by the transform, unlike
+      getBoundingClientRect), shifted down past any editor chrome above
+      the canvas — the autosave notice stays visible AND clickable above
+      the mode, instead of being covered by an overlay that fenced it
+      off while drawing the bar over it. Starting the overlay where the
+      scaled canvas starts also makes its rect THE viewport: box
+      clipping (overflow: hidden), the veil, and the focus pan-into-view
+      window all read the same edges the fit and pan math use. Chip
       positions are computed viewport-rect-minus-overlay-rect, so this
       only defines coverage, not precision. */
   function placeOverviewOverlay() {
@@ -3371,10 +3415,11 @@
     if (!overlay || !content) {
       return;
     }
+    var canvasTop = overviewCanvasTop();
     overlay.style.left = content.offsetLeft + 'px';
-    overlay.style.top = content.offsetTop + 'px';
+    overlay.style.top = (content.offsetTop + canvasTop) + 'px';
     overlay.style.width = content.offsetWidth + 'px';
-    overlay.style.height = content.offsetHeight + 'px';
+    overlay.style.height = Math.max(0, content.offsetHeight - canvasTop) + 'px';
   }
 
   /**
@@ -3565,39 +3610,44 @@
       }
     }
     e.preventDefault();
-    updateOverviewDropline(e.clientY);
+    updateOverviewDropline(e.clientX, e.clientY);
   }
 
   /** Place the drop line at the gap the pointer is over, and remember
-      the move index a release would dispatch. */
-  function updateOverviewDropline(clientY) {
+      the move index a release would dispatch.
+
+      Two-dimensional on purpose (owner report 2026-08-28: horizontal
+      drags across a grid weren't seamless — the old index came from Y
+      midpoints alone, so side-by-side boxes could never be targeted
+      sideways). Boxes are grouped into visual ROWS in document order
+      (a new row starts when a box no longer vertically overlaps the
+      current row's band by half — grid, columns and gallery children
+      all flow row-major, so document order within a row IS the visual
+      order, mirrored under RTL). The pointer's Y picks the row; inside
+      a multi-box row the pointer's X picks the gap, marked by a
+      VERTICAL drop line spanning the row's band. A single-box row
+      keeps the original midpoint-Y semantics and the horizontal line,
+      so plain stacks behave exactly as they always did. */
+  function updateOverviewDropline(clientX, clientY) {
     var overlay = overviewNode();
     if (!overlay || !overviewDrag) {
       return;
     }
     var order = overviewOrder();
     var idx = order.indexOf(overviewDrag.clientId);
-    var rects = order.map(function (id) {
+    var rtl = document.documentElement.dir === 'rtl';
+
+    // Visible boxes in document order, each with its order index —
+    // boxes with no DOM yet take no part, exactly as before.
+    var entries = [];
+    order.forEach(function (id, i) {
       var box = overviewBoxFor(id);
-      return box && box.style.display !== 'none' ? box.getBoundingClientRect() : null;
-    });
-    var insertIndex = 0;
-    rects.forEach(function (r) {
-      if (r && r.top + r.height / 2 < clientY) {
-        insertIndex++;
+      var r = box && box.style.display !== 'none' ? box.getBoundingClientRect() : null;
+      if (r) {
+        entries.push({ index: i, rect: r });
       }
     });
-    overviewDrag.toIndex = insertIndex > idx ? insertIndex - 1 : insertIndex;
 
-    var oRect = overlay.getBoundingClientRect();
-    var y = 0;
-    if (insertIndex >= order.length) {
-      var last = rects[rects.length - 1];
-      y = last ? last.bottom + 2 - oRect.top : 0;
-    } else {
-      var at = rects[insertIndex];
-      y = at ? at.top - 4 - oRect.top : 0;
-    }
     var line = overlay.querySelector('.toolrail-ov-dropline');
     if (!line) {
       line = document.createElement('div');
@@ -3605,7 +3655,90 @@
       line.setAttribute('aria-hidden', 'true');
       overlay.appendChild(line);
     }
-    line.style.top = y + 'px';
+    if (!entries.length) {
+      overviewDrag.toIndex = 0;
+      line.style.display = 'none';
+      return;
+    }
+    line.style.display = '';
+
+    var rows = [];
+    entries.forEach(function (en) {
+      var row = rows[rows.length - 1];
+      if (row) {
+        var overlap = Math.min(row.bottom, en.rect.bottom) - Math.max(row.top, en.rect.top);
+        if (overlap >= Math.min(en.rect.height, row.bottom - row.top) / 2) {
+          row.entries.push(en);
+          row.top = Math.min(row.top, en.rect.top);
+          row.bottom = Math.max(row.bottom, en.rect.bottom);
+          return;
+        }
+      }
+      rows.push({ top: en.rect.top, bottom: en.rect.bottom, entries: [en] });
+    });
+
+    // The row the pointer is in (or heading toward): the first one
+    // whose band bottom is still below the pointer; past the last band
+    // the insertion is "after everything".
+    var row = null;
+    for (var r = 0; r < rows.length; r++) {
+      if (clientY < rows[r].bottom) {
+        row = rows[r];
+        break;
+      }
+    }
+
+    var oRect = overlay.getBoundingClientRect();
+    var insertIndex;
+    if (!row) {
+      insertIndex = entries[entries.length - 1].index + 1;
+    } else if (row.entries.length > 1) {
+      var passed = 0;
+      row.entries.forEach(function (en) {
+        var cx = en.rect.left + en.rect.width / 2;
+        if (rtl ? cx > clientX : cx < clientX) {
+          passed++;
+        }
+      });
+      insertIndex = row.entries[0].index + passed;
+    } else {
+      var only = row.entries[0];
+      insertIndex = only.index
+        + (only.rect.top + only.rect.height / 2 < clientY ? 1 : 0);
+    }
+    overviewDrag.toIndex = insertIndex > idx ? insertIndex - 1 : insertIndex;
+
+    if (row && row.entries.length > 1) {
+      // Vertical line at the gap: the leading edge of the box the
+      // insertion lands before, or the trailing edge of the row's last.
+      var pos = insertIndex - row.entries[0].index;
+      var x;
+      if (pos < row.entries.length) {
+        var before = row.entries[pos].rect;
+        x = rtl ? before.right + 1 : before.left - 4;
+      } else {
+        var after = row.entries[row.entries.length - 1].rect;
+        x = rtl ? after.left - 4 : after.right + 1;
+      }
+      line.classList.add('is-vertical');
+      line.style.left = (x - oRect.left) + 'px';
+      line.style.top = (row.top - oRect.top) + 'px';
+      line.style.height = (row.bottom - row.top) + 'px';
+    } else {
+      line.classList.remove('is-vertical');
+      line.style.left = '';
+      line.style.height = '';
+      var atEntry = null;
+      entries.forEach(function (en) {
+        if (!atEntry && en.index >= insertIndex) {
+          atEntry = en;
+        }
+      });
+      var y = atEntry
+        ? atEntry.rect.top - 4 - oRect.top
+        : entries[entries.length - 1].rect.bottom + 2 - oRect.top;
+      line.style.top = y + 'px';
+    }
   }
 
   function finishOverviewDrag() {
@@ -4345,6 +4478,19 @@
     document.addEventListener('keydown', onOverviewKeydown, true);
     document.addEventListener('scroll', onOverviewViewportChange, true);
     window.addEventListener('resize', onOverviewViewportChange);
+    // The window resize listener cannot see editor chrome appearing
+    // INSIDE the content region (the autosave notice arrives via React
+    // with no window event) — observe the visual editor's own box for
+    // that. The refit this schedules re-applies the same custom
+    // properties when nothing changed, so the observer settles after
+    // one debounced pass rather than looping on its own writes.
+    if (typeof window.ResizeObserver === 'function') {
+      var visual = content.querySelector('.editor-visual-editor');
+      if (visual) {
+        overviewResizeObserver = new window.ResizeObserver(onOverviewViewportChange);
+        overviewResizeObserver.observe(visual);
+      }
+    }
     if (window.matchMedia) {
       overviewMedia = window.matchMedia('(max-width: 782px)');
       if (typeof overviewMedia.addEventListener === 'function') {
@@ -4409,6 +4555,10 @@
     document.removeEventListener('keydown', onOverviewKeydown, true);
     document.removeEventListener('scroll', onOverviewViewportChange, true);
     window.removeEventListener('resize', onOverviewViewportChange);
+    if (overviewResizeObserver) {
+      overviewResizeObserver.disconnect();
+      overviewResizeObserver = null;
+    }
     if (overviewMedia) {
       if (typeof overviewMedia.removeEventListener === 'function') {
         overviewMedia.removeEventListener('change', onOverviewMediaChange);

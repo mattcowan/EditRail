@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.1.15
+Stable tag: 0.1.16
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -38,6 +38,10 @@ Against your user account on this site, the same as pinned blocks and saved sets
 Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a position under "Toolbar position".
 
 == Changelog ==
+
+= 0.1.16 =
+* Fix: with the "There is an autosave" notice open, the Section overview fit the page to a space taller than the canvas really had — the bottom section sat below the edge and no amount of scrolling could reach it. The overview now measures the space below the notice, keeps the notice visible and clickable above the mode, and refits itself if the notice appears or is dismissed while the overview is open.
+* Dragging a section sideways now works inside grids and columns: the drop marker turns into a vertical line between side-by-side blocks and follows the pointer across a row, instead of only up and down. Plain stacked sections drag exactly as before.
 
 = 0.1.15 =
 * "Reorder inside" now isolates the section you stepped into: it is centered in the viewport and everything outside it is veiled at 50%, so what you can move is the only thing at full strength.

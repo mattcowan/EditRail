@@ -3037,6 +3037,282 @@ test.describe('section overview (R6)', () => {
   });
 });
 
+/** Drilled-box center/edges keyed by paragraph content, for the drag
+    stress specs — rects are only trustworthy once the drill's settle
+    pass has run, so poll until every box has painted somewhere real. */
+async function boxPointsByContent(page, rootId) {
+  await expect.poll(async () => page.evaluate((g) => {
+    const sel = window.wp.data.select('core/block-editor');
+    return sel.getBlockOrder(g).every((id) => {
+      const b = document.querySelector(`#toolrail-overview .toolrail-ov-box[data-clientid="${id}"]`);
+      return b && b.style.display !== 'none' && b.getBoundingClientRect().width > 10;
+    });
+  }, rootId)).toBe(true);
+  return page.evaluate((g) => {
+    const sel = window.wp.data.select('core/block-editor');
+    const out = {};
+    sel.getBlockOrder(g).forEach((id) => {
+      const block = sel.getBlock(id);
+      const label = block.name === 'core/column'
+        ? block.innerBlocks[0].attributes.content.toString()
+        : block.attributes.content.toString();
+      const r = document
+        .querySelector(`#toolrail-overview .toolrail-ov-box[data-clientid="${id}"]`)
+        .getBoundingClientRect();
+      out[label] = {
+        x: r.left + r.width / 2,
+        y: r.top + Math.min(r.height / 2, 12),
+        left: r.left,
+        right: r.right,
+        top: r.top,
+      };
+    });
+    return out;
+  }, rootId);
+}
+
+/** Child contents at a root, via each child's own paragraph. */
+function childContents(page, rootId) {
+  return page.evaluate((g) => {
+    const sel = window.wp.data.select('core/block-editor');
+    return sel.getBlockOrder(g).map((id) => {
+      const block = sel.getBlock(id);
+      return block.name === 'core/column'
+        ? block.innerBlocks[0].attributes.content.toString()
+        : block.attributes.content.toString();
+    });
+  }, rootId);
+}
+
+/** Open the overview and drill into the first top-level block. */
+async function drillIntoFirst(page) {
+  await page.locator('#toolrail-rail [data-tool="overview"]').click();
+  await expect(page.locator('#toolrail-overview')).toBeVisible();
+  const rootId = await page.evaluate(() =>
+    window.wp.data.select('core/block-editor').getBlockOrder('')[0]
+  );
+  await overviewBoxButton(page, rootId, 'pick').click();
+  await overviewBoxButton(page, rootId, 'enter').click();
+  return rootId;
+}
+
+test.describe('overview drag stress (grids, columns, notices)', () => {
+  test('a grid cell drags HORIZONTALLY past its neighbor — vertical drop line, same-row reorder', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks([
+        createBlock('core/group', { layout: { type: 'grid', columnCount: 2 } },
+          ['CELL-A', 'CELL-B', 'CELL-C', 'CELL-D'].map((c) =>
+            createBlock('core/paragraph', { content: c })
+          )),
+      ]);
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(1);
+
+    const gridId = await drillIntoFirst(page);
+    const pts = await boxPointsByContent(page, gridId);
+    // The seed really is a 2×2 grid: A and B share a row, C sits below.
+    expect(Math.abs(pts['CELL-A'].top - pts['CELL-B'].top)).toBeLessThan(4);
+    expect(pts['CELL-C'].top).toBeGreaterThan(pts['CELL-A'].top + 10);
+
+    // Drag A rightward past B's center, along the SAME row.
+    await page.mouse.move(pts['CELL-A'].x, pts['CELL-A'].y);
+    await page.mouse.down();
+    await page.mouse.move(pts['CELL-B'].right - 5, pts['CELL-A'].y, { steps: 8 });
+    // The gap marker for a same-row move is the VERTICAL line.
+    await expect(page.locator('.toolrail-ov-dropline.is-vertical')).toBeVisible();
+    await page.mouse.up();
+
+    await expect.poll(() => childContents(page, gridId)).toEqual([
+      'CELL-B', 'CELL-A', 'CELL-C', 'CELL-D',
+    ]);
+    await expect.poll(async () => page.evaluate(() => {
+      const region = document.getElementById('a11y-speak-polite');
+      return region ? region.textContent : '';
+    })).toContain('Moved Paragraph to position 2 of 4.');
+  });
+
+  test('a grid cell drags DIAGONALLY into a gap on another row', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks([
+        createBlock('core/group', { layout: { type: 'grid', columnCount: 2 } },
+          ['CELL-A', 'CELL-B', 'CELL-C', 'CELL-D'].map((c) =>
+            createBlock('core/paragraph', { content: c })
+          )),
+      ]);
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(1);
+
+    const gridId = await drillIntoFirst(page);
+    const pts = await boxPointsByContent(page, gridId);
+
+    // Drag A down into row two, between C and D.
+    const gapX = (pts['CELL-C'].right + pts['CELL-D'].left) / 2;
+    await page.mouse.move(pts['CELL-A'].x, pts['CELL-A'].y);
+    await page.mouse.down();
+    await page.mouse.move(gapX, pts['CELL-C'].y, { steps: 8 });
+    await expect(page.locator('.toolrail-ov-dropline.is-vertical')).toBeVisible();
+    await page.mouse.up();
+
+    await expect.poll(() => childContents(page, gridId)).toEqual([
+      'CELL-B', 'CELL-C', 'CELL-A', 'CELL-D',
+    ]);
+  });
+
+  test('columns reorder by horizontal drag the same way', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks([
+        createBlock('core/columns', {}, ['COL-ONE', 'COL-TWO', 'COL-THREE'].map((c) =>
+          createBlock('core/column', {}, [createBlock('core/paragraph', { content: c })])
+        )),
+      ]);
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(1);
+
+    const columnsId = await drillIntoFirst(page);
+    const pts = await boxPointsByContent(page, columnsId);
+
+    // Drag the first column past the second — a column is just a block
+    // in a one-row layout, so the same row/gap math must carry it.
+    await page.mouse.move(pts['COL-ONE'].x, pts['COL-ONE'].y);
+    await page.mouse.down();
+    await page.mouse.move(pts['COL-TWO'].right - 5, pts['COL-ONE'].y, { steps: 8 });
+    await expect(page.locator('.toolrail-ov-dropline.is-vertical')).toBeVisible();
+    await page.mouse.up();
+
+    await expect.poll(() => childContents(page, columnsId)).toEqual([
+      'COL-TWO', 'COL-ONE', 'COL-THREE',
+    ]);
+  });
+
+  test('a plain stack still drags with the horizontal line, first-to-last in one gesture', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        Array.from({ length: 6 }, (_, s) =>
+          createBlock('core/group', {}, [
+            createBlock('core/paragraph', { content: 'SECTION-' + s }),
+          ]))
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(6);
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    const points = await page.evaluate((pair) => {
+      const rect = (id) => document
+        .querySelector(`#toolrail-overview .toolrail-ov-box[data-clientid="${id}"]`)
+        .getBoundingClientRect();
+      const first = rect(pair[0]);
+      const last = rect(pair[1]);
+      return {
+        fromX: Math.round(first.left + first.width / 2),
+        fromY: Math.round(first.top + Math.min(first.height / 2, 12)),
+        toY: Math.round(last.bottom + 6),
+      };
+    }, [ids[0], ids[ids.length - 1]]);
+
+    await page.mouse.move(points.fromX, points.fromY);
+    await page.mouse.down();
+    await page.mouse.move(points.fromX, points.toY, { steps: 10 });
+    // Stacked sections keep the HORIZONTAL gap line — the vertical
+    // variant is only for side-by-side neighbors.
+    await expect(page.locator('.toolrail-ov-dropline:not(.is-vertical)')).toBeVisible();
+    await page.mouse.up();
+
+    await expect.poll(async () => page.evaluate((id) =>
+      window.wp.data.select('core/block-editor').getBlockOrder('').indexOf(id), ids[0]
+    )).toBe(ids.length - 1);
+  });
+
+  test('an editor notice above the canvas costs the overview no reach; dismissing it refits', async ({ page }) => {
+    await openNewPost(page);
+    // The document from the fit test: several viewports tall.
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        Array.from({ length: 4 }, (_, s) =>
+          createBlock('core/group', {},
+            Array.from({ length: 8 }, (_, i) =>
+              createBlock('core/paragraph', { content: 'S' + s + '-PARA-' + i })
+            ))
+        )
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(4);
+
+    // The same shape as the "There is an autosave" warning: a
+    // dismissible notice rendered inside the content region, ABOVE the
+    // visual editor — it shrinks the canvas viewport with no window
+    // resize event (diagnosed on post 433, 2026-08-28).
+    await page.evaluate(() => {
+      window.wp.data.dispatch('core/notices').createWarningNotice(
+        'There is an autosave of this post that is more recent than the version below.',
+        { id: 'toolrail-e2e-autosave', isDismissible: true }
+      );
+    });
+    await expect(page.locator('.components-notice')).toBeVisible();
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+
+    // The overlay starts BELOW the notice — the notice stays readable
+    // (and dismissible) above the mode instead of being fenced off.
+    const placed = await page.evaluate(() => {
+      const overlay = document.getElementById('toolrail-overview').getBoundingClientRect();
+      const visual = document.querySelector('.editor-visual-editor').getBoundingClientRect();
+      const notice = document.querySelector('.components-notice').getBoundingClientRect();
+      return {
+        overlayAtCanvas: Math.abs(overlay.top - visual.top) < 2,
+        noticeAboveOverlay: notice.bottom <= overlay.top + 2,
+      };
+    });
+    expect(placed.overlayAtCanvas).toBe(true);
+    expect(placed.noticeAboveOverlay).toBe(true);
+
+    // The bug being pinned: the LAST block must be reachable. Pan hard
+    // to the bottom; with the viewport measured past the notice it ends
+    // fully inside the content region.
+    const center = await page.evaluate(() => {
+      const o = document.getElementById('toolrail-overview').getBoundingClientRect();
+      return { x: o.left + o.width / 2, y: o.top + o.height / 2 };
+    });
+    await page.mouse.move(center.x, center.y);
+    await page.mouse.wheel(0, 4000);
+    await expect.poll(async () => page.evaluate(() => {
+      const content = document.querySelector('.interface-interface-skeleton__content');
+      const frame = document.querySelector('iframe[name="editor-canvas"]');
+      const order = window.wp.data.select('core/block-editor').getBlockOrder('');
+      const last = frame.contentDocument.querySelector(`[data-block="${order[order.length - 1]}"]`);
+      const f = frame.getBoundingClientRect();
+      const k = frame.offsetWidth ? f.width / frame.offsetWidth : 1;
+      const r = last.getBoundingClientRect();
+      return f.top + (r.top + r.height) * k <= content.getBoundingClientRect().bottom + 1;
+    })).toBe(true);
+
+    // Removing the notice mid-overview refits: the canvas grows back
+    // and the overlay climbs to the reclaimed top. (No window event
+    // fires for this — the ResizeObserver is what catches it.)
+    await page.evaluate(() => {
+      window.wp.data.dispatch('core/notices').removeNotice('toolrail-e2e-autosave');
+    });
+    await expect.poll(async () => page.evaluate(() => {
+      const overlay = document.getElementById('toolrail-overview').getBoundingClientRect();
+      const content = document.querySelector('.interface-interface-skeleton__content').getBoundingClientRect();
+      return Math.abs(overlay.top - content.top) < 2;
+    })).toBe(true);
+  });
+});
+
 test.describe('restore default tools', () => {
   test('restores exactly the missing defaults, appended in default order, never a reset', async ({ page }) => {
     await openNewPost(page);
