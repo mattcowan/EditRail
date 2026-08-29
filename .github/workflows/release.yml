@@ -1,0 +1,58 @@
+# Release: runs when a GitHub Release is PUBLISHED (not on tag push -
+# publishing through the Releases UI forces human-written release notes,
+# and a stray `git push --tags` can never publish anything by accident).
+#
+#   Any release (tag vX.Y.Z, or vX.Y.Z-beta.N with "pre-release" checked):
+#     version guard -> package -> attach toolrail.zip to the GitHub Release.
+#
+# WordPress.org is NOT touched by this workflow. The plugin is not listed
+# yet; when it is, add the 10up/action-wordpress-plugin-deploy step here
+# (the Typography Stylist repo's release-deploy.yml is the shape to copy)
+# and the SVN_USERNAME / SVN_PASSWORD secrets. Until then, GitHub Releases
+# are the only distribution channel.
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  # Needed to upload the zip asset to the GitHub Release.
+  contents: write
+
+jobs:
+  package:
+    name: Package and attach
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      # Fail BEFORE packaging if the plugin header, TOOLRAIL_VERSION,
+      # readme Stable tag and package.json do not match the release tag.
+      # The tag name goes through env, never straight into the script:
+      # ${{ }} is substituted before the shell parses the line, and git
+      # accepts tag names containing backticks and $( ) - a quoted "$TAG"
+      # is data, an interpolated one is code.
+      - name: Version guard (stable)
+        if: ${{ !github.event.release.prerelease }}
+        run: node scripts/check-versions.js "$TAG"
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+      - name: Version guard (pre-release)
+        if: ${{ github.event.release.prerelease }}
+        run: node scripts/check-versions.js "$TAG" --prerelease
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+
+      - run: npm run package
+
+      - name: Attach zip to the GitHub Release
+        run: gh release upload "$TAG" toolrail.zip --clobber
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ github.token }}

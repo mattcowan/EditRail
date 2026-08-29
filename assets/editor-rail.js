@@ -3283,6 +3283,16 @@
     }
     var docHeight = Math.ceil(overviewExtent) + 32;
     var fitHeight = docHeight;
+    // The iframe is sized to the CONTENT extent so a long document can
+    // render whole -- but a SHORT document's extent is less than the
+    // space the canvas already had, and shrinking the iframe to it
+    // exposed the editor's gray background under the canvas (owner
+    // report 2026-08-28, post 2826: 486px of content in a 671px
+    // canvas; the theme's background "crept up" to the last block).
+    // Never size the frame below the canvas area it fills at rest; the
+    // FIT still uses the content extent, so the zoom is unchanged.
+    var canvasArea = Math.max(0, content.clientHeight - overviewCanvasTop());
+    var frameHeight = Math.max(docHeight, canvasArea);
     var rootTop = 0;
     if (overviewRoot) {
       var rootEl = doc.querySelector('[data-block="' + String(overviewRoot).replace(/"/g, '') + '"]');
@@ -3342,10 +3352,10 @@
 
     var style = document.body.style;
     style.setProperty('--toolrail-overview-scale', String(k));
-    style.setProperty('--toolrail-ov-frameh', docHeight + 'px');
+    style.setProperty('--toolrail-ov-frameh', frameHeight + 'px');
     // Keeps the scale-container's layout footprint at the VISUAL size,
     // for any build whose wrappers do size from their children.
-    style.setProperty('--toolrail-ov-mb', (-(1 - k) * docHeight) + 'px');
+    style.setProperty('--toolrail-ov-mb', (-(1 - k) * frameHeight) + 'px');
     style.setProperty('--toolrail-ov-ty', (-(rootTop * k + overviewPan) + centerOffset) + 'px');
     updateOverviewZoomLabel();
   }
