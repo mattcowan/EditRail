@@ -32,9 +32,20 @@
  *     keywords,                  // reserved for future search
  *     insertBlock | createBlock | onActivate,
  *     isActive,                  // optional pressed-state callback
+ *     supports: { canvas },      // optional; what the tool NEEDS (R9)
  *   })
  * Descriptors, not React nodes — the rail owns the roving tabindex.
  * Registry changes fire the 'toolrail:tools-updated' window event.
+ *
+ * AVAILABILITY (roadmap R9): a tool declares what it needs, never where
+ * it is hidden. `supports.canvas: true` means "activation is completed
+ * by a click in the canvas" — the default for insertBlock/createBlock
+ * tools; onActivate-only tools default to false. The rail derives
+ * availability from its MODE (see railMode): while a mode captures the
+ * canvas (the Section overview), every canvas tool is dimmed with
+ * aria-disabled — reachable, announced, inert — and every other tool
+ * stays live. Mode changes fire the 'toolrail:mode-changed' window
+ * event with {mode} in detail; window.toolrail.getMode() reads it.
  */
 (function (wp) {
   'use strict';
@@ -484,7 +495,7 @@
   var APPEARANCE_TOKENS = [
     'bg', 'fg', 'fg-strong', 'muted', 'faint', 'grip', 'hover', 'edge',
     'border', 'field-bg', 'field-border', 'field-hover', 'pressed',
-    'pressed-fg', 'pressed-edge', 'status', 'focus-ring'
+    'pressed-fg', 'pressed-edge', 'status', 'focus-ring', 'dim'
   ];
 
   /**
@@ -498,6 +509,11 @@
    *   gray:  fg:bg 11.6, muted 6.91, faint 5.89; grip 4.46, ring/
    *          pressed/pressed-edge 6.91 on bg; pressed-fg:pressed 9.46;
    *          field-border:field-bg 5.03; status 6.91.
+   *   dim (unavailable-tool icons, R9, measured 2026-08-29): light
+   *          3.79, gray 3.34, dark 3.62 — all ≥3:1 so a dimmed icon
+   *          reads as dimmed, never as gone. A COLOR, not opacity, so
+   *          the ratio is a fact of the token rather than of whatever
+   *          sits under the button.
    *
    * Dark is the stylesheet's defaults and ships unchanged.
    */
@@ -508,7 +524,7 @@
       'hover': '#eaeaea', 'edge': '#c6c6c6', 'border': '#c6c6c6',
       'field-bg': '#f3f3f3', 'field-border': '#767676', 'field-hover': '#e2e2e2',
       'pressed': '#2145d6', 'pressed-fg': '#ffffff', 'pressed-edge': '#2145d6',
-      'status': '#1d3fc4', 'focus-ring': '#2145d6'
+      'status': '#1d3fc4', 'focus-ring': '#2145d6', 'dim': '#838383'
     },
     gray: {
       'bg': '#dcdcde', 'fg': '#1d2327', 'fg-strong': '#000000',
@@ -516,7 +532,7 @@
       'hover': '#cbcbce', 'edge': '#8c8f94', 'border': '#8c8f94',
       'field-bg': '#e9e9ea', 'field-border': '#5b636a', 'field-hover': '#d0d0d3',
       'pressed': '#1d35b4', 'pressed-fg': '#ffffff', 'pressed-edge': '#1d35b4',
-      'status': '#1d35b4', 'focus-ring': '#1d35b4'
+      'status': '#1d35b4', 'focus-ring': '#1d35b4', 'dim': '#737679'
     }
   };
 
@@ -636,7 +652,11 @@
       'status': contrastRatio(hexToRgb(ring), bg) >= 4.5 ? ring
         : contrastRatio(fg, bg) >= 4.5 ? rgbToHex(fg)
           : relativeLuminance(bg) > 0.179 ? '#000000' : '#ffffff',
-      'focus-ring': ring
+      'focus-ring': ring,
+      // Unavailable-tool icons (R9): 45% toward the background, floored
+      // at 3:1 like the grip — a hostile pair cannot make a dimmed icon
+      // vanish below what its own fg manages.
+      'dim': textTone(0.45, 3)
     };
   }
 
@@ -857,6 +877,23 @@
   }
 
   /**
+   * The `supports` descriptor field, kept as declared: only booleans
+   * survive, and an axis that was not declared stays ABSENT (not false),
+   * so needsCanvas() can fall back to the derived default for it. A
+   * non-object is treated as "nothing declared".
+   *
+   * @param {*} raw The descriptor's `supports`.
+   * @return {Object} {canvas?: boolean}
+   */
+  function normalizeSupports(raw) {
+    var out = {};
+    if (raw && typeof raw === 'object' && typeof raw.canvas === 'boolean') {
+      out.canvas = raw.canvas;
+    }
+    return out;
+  }
+
+  /**
    * Validate + register one tool descriptor. Invalid descriptors are
    * dropped with a console warning, never "fixed up".
    */
@@ -893,7 +930,8 @@
       insertBlock: typeof descriptor.insertBlock === 'string' ? descriptor.insertBlock : '',
       createBlock: typeof descriptor.createBlock === 'function' ? descriptor.createBlock : null,
       onActivate: typeof descriptor.onActivate === 'function' ? descriptor.onActivate : null,
-      isActive: typeof descriptor.isActive === 'function' ? descriptor.isActive : null
+      isActive: typeof descriptor.isActive === 'function' ? descriptor.isActive : null,
+      supports: normalizeSupports(descriptor.supports)
     });
 
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
@@ -1212,6 +1250,7 @@
         // handler treat them exactly like a registered tool's.
         onActivate: t.onActivate || null,
         isActive: t.isActive || null,
+        supports: t.supports || {},
         children: (t.children || []).slice()
       };
     });
@@ -1247,6 +1286,7 @@
         createBlock: t.createBlock,
         onActivate: t.onActivate,
         isActive: t.isActive,
+        supports: t.supports || {},
         children: []
       });
     });
@@ -1278,6 +1318,92 @@
 
   function isArmingTool(tool) {
     return !!(tool && (tool.insertBlock || tool.createBlock));
+  }
+
+  /** A toggle: an onActivate tool that reports its own open/closed
+      state (Section overview, a provider's side panel). Pressed on a
+      toggle means "this tool's surface is open", not "armed" (R10). */
+  function isToggleTool(tool) {
+    return !!(tool && tool.onActivate && tool.isActive);
+  }
+
+  // -------------------------------------------------------------------
+  // Availability (R9). A tool declares what it NEEDS via
+  // `supports.canvas`; the rail knows which of its modes capture the
+  // canvas. Availability is the product of the two, so a provider never
+  // has to know the rail's mode names (R5 will add more) and a new mode
+  // never needs a hand-kept list of tools to disable.
+  // -------------------------------------------------------------------
+
+  /**
+   * Does activating this tool need a click in the canvas to complete?
+   * Declared `supports.canvas` wins; otherwise arming tools do and
+   * everything else (Select, toggles, onActivate actions) does not.
+   *
+   * @param {Object} tool A railModel() entry or a flyout child.
+   * @return {boolean}
+   */
+  function needsCanvas(tool) {
+    if (tool && tool.supports && typeof tool.supports.canvas === 'boolean') {
+      return tool.supports.canvas;
+    }
+    return isArmingTool(tool);
+  }
+
+  /**
+   * The rail's current mode. 'edit' is the ordinary editor; 'overview'
+   * is the Section overview, whose overlay captures every canvas
+   * pointer event for its lifetime. Future modes (R5) join here and in
+   * modeCapturesCanvas().
+   *
+   * @return {string} 'edit' | 'overview'
+   */
+  function railMode() {
+    return overviewOpen ? 'overview' : 'edit';
+  }
+
+  function modeCapturesCanvas(mode) {
+    return mode === 'overview';
+  }
+
+  /**
+   * Can this tool be activated right now? Only its OWN action is judged
+   * here — a container's children are judged one by one by the caller,
+   * because a flyout with one live child must still open.
+   *
+   * @param {Object} tool
+   * @return {boolean}
+   */
+  function toolAvailable(tool) {
+    if (!tool) {
+      return false;
+    }
+    return !(modeCapturesCanvas(railMode()) && needsCanvas(tool));
+  }
+
+  /** The tooltip suffix that tells a pointer user WHY a tool is dimmed. */
+  function unavailableReason() {
+    return railMode() === 'overview'
+      ? __('not available in Section overview', 'toolrail')
+      : __('not available now', 'toolrail');
+  }
+
+  /**
+   * A top-level button's availability: its own action OR any child's.
+   * A parent whose children are ALL unavailable dims as a unit; a mixed
+   * flyout stays live and dims its children individually.
+   */
+  function buttonAvailable(tool) {
+    if (toolAvailable(tool)) {
+      return true;
+    }
+    return !!(tool.children && tool.children.some(toolAvailable));
+  }
+
+  function announceModeChange() {
+    window.dispatchEvent(new CustomEvent('toolrail:mode-changed', {
+      detail: { mode: railMode() }
+    }));
   }
 
   function setActiveTool(id) {
@@ -1591,6 +1717,11 @@
   }
 
   function activateChild(child) {
+    if (!toolAvailable(child)) {
+      // Dimmed (aria-disabled) items stay in the menu's arrow order and
+      // keep announcing; only the action is inert.
+      return;
+    }
     closeFlyout(false);
     if (child.onActivate) {
       try {
@@ -1681,6 +1812,12 @@
       var text = document.createElement('span');
       text.textContent = child.label;
       item.appendChild(text);
+      if (!toolAvailable(child)) {
+        // aria-disabled, never `disabled`: a natively disabled menuitem
+        // drops out of the arrow order and stops announcing its name.
+        item.setAttribute('aria-disabled', 'true');
+        item.title = child.label + ' — ' + unavailableReason();
+      }
       item.addEventListener('click', function () {
         activateChild(child);
       });
@@ -2873,6 +3010,14 @@
         body: [
           __('Save the current pinned arrangement as a named set in Toolbar settings, and load a set to switch arrangements.', 'toolrail'),
           __('Export a set as a small JSON file and import it on another site. Blocks the site does not have stay in the set and appear when their plugin or theme is active.', 'toolrail')
+        ]
+      },
+      {
+        // R10: the three kinds of "blue" on the rail, named. STE.
+        title: __('What a highlighted tool means', 'toolrail'),
+        body: [
+          __('A highlighted insert tool is armed: your next click in the canvas inserts its block. Select is highlighted whenever no tool is armed.', 'toolrail'),
+          __('A highlighted Section overview means that view is open, not that a tool is armed. Tools that need a canvas click are dimmed while the overview is open, and become available again when you close it.', 'toolrail')
         ]
       }
     ];
@@ -4587,13 +4732,18 @@
       overviewUnsubscribe = wp.data.subscribe(onOverviewStoreChange, 'core/block-editor');
     }
     syncPressed(true);
+    announceModeChange();
 
     var count = overviewOrder().length;
+    // ONE line covers the dimmed tools (R9) — announcing each would be a
+    // dozen announcements on open. Folded into the same speak() call:
+    // wp.a11y.speak replaces the live region's text, so a second call
+    // this close behind would clobber the first.
     speak(sprintf(
       /* translators: %d: number of top-level sections. */
       _n(
-        'Section overview — %d section. Choose a section to show its reorder controls; Escape steps back out.',
-        'Section overview — %d sections. Choose a section to show its reorder controls; Escape steps back out.',
+        'Section overview — %d section. Choose a section to show its reorder controls; Escape steps back out. Insert tools are unavailable until you close the overview.',
+        'Section overview — %d sections. Choose a section to show its reorder controls; Escape steps back out. Insert tools are unavailable until you close the overview.',
         count,
         'toolrail'
       ),
@@ -4675,6 +4825,7 @@
       overviewPriorSelection = '';
     }
     syncPressed(true);
+    announceModeChange();
     if (refocus) {
       var btn = overviewButton();
       if (btn) {
@@ -5085,6 +5236,15 @@
     btn.setAttribute('aria-pressed', 'false');
     btn.title = toolTitle(tool);
     btn.tabIndex = -1;
+    // What kind of button this is (R10): 'toggle' = pressed means "this
+    // tool's surface is open"; 'arming' = pressed means "armed, the next
+    // canvas click inserts"; 'select' = pressed means "nothing armed".
+    // No ARIA change — aria-pressed is right for all three — but a hook
+    // for the stylesheet to draw toggles differently from armed tools.
+    btn.dataset.kind = tool.select ? 'select'
+      : isToggleTool(tool) ? 'toggle'
+        : tool.onActivate ? 'action'
+          : isArmingTool(tool) ? 'arming' : 'container';
 
     var icon = document.createElement('span');
     icon.className = 'toolrail-tool-icon';
@@ -5115,13 +5275,19 @@
     }
 
     btn.addEventListener('click', function () {
-      if (tool.children && tool.children.length && !isArmingTool(tool) && !tool.onActivate && !tool.select) {
-        // A pure container (Shape): click opens the flyout.
+      var pureContainer = tool.children && tool.children.length && !isArmingTool(tool) && !tool.onActivate && !tool.select;
+      // R9: an unavailable tool whose flyout still has a live child
+      // behaves as a container — the click opens the flyout instead of
+      // arming; a fully dimmed button is inert (aria-disabled).
+      if (pureContainer || (!toolAvailable(tool) && buttonAvailable(tool))) {
         if (openFlyout && openFlyout.parentBtn === btn) {
           closeFlyout(true);
         } else {
           openFlyoutFor(btn, tool, wrapper);
         }
+        return;
+      }
+      if (!toolAvailable(tool)) {
         return;
       }
       closeFlyout(false);
@@ -5535,8 +5701,10 @@
 
   function pressedSignature() {
     // The Section overview toggle is pressed state too — include it so
-    // the change guard never suppresses (or stales) its repaint.
-    var parts = [activeTool, 'ov:' + (overviewOpen ? '1' : '0')];
+    // the change guard never suppresses (or stales) its repaint. The
+    // MODE is in the signature for the same reason: availability (R9)
+    // is painted by the same pass.
+    var parts = [activeTool, 'ov:' + (overviewOpen ? '1' : '0'), 'mode:' + railMode()];
     registered.forEach(function (t) {
       if (t.isActive) {
         try {
@@ -5583,6 +5751,31 @@
         pressed = tool.id === activeTool;
       }
       btn.setAttribute('aria-pressed', String(pressed));
+
+      // Availability (R9), painted in the same change-guarded pass.
+      // aria-disabled, NOT the disabled attribute: a natively disabled
+      // button drops out of the roving tabindex and the APG arrow order
+      // and stops announcing its name; aria-disabled keeps it reachable
+      // and announced as dimmed, and the click handler bails on it.
+      var available = buttonAvailable(tool);
+      if (available) {
+        btn.removeAttribute('aria-disabled');
+      } else {
+        btn.setAttribute('aria-disabled', 'true');
+      }
+
+      // Tooltip (R9 + R10): the reason while dimmed, "open" while a
+      // toggle's surface is up — so a pointer user learns why a button
+      // is gray, and which kind of blue an open toggle is.
+      var title = toolTitle(tool);
+      if (!available) {
+        title += ' — ' + unavailableReason();
+      } else if (pressed && isToggleTool(tool)) {
+        title += ' — ' + __('open', 'toolrail');
+      }
+      if (btn.title !== title) {
+        btn.title = title;
+      }
     });
   }
 
@@ -5710,6 +5903,7 @@
     importConfig: importConfigPayload,
     getActiveTool: function () { return activeTool; },
     setActiveTool: setActiveTool,
+    getMode: railMode,
     getDock: function () { return position.dock; },
     setDock: function (dock) { return setDock(dock); },
     getPosition: function () { return { dock: position.dock, x: position.x, y: position.y }; }

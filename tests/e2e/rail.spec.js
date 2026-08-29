@@ -1845,9 +1845,10 @@ test.describe('help panel', () => {
     await expect(panel.locator('#toolrail-help-title')).toHaveText('Toolbar help');
     await expect(helpBtn).toHaveAttribute('aria-expanded', 'true');
 
-    // All six sections render as headed text (Section overview joined
-    // in 0.1.14).
-    await expect(panel.locator('h3')).toHaveCount(6);
+    // All seven sections render as headed text (Section overview joined
+    // in 0.1.14; "What a highlighted tool means" in 0.1.18, R10).
+    await expect(panel.locator('h3')).toHaveCount(7);
+    await expect(panel.locator('h3').last()).toHaveText('What a highlighted tool means');
 
     // An explicit open moves focus into the panel…
     const focusInPanel = await page.evaluate(() => {
@@ -3470,6 +3471,309 @@ test.describe('overview drag stress (grids, columns, notices)', () => {
     await expect.poll(async () => page.evaluate((id) =>
       window.wp.data.select('core/block-editor').getBlockOrder('').indexOf(id), ids[FIRST_SEP]
     )).toBe(ids.length - 1);
+  });
+});
+
+/**
+ * R9 — tool availability, and R10 — what "pressed" means. Before R9 the
+ * overview disarmed on ENTRY only: any insert tool could be re-armed
+ * under it, went pressed, and could never insert because the overlay
+ * captures every canvas pointer event (measured 2026-08-28).
+ */
+test.describe('tool availability (R9) and pressed semantics (R10)', () => {
+  const a11yText = (page) => page.evaluate(() => {
+    const region = document.getElementById('a11y-speak-polite');
+    return region ? region.textContent : '';
+  });
+
+  test('the overview dims exactly the canvas tools; a dimmed tool cannot arm; closing restores everything', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewBlocks(page);
+
+    // Three provider tools that pin the contract down from both sides:
+    // an onActivate panel (default canvas: false — the Background Candy
+    // case that proves "disable everything" is wrong), an onActivate
+    // that DECLARES it needs the canvas, and an insert tool that
+    // declares it does not.
+    await page.evaluate(() => {
+      window.__e2eFired = [];
+      window.__e2eModes = [];
+      window.addEventListener('toolrail:mode-changed', (e) => window.__e2eModes.push(e.detail.mode));
+      window.toolrail.registerTool({
+        id: 'e2e-panel', label: 'E2E Panel',
+        onActivate: () => { window.__e2eFired.push('panel'); },
+      });
+      window.toolrail.registerTool({
+        id: 'e2e-needs-canvas', label: 'E2E Needs Canvas',
+        onActivate: () => { window.__e2eFired.push('needs-canvas'); },
+        supports: { canvas: true },
+      });
+      window.toolrail.registerTool({
+        id: 'e2e-insert-nocanvas', label: 'E2E Insert No Canvas',
+        insertBlock: 'core/quote',
+        supports: { canvas: false },
+      });
+    });
+    expect(await page.evaluate(() => window.toolrail.getMode())).toBe('edit');
+
+    const rail = (id) => page.locator(`#toolrail-rail [data-tool="${id}"]`);
+    const section = rail('section');
+    const overview = rail('overview');
+
+    // Control for the dimming assertions below: nothing is dimmed in
+    // edit mode, and the tooltip carries no reason.
+    await expect(page.locator('#toolrail-rail [aria-disabled="true"]')).toHaveCount(0);
+    const plainTitle = await section.getAttribute('title');
+    expect(plainTitle).not.toContain('not available');
+
+    await overview.click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    expect(await page.evaluate(() => window.toolrail.getMode())).toBe('overview');
+
+    // Dimmed: everything whose activation is completed by a canvas click.
+    for (const id of ['section', 'pin:core/paragraph', 'pin:core/heading', 'pin:core/image', 'e2e-needs-canvas']) {
+      await expect(rail(id), id).toHaveAttribute('aria-disabled', 'true');
+    }
+    // Live: Select (the "no tool" state), the overview toggle, both
+    // chrome buttons, the panel tool, and the insert tool that opted out.
+    for (const id of ['select', 'overview', 'help', 'settings', 'e2e-panel', 'e2e-insert-nocanvas']) {
+      await expect(rail(id), id).not.toHaveAttribute('aria-disabled', 'true');
+    }
+
+    // The reason rides the pointer tooltip; the NAME is unchanged (the
+    // dimmed state itself is what aria-disabled conveys).
+    expect(await section.getAttribute('title')).toBe(plainTitle + ' — not available in Section overview');
+    expect(await section.getAttribute('aria-label')).toBe('Section');
+
+    // One announcement covers the lot, folded into the open message.
+    await expect.poll(() => a11yText(page)).toContain('Insert tools are unavailable until you close the overview.');
+
+    // A dimmed tool is inert: no arm, no pressed, Select stays pressed.
+    // (force: Playwright's own actionability check refuses to click
+    // aria-disabled controls — the rail's handler is what is under test.)
+    await section.click({ force: true });
+    await expect(section).toHaveAttribute('aria-pressed', 'false');
+    await expect(rail('select')).toHaveAttribute('aria-pressed', 'true');
+    expect(await page.evaluate(() => window.toolrail.getActiveTool())).toBe('select');
+    await rail('e2e-needs-canvas').click({ force: true });
+    expect(await page.evaluate(() => window.__e2eFired)).toEqual([]);
+    // …while a live provider tool still runs — the whole point of a
+    // capability flag over a blanket disable.
+    await rail('e2e-panel').click();
+    expect(await page.evaluate(() => window.__e2eFired)).toEqual(['panel']);
+
+    // R10: the open toggle says so in its tooltip. Its pressed state is
+    // "surface open", and Select's is "nothing armed" — both true.
+    expect(await overview.getAttribute('title')).toContain(' — open');
+    await expect(overview).toHaveAttribute('aria-pressed', 'true');
+
+    // Close: every dimming lifts, tooltips return to plain.
+    await page.locator('#toolrail-overview [data-ov-action="close"]').click();
+    await expect(page.locator('#toolrail-overview')).toHaveCount(0);
+    await expect(page.locator('#toolrail-rail [aria-disabled="true"]')).toHaveCount(0);
+    expect(await section.getAttribute('title')).toBe(plainTitle);
+    expect(await overview.getAttribute('title')).not.toContain(' — open');
+    expect(await page.evaluate(() => window.toolrail.getMode())).toBe('edit');
+    expect(await page.evaluate(() => window.__e2eModes)).toEqual(['overview', 'edit']);
+
+    // And the tool arms again — restoration is real, not cosmetic.
+    await section.click();
+    await expect(section).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('dimmed tools keep their place in the arrow-key order and keep focus', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewBlocks(page);
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    await expect(page.locator('#toolrail-rail [data-tool="section"]')).toHaveAttribute('aria-disabled', 'true');
+
+    // Enter the rail at Select (live) and arrow onto Section (dimmed).
+    // Mutation check: swap aria-disabled for the disabled attribute and
+    // this fails — a natively disabled button refuses focus(), so the
+    // roving tabindex lands nowhere and activeElement stays on Select.
+    await page.locator('#toolrail-rail [data-tool="select"]').focus();
+    await page.keyboard.press('ArrowDown');
+    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('section');
+    expect(await page.evaluate(() => document.activeElement.getAttribute('aria-disabled'))).toBe('true');
+
+    // Enter on the dimmed button is inert too (the click path is the
+    // keyboard path for a native button).
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#toolrail-rail [data-tool="section"]')).toHaveAttribute('aria-pressed', 'false');
+    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('section');
+
+    // The order continues past it: the next arrow reaches the pinned
+    // Paragraph slot, also dimmed, also focusable.
+    await page.keyboard.press('ArrowDown');
+    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('pin:core/paragraph');
+  });
+
+  test('a flyout with one live child stays live and opens instead of arming; its dimmed child is inert', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewBlocks(page);
+
+    await page.evaluate(() => {
+      window.__e2eFired = [];
+      window.toolrail.registerTool({
+        id: 'e2e-fly-insert', label: 'E2E Fly Insert', parent: 'text', insertBlock: 'core/quote',
+      });
+      window.toolrail.registerTool({
+        id: 'e2e-fly-panel', label: 'E2E Fly Panel', parent: 'text',
+        onActivate: () => { window.__e2eFired.push('fly-panel'); },
+      });
+    });
+
+    const text = page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]');
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+
+    // Mixed flyout: the parent's OWN action (arm Paragraph) is
+    // unavailable, but a child is live, so the button is not dimmed…
+    await expect(text).not.toHaveAttribute('aria-disabled', 'true');
+    // …and Heading, with no children, is (the control).
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/heading"]')).toHaveAttribute('aria-disabled', 'true');
+
+    // Click opens the flyout rather than arming the parent.
+    await text.click();
+    await expect(page.locator('.toolrail-flyout')).toBeVisible();
+    await expect(text).toHaveAttribute('aria-pressed', 'false');
+    expect(await page.evaluate(() => window.toolrail.getActiveTool())).toBe('select');
+
+    // Children are judged one by one.
+    const insertItem = page.locator('.toolrail-flyout [data-tool="e2e-fly-insert"]');
+    const panelItem = page.locator('.toolrail-flyout [data-tool="e2e-fly-panel"]');
+    await expect(insertItem).toHaveAttribute('aria-disabled', 'true');
+    await expect(panelItem).not.toHaveAttribute('aria-disabled', 'true');
+    expect(await insertItem.getAttribute('title')).toContain('not available in Section overview');
+
+    // The dimmed item does nothing (the flyout even stays open); the
+    // live one runs.
+    await insertItem.click({ force: true });
+    expect(await page.evaluate(() => window.toolrail.getActiveTool())).toBe('select');
+    await expect(page.locator('.toolrail-flyout')).toBeVisible();
+    await panelItem.click();
+    expect(await page.evaluate(() => window.__e2eFired)).toEqual(['fly-panel']);
+
+    // Back in edit mode the parent arms on click again, as it always did.
+    await page.locator('#toolrail-overview [data-ov-action="close"]').click();
+    await expect(page.locator('#toolrail-overview')).toHaveCount(0);
+    await text.click();
+    await expect(text).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('an open toggle shows the edge bar without the armed fill; Help and Options show the bar while their dialog is open', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewBlocks(page);
+
+    const paint = (id) => page.evaluate((toolId) => {
+      const btn = document.querySelector(`#toolrail-rail [data-tool="${toolId}"]`);
+      return {
+        kind: btn.dataset.kind || null,
+        bg: getComputedStyle(btn).backgroundColor,
+        bar: getComputedStyle(btn, '::before').width,
+      };
+    }, id);
+
+    // Control: an ARMED tool is fill + bar.
+    await page.locator('#toolrail-rail [data-tool="section"]').click();
+    const armed = await paint('section');
+    expect(armed.kind).toBe('arming');
+    expect(armed.bar).toBe('3px');
+    expect(armed.bg).not.toBe('rgba(0, 0, 0, 0)');
+    const armedFill = armed.bg;
+
+    // The open overview: bar, no fill — pressed, but a different blue.
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-rail [data-tool="overview"]')).toHaveAttribute('aria-pressed', 'true');
+    const open = await paint('overview');
+    expect(open.kind).toBe('toggle');
+    expect(open.bar).toBe('3px');
+    expect(open.bg).not.toBe(armedFill);
+    await page.locator('#toolrail-overview [data-ov-action="close"]').click();
+    await expect(page.locator('#toolrail-overview')).toHaveCount(0);
+    expect((await paint('overview')).bar).not.toBe('3px');
+
+    // Help and Options: aria-expanded (a dialog opener is not a pressed
+    // toggle), and the bar while open, so an open panel has SOME visible
+    // state on the rail.
+    for (const id of ['help', 'settings']) {
+      expect((await paint(id)).bar, id + ' closed').not.toBe('3px');
+      await page.locator(`#toolrail-rail [data-tool="${id}"]`).click();
+      await expect(page.locator(`#toolrail-rail [data-tool="${id}"]`)).toHaveAttribute('aria-expanded', 'true');
+      const shown = await paint(id);
+      expect(shown.bar, id + ' open').toBe('3px');
+      expect(shown.bg, id + ' open').not.toBe(armedFill);
+      await page.keyboard.press('Escape');
+      await expect(page.locator(`#toolrail-rail [data-tool="${id}"]`)).toHaveAttribute('aria-expanded', 'false');
+    }
+  });
+
+  test('every appearance keeps a dimmed icon at 3:1 or better, including a hostile custom pair\'s fallback', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewBlocks(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-rail [data-tool="section"]')).toHaveAttribute('aria-disabled', 'true');
+
+    // Measured color of the dimmed icon against the rail background,
+    // straight from computed style — the token, not opacity math.
+    const ratio = () => page.evaluate(() => {
+      const parse = (s) => s.match(/\d+(\.\d+)?/g).slice(0, 3).map(Number);
+      const lum = (rgb) => {
+        const [r, g, b] = rgb.map((v) => {
+          v /= 255;
+          return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const fg = parse(getComputedStyle(document.querySelector('#toolrail-rail [data-tool="section"]')).color);
+      const bg = parse(getComputedStyle(document.getElementById('toolrail-rail')).backgroundColor);
+      const [hi, lo] = [lum(fg), lum(bg)].sort((a, b) => b - a);
+      return (hi + 0.05) / (lo + 0.05);
+    });
+
+    // Dark (stylesheet default).
+    expect(await ratio()).toBeGreaterThanOrEqual(3);
+    // It is DIMMER than a live tool — the state is visible, not just
+    // announced.
+    const liveRatio = await page.evaluate(() => {
+      const parse = (s) => s.match(/\d+(\.\d+)?/g).slice(0, 3).map(Number);
+      const lum = (rgb) => {
+        const [r, g, b] = rgb.map((v) => {
+          v /= 255;
+          return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const fg = parse(getComputedStyle(document.querySelector('#toolrail-rail [data-tool="help"]')).color);
+      const bg = parse(getComputedStyle(document.getElementById('toolrail-rail')).backgroundColor);
+      const [hi, lo] = [lum(fg), lum(bg)].sort((a, b) => b - a);
+      return (hi + 0.05) / (lo + 0.05);
+    });
+    expect(await ratio()).toBeLessThan(liveRatio);
+
+    // Light and Gray presets, then a custom pair. The settings dialog
+    // is live under the overview (canvas: false), so this can run
+    // without leaving the mode.
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    for (const preset of ['light', 'gray']) {
+      await page.locator(`input[data-appearance="${preset}"]`).check();
+      await expect.poll(() => ratio(), preset).toBeGreaterThanOrEqual(3);
+    }
+    await page.locator('input[data-appearance="custom"]').check();
+    await setColor(page, 'toolrail-settings-appearance-bg', '#ffffff');
+    await setColor(page, 'toolrail-settings-appearance-fg', '#1e1e1e');
+    await expect.poll(() => ratio(), 'custom good pair').toBeGreaterThanOrEqual(3);
+    // A hostile pair cannot clear 3:1 at all (fg:bg itself is ~1.6:1);
+    // the derivation must then fall back to the pair's own fg rather
+    // than a still-dimmer mix — the dimmed icon is never WORSE than the
+    // live one.
+    await setColor(page, 'toolrail-settings-appearance-bg', '#777777');
+    await setColor(page, 'toolrail-settings-appearance-fg', '#999999');
+    await expect.poll(async () => page.evaluate(() =>
+      document.getElementById('toolrail-region').style.getPropertyValue('--toolrail-dim')
+    )).toBe('#999999');
   });
 });
 
