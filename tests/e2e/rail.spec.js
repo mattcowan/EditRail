@@ -191,6 +191,35 @@ function canvas(page) {
   return page.frameLocator('iframe[name="editor-canvas"]');
 }
 
+/**
+ * Click the canvas in the EMPTY space below everything already laid out
+ * (title and blocks), measured live — never at a fixed pixel. Fixed
+ * coordinates encode one theme's layout: y=400 was empty space under
+ * Background Candy's title on mnc4.local and landed ON the title/first
+ * block under the default theme on wp-env (CI, 2026-08-28), where a
+ * second click after an insert also hit the block just inserted.
+ * `gap` is the distance below the lowest edge; `modifiers` pass through.
+ */
+async function clickBelowContent(page, opts) {
+  const gap = (opts && opts.gap) || 80;
+  const y = await canvas(page).locator('body').evaluate((body, g) => {
+    let bottom = 0;
+    body
+      .querySelectorAll('.editor-post-title, .editor-post-title__input, .is-root-container > [data-block]')
+      .forEach((el) => {
+        bottom = Math.max(bottom, el.getBoundingClientRect().bottom);
+      });
+    // Body-relative, clamped inside the iframe's viewport so the click
+    // never needs a scroll that would move the measured edges.
+    const inBody = bottom - body.getBoundingClientRect().top + g;
+    return Math.min(inBody, body.ownerDocument.documentElement.clientHeight - 20);
+  }, gap);
+  await canvas(page).locator('body').click({
+    position: { x: 300, y: Math.round(y) },
+    modifiers: (opts && opts.modifiers) || [],
+  });
+}
+
 /** Read one rail preference from the core/preferences store (null = unset). */
 async function getPref(page, key) {
   return page.evaluate((k) => {
@@ -271,7 +300,7 @@ test.describe('armed-tool insertion', () => {
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('#toolrail-rail [data-tool="select"]')).toHaveAttribute('aria-pressed', 'false');
 
-    await canvas(page).locator('body').click({ position: { x: 300, y: 400 } });
+    await clickBelowContent(page);
 
     // EXACTLY one block. `toContain` used to pass here while core's own
     // "click empty space to start a paragraph" behaviour quietly added a
@@ -286,10 +315,11 @@ test.describe('armed-tool insertion', () => {
     await openNewPost(page);
 
     await page.locator('#toolrail-rail [data-tool="pin:core/heading"]').click();
-    await canvas(page).locator('body').click({ position: { x: 300, y: 400 }, modifiers: ['Shift'] });
+    await clickBelowContent(page, { modifiers: ['Shift'] });
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/heading"]')).toHaveAttribute('aria-pressed', 'true');
 
-    await canvas(page).locator('body').click({ position: { x: 300, y: 450 } });
+    // Measured again: the first insert moved the bottom edge.
+    await clickBelowContent(page);
     // Two headings and NOTHING else: filtering to core/heading before
     // counting used to hide any stray core added on the way.
     await expect.poll(async () => await blockNames(page)).toEqual(['core/heading', 'core/heading']);
@@ -338,7 +368,7 @@ test.describe('tool flyouts', () => {
     await page.keyboard.press('ArrowRight');
     await page.keyboard.press('Enter');
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveAttribute('aria-pressed', 'true');
-    await canvas(page).locator('body').click({ position: { x: 300, y: 400 } });
+    await clickBelowContent(page);
     expect(await blockNames(page)).toContain('core/quote');
   });
 
@@ -388,7 +418,7 @@ test.describe('quick slots', () => {
 
     // Insert a paragraph to have a block whose menu we can open.
     await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').click();
-    await canvas(page).locator('body').click({ position: { x: 300, y: 400 } });
+    await clickBelowContent(page);
 
     // A dispatched selectBlock() gives no DOM focus, and Gutenberg hides the
     // floating toolbar for an EMPTY placeholder paragraph entirely — so do
@@ -699,7 +729,7 @@ test.describe('rail position', () => {
     // Still a vertical toolbar, and still fully operable.
     await expect(page.locator('#toolrail-rail')).toHaveAttribute('aria-orientation', 'vertical');
     await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').click();
-    await canvas(page).locator('body').click({ position: { x: 300, y: 400 } });
+    await clickBelowContent(page);
     expect(await blockNames(page)).toContain('core/paragraph');
   });
 
@@ -1050,7 +1080,7 @@ test.describe('registration API', () => {
 
     // Activating the child arms it; canvas click inserts its block.
     await page.locator('.toolrail-flyout [data-tool="e2e-child"]').click();
-    await canvas(page).locator('body').click({ position: { x: 300, y: 400 } });
+    await clickBelowContent(page);
     expect(await blockNames(page)).toContain('core/quote');
   });
 
@@ -1115,7 +1145,7 @@ test.describe('regressions', () => {
     await expect.poll(async () => (await blockNames(page)).length).toBe(1);
 
     await page.locator('#toolrail-rail [data-tool="pin:core/heading"]').click();
-    await canvas(page).locator('body').click({ position: { x: 300, y: 500 } });
+    await clickBelowContent(page, { gap: 120 });
 
     // Before the fix: ['core/paragraph', 'core/paragraph', 'core/heading'].
     // Core appends its default block on a click below the content, and the
@@ -1354,7 +1384,10 @@ test.describe('regressions', () => {
 
       const results = [];
       for (const sheet of Array.from(document.styleSheets)) {
-        if (!sheet.href || sheet.href.indexOf('toolrail') === -1) continue;
+        // Match the FILE, not the plugin folder: wp-env mounts the checkout
+        // under the repo's directory name (editor-tool-rail in CI), so a
+        // folder match found no sheet there and the sweep passed vacuously.
+        if (!sheet.href || sheet.href.indexOf('/assets/editor-rail.css') === -1) continue;
         let rules;
         try {
           rules = Array.from(sheet.cssRules);
@@ -2512,7 +2545,10 @@ test.describe('section overview (R6)', () => {
 
       let declared = '';
       for (const sheet of Array.from(document.styleSheets)) {
-        if (!sheet.href || sheet.href.indexOf('toolrail') === -1) continue;
+        // Match the FILE, not the plugin folder: wp-env mounts the checkout
+        // under the repo's directory name (editor-tool-rail in CI), so a
+        // folder match found no sheet there and the sweep passed vacuously.
+        if (!sheet.href || sheet.href.indexOf('/assets/editor-rail.css') === -1) continue;
         let rules;
         try { rules = Array.from(sheet.cssRules); } catch (e) { continue; }
         for (const rule of rules) {

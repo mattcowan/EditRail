@@ -33,6 +33,9 @@ jobs:
   e2e-tests:
     name: Browser tests (Playwright on wp-env)
     runs-on: ubuntu-latest
+    # The suite is ~90 serial editor loads: 15-20 minutes when healthy.
+    # A wedged run must fail here, not burn the 6-hour default.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
