@@ -45,12 +45,26 @@ window.toolrail.registerTool({
   // OR: onActivate: function () { … }  // run something instead of arming
   // OR: createBlock: function () { return wp.blocks.createBlock('typost/block', {…}); }
   // Optional: isActive: function () { return bool; }  // pressed-state callback
+  // Optional: supports: { canvas: true }             // see "Availability" below
 });
 ```
 
 Descriptors, not React nodes — the rail owns the roving tabindex (deliberately the same
 shape as your own `typost_editor_toolbar_buttons` filter). The registry fires
 `toolrail:tools-updated` on `window` after each successful registration.
+
+**Availability (`supports.canvas`, since 0.1.18):** a tool declares what it needs, not
+where it is hidden. `canvas: true` means "activation is completed by a click in the
+canvas". The rail derives availability from its own mode: while the Section overview is
+open (its overlay captures every canvas pointer event), each `canvas: true` tool is dimmed
+with `aria-disabled="true"` — still in the arrow-key order, still announced, but inert —
+and each `canvas: false` tool stays live. You normally do not set the field: an
+`insertBlock`/`createBlock` tool defaults to `canvas: true`, an `onActivate` tool to
+`canvas: false`. Set it only when the default is wrong for you — an `onActivate` that
+waits for a canvas click (`canvas: true`), or a `createBlock` that somehow does not need
+one (`canvas: false`, at your own risk). `window.toolrail.getMode()` returns `'edit'` or
+`'overview'`, and the `toolrail:mode-changed` window event (`event.detail.mode`) fires on
+every change, in case your own UI wants to react.
 
 **About `parent` since 0.1.2:** Text/Heading/Image are pinned slots rather than fixed
 built-ins, and `'text'` is an alias for the pinned Paragraph slot. A block name

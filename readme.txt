@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.1.17
+Stable tag: 0.1.18
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -24,8 +24,9 @@ Everything the rail inserts is an ordinary core block. Deactivating this plugin 
 * Full keyboard operability: one tab stop, arrow keys, Home/End, Escape disarms. Toolbar settings and the tool flyouts close on Escape and when you tab past them, so they never sit open behind you. Arrow keys follow the toolbar's orientation — Up/Down along a vertical rail with ArrowRight opening a tool's flyout, Left/Right along a horizontal one with ArrowDown opening the flyout. Repositioning has a keyboard path of its own in Toolbar settings, so it never depends on dragging.
 * Show tool names beside the icons: a "Tool names" checkbox in Toolbar settings widens a vertical or floating toolbar into icon + name rows. Icon-only toolbars ask you to learn the icons; this is the way around that. If you switch often, a second checkbox adds an expand/contract button to the toolbar itself.
 * Pick the toolbar's colors: Dark (default), Light and Gray presets, or your own background + text pair. Every preset meets the WCAG contrast minimums, and with custom colors the focus ring and pressed markers are adjusted automatically so they stay visible.
-* A Help panel ("?" next to the gear) explains inserting, pinning, moving the toolbar, the keyboard model and saved sets. It opens once on your first visit; after that, only when you ask. You can hide the "?" from the toolbar — the panel stays available from Toolbar settings.
-* Provider API for themes and plugins: PHP filter `toolrail_tool_providers` + JS `window.toolrail.registerTool()`.
+* A Help panel ("?" next to the gear) explains inserting, pinning, moving the toolbar, the keyboard model, saved sets, and what a highlighted tool means. It opens once on your first visit; after that, only when you ask. You can hide the "?" from the toolbar — the panel stays available from Toolbar settings.
+* Tools that need a canvas click are dimmed while the Section overview is open, with the reason in their tooltip. They stay in the keyboard order and keep their names for screen readers. Tools that open a panel stay available.
+* Provider API for themes and plugins: PHP filter `toolrail_tool_providers` + JS `window.toolrail.registerTool()`. A tool can declare `supports: { canvas: true }` when its action needs a canvas click, so the toolbar dims it in any mode that captures the canvas.
 
 == Frequently Asked Questions ==
 
@@ -38,6 +39,13 @@ Against your user account on this site, the same as pinned blocks and saved sets
 Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a position under "Toolbar position".
 
 == Changelog ==
+
+= 0.1.18 =
+* Tools that insert on a canvas click are dimmed while the Section overview is open. Before, they could be armed under the overview, showed as pressed, and could never insert. Dimmed tools stay in the arrow-key order and keep their names for screen readers; their tooltip says why. Select, Help, Toolbar settings, the overview itself, and tools that open a panel stay available. Opening the overview announces this once.
+* The Help panel gains a section on what a highlighted tool means: an armed insert tool, Select when nothing is armed, or an open Section overview. The overview's tooltip says "open" while it is up.
+* An open Section overview (or a plugin's open panel) now shows only the edge bar, not the filled highlight an armed tool has, so the two states no longer look the same. Help and Toolbar settings show the same bar while their panel is open.
+* Provider API: a registered tool can declare `supports: { canvas: true }` (its action needs a canvas click) or `supports: { canvas: false }`. Without the field, tools that insert a block default to true and `onActivate` tools default to false. `window.toolrail.getMode()` returns the toolbar's mode, and the `toolrail:mode-changed` window event fires when it changes.
+* Custom colors derive a dimmed-icon color that keeps at least 3:1 against the background; the Light and Gray presets carry one too.
 
 = 0.1.17 =
 * Fix: on a short post, opening the Section overview shrank the canvas to the height of the content, so the editor's gray background showed under the last block. The canvas now keeps at least the height it had before the overview opened; the zoom is unchanged.

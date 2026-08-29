@@ -85,6 +85,8 @@
     --toolrail-pressed-edge: #7b90ff;
     --toolrail-status: #9ec1ff;
     --toolrail-focus-ring: #7b90ff;
+    /* Unavailable-tool icons (R9): 3.62:1 on #1e1e1e. */
+    --toolrail-dim: #757575;
     position: relative;
     display: flex;
     z-index: 30;
@@ -530,6 +532,27 @@ body.toolrail-dragging * {
     outline-offset: 2px;
 }
 
+/* Unavailable (R9): the tool's action cannot complete in the current
+   mode. Dimmed with a contrast-checked COLOR token rather than opacity —
+   opacity would make the ratio depend on whatever sits under the button,
+   and every preset (and the custom-pair derivation) carries a --toolrail-dim
+   that clears 3:1 on its own background. The token also paints 13px
+   TEXT (flyout rows, wide-mode labels) at 3.3–3.6:1: below the 4.5:1
+   text minimum on purpose — WCAG 1.4.3 exempts inactive components, and
+   a dimmed label that read at full text contrast would not read as
+   dimmed. aria-disabled, not disabled: the button keeps its place in the
+   arrow order and its name. */
+.toolrail-tool[aria-disabled="true"],
+.toolrail-flyout-item[aria-disabled="true"] {
+    color: var(--toolrail-dim);
+    cursor: default;
+}
+
+.toolrail-tool[aria-disabled="true"]:hover,
+.toolrail-flyout-item[aria-disabled="true"]:hover {
+    background: transparent;
+}
+
 /* Pressed = armed (or that tool's surface is open, for onActivate tools).
    Never color alone: the pressed state also renders an edge bar, and
    aria-pressed carries it for assistive tech.
@@ -539,13 +562,33 @@ body.toolrail-dragging * {
    the canvas-facing edge instead — an underline beneath a top bar, an
    overline above a bottom one — because that is the established reading
    for an active item in a horizontal toolbar, and it keeps the marker off
-   the editor chrome the rail is butted against. */
+   the editor chrome the rail is butted against.
+
+   Three kinds of "on" share the bar but not the fill (R10, owner decision
+   2026-08-29): an ARMED tool (data-kind="arming") and Select get fill +
+   bar; a TOGGLE whose surface is open (data-kind="toggle": Section
+   overview, a provider's panel) gets the bar only, so an open surface and
+   an armed tool are never the same colour; the Help and Options dialog
+   openers (aria-haspopup="dialog", aria-expanded="true" — correct ARIA
+   for a dialog opener, never aria-pressed) get the same bar-only mark
+   while their dialog is up. The bar token is already contrast-checked
+   per preset (≥3:1 on bg), so no new token is needed. */
 .toolrail-tool[aria-pressed="true"] {
     background: var(--toolrail-pressed);
     color: var(--toolrail-pressed-fg);
 }
 
-.toolrail-tool[aria-pressed="true"]::before {
+.toolrail-tool[data-kind="toggle"][aria-pressed="true"] {
+    background: transparent;
+    color: var(--toolrail-fg-strong);
+}
+
+.toolrail-tool[data-kind="toggle"][aria-pressed="true"]:hover {
+    background: var(--toolrail-hover);
+}
+
+.toolrail-tool[aria-pressed="true"]::before,
+.toolrail-tool[aria-haspopup="dialog"][aria-expanded="true"]::before {
     content: "";
     position: absolute;
     border-radius: 2px;
@@ -553,28 +596,33 @@ body.toolrail-dragging * {
 }
 
 .toolrail-region[data-dock="left"] .toolrail-tool[aria-pressed="true"]::before,
-.toolrail-region[data-dock="float"] .toolrail-tool[aria-pressed="true"]::before {
+.toolrail-region[data-dock="left"] .toolrail-tool[aria-haspopup="dialog"][aria-expanded="true"]::before,
+.toolrail-region[data-dock="float"] .toolrail-tool[aria-pressed="true"]::before,
+.toolrail-region[data-dock="float"] .toolrail-tool[aria-haspopup="dialog"][aria-expanded="true"]::before {
     left: -4px;
     top: 8px;
     bottom: 8px;
     width: 3px;
 }
 
-.toolrail-region[data-dock="right"] .toolrail-tool[aria-pressed="true"]::before {
+.toolrail-region[data-dock="right"] .toolrail-tool[aria-pressed="true"]::before,
+.toolrail-region[data-dock="right"] .toolrail-tool[aria-haspopup="dialog"][aria-expanded="true"]::before {
     right: -4px;
     top: 8px;
     bottom: 8px;
     width: 3px;
 }
 
-.toolrail-region[data-dock="top"] .toolrail-tool[aria-pressed="true"]::before {
+.toolrail-region[data-dock="top"] .toolrail-tool[aria-pressed="true"]::before,
+.toolrail-region[data-dock="top"] .toolrail-tool[aria-haspopup="dialog"][aria-expanded="true"]::before {
     left: 8px;
     right: 8px;
     bottom: -4px;
     height: 3px;
 }
 
-.toolrail-region[data-dock="bottom"] .toolrail-tool[aria-pressed="true"]::before {
+.toolrail-region[data-dock="bottom"] .toolrail-tool[aria-pressed="true"]::before,
+.toolrail-region[data-dock="bottom"] .toolrail-tool[aria-haspopup="dialog"][aria-expanded="true"]::before {
     left: 8px;
     right: 8px;
     top: -4px;
@@ -1376,6 +1424,25 @@ body.toolrail-ov-dragging * {
        rather than leave an invisible gap in the layout. */
     .toolrail-tool[aria-pressed="true"]::before {
         display: none;
+    }
+
+    /* Open toggles and dialog openers: the same border, no fill — the
+       one distinction forced colours can keep. */
+    .toolrail-tool[data-kind="toggle"][aria-pressed="true"],
+    .toolrail-tool[aria-haspopup="dialog"][aria-expanded="true"] {
+        border-color: Highlight;
+        background: Canvas;
+        color: CanvasText;
+    }
+
+    .toolrail-tool[aria-haspopup="dialog"][aria-expanded="true"]::before {
+        display: none;
+    }
+
+    /* Dimmed tools take the system's own "inactive" colour. */
+    .toolrail-tool[aria-disabled="true"],
+    .toolrail-flyout-item[aria-disabled="true"] {
+        color: GrayText;
     }
 
     .toolrail-tool:focus-visible,
