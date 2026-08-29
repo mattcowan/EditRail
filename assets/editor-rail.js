@@ -622,6 +622,15 @@
       var mixed = mixRgb(fg, bg, t);
       return contrastRatio(mixed, bg) >= floor ? rgbToHex(mixed) : rgbToHex(fg);
     };
+    var dimTone = function () {
+      for (var t = 0.7; t > 0.001; t -= 0.05) {
+        var mixed = mixRgb(fg, bg, t);
+        if (contrastRatio(mixed, bg) >= 3) {
+          return rgbToHex(mixed);
+        }
+      }
+      return rgbToHex(fg);
+    };
     var ring = ringColorFor(bg);
 
     return {
@@ -653,10 +662,16 @@
         : contrastRatio(fg, bg) >= 4.5 ? rgbToHex(fg)
           : relativeLuminance(bg) > 0.179 ? '#000000' : '#ffffff',
       'focus-ring': ring,
-      // Unavailable-tool icons (R9): 45% toward the background, floored
-      // at 3:1 like the grip — a hostile pair cannot make a dimmed icon
-      // vanish below what its own fg manages.
-      'dim': textTone(0.45, 3)
+      // Unavailable-tool icons and labels (R9): the DIMMEST mix toward
+      // the background that still clears 3:1 on it. A fixed mix with a
+      // floor collapsed to the live fg for most ordinary pairs (review
+      // 2026-08-29: #ffffff/#555555 reads 7.46:1 in the dialog, yet a
+      // 45% mix measured 2.55:1, failed the floor, and the dimmed state
+      // had no visual expression at all). Searching from the far end
+      // guarantees a dim strictly between fg and bg whenever fg itself
+      // clears 3:1; only a pair the dialog already warns about (fg:bg
+      // below ~3.3) falls back to fg.
+      'dim': dimTone()
     };
   }
 
@@ -5371,6 +5386,10 @@
       wideToggle.setAttribute('aria-label', __('Show tool names', 'toolrail'));
       wideToggle.title = __('Show tool names', 'toolrail');
       wideToggle.setAttribute('aria-pressed', isWide() ? 'true' : 'false');
+      // A toggle (pressed = "names are showing"), so it takes the R10
+      // bar-only treatment — built inline, it would otherwise miss the
+      // data-kind buildToolButton stamps (review 2026-08-29).
+      wideToggle.dataset.kind = 'toggle';
       wideToggle.tabIndex = -1;
       var wideIcon = document.createElement('span');
       wideIcon.className = 'toolrail-tool-icon';
@@ -5611,7 +5630,9 @@
       if (e.key === openKey) {
         var toolId = btns[idx].dataset.tool;
         var tool = findTool(toolId);
-        if (tool && tool.children && tool.children.length) {
+        // Same gate as the click path: a fully dimmed container offers
+        // no flyout by keyboard either (review 2026-08-29).
+        if (tool && tool.children && tool.children.length && buttonAvailable(tool)) {
           openFlyoutFor(btns[idx], tool, wrapper);
         }
         return;

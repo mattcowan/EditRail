@@ -1,11 +1,12 @@
 /**
  * Version-consistency guard. Zero dependencies.
  *
- * The plugin's version lives in FOUR places that must always agree:
+ * The plugin's version lives in SIX places that must always agree:
  *   1. toolrail.php  — plugin header `Version:`
  *   2. toolrail.php  — `define('TOOLRAIL_VERSION', '...')`
  *   3. readme.txt    — `Stable tag:`
  *   4. package.json  — `version`
+ *   5+6. package-lock.json — root `version` and `packages[""].version`
  *
  * Modes:
  *   node scripts/check-versions.js
@@ -14,7 +15,7 @@
  *     equal them or be lower (the beta-in-preparation state).
  *
  *   node scripts/check-versions.js v0.1.17
- *     Tag mode (release workflow): all four must equal the tag (leading
+ *     Tag mode (release workflow): all six must equal the tag (leading
  *     "v" stripped). Stops a GitHub Release tagged v0.1.17 from packaging
  *     files that still say 0.1.16.
  *
@@ -60,12 +61,17 @@ function extract(pattern, text, label, file) {
 const mainPhp = read('toolrail.php');
 const readmeTxt = read('readme.txt');
 const pkg = JSON.parse(read('package.json'));
+const lock = JSON.parse(read('package-lock.json'));
 
 const versions = {
   'plugin header (toolrail.php)': extract(/^\s*\*\s*Version:\s*(.+)$/m, mainPhp, 'plugin header Version', 'toolrail.php'),
   'TOOLRAIL_VERSION (toolrail.php)': extract(/define\(\s*'TOOLRAIL_VERSION'\s*,\s*'([^']+)'/, mainPhp, 'TOOLRAIL_VERSION', 'toolrail.php'),
   'Stable tag (readme.txt)': extract(/^Stable tag:\s*(.+)$/m, readmeTxt, 'Stable tag', 'readme.txt'),
   'version (package.json)': String(pkg.version || ''),
+  // The lockfile carries the root version twice; npm does not fail on a
+  // mismatch, so it drifts silently (review 2026-08-29) - guard it too.
+  'version (package-lock.json)': String(lock.version || ''),
+  'packages[""].version (package-lock.json)': String((lock.packages && lock.packages[''] && lock.packages[''].version) || ''),
 };
 
 function table(expectedByKey) {
@@ -93,7 +99,7 @@ if (tagArg === null) {
   // runs on every push and inside `npm run package`, so it must accept
   // that state or no beta could ever be built. A HIGHER Stable tag is
   // always wrong. The stable-release tag guard is the hard gate where
-  // all four must equal the tag.
+  // all six must equal the tag.
   const stable = versions['Stable tag (readme.txt)'];
   const others = Object.entries(versions)
     .filter(([k]) => !k.startsWith('Stable tag'))
@@ -101,7 +107,7 @@ if (tagArg === null) {
   console.log('Version consistency check:');
   table(null);
   if (!others.every((v) => v === others[0])) {
-    console.error('\nx Version mismatch - plugin header, TOOLRAIL_VERSION and package.json must agree.');
+    console.error('\nx Version mismatch - plugin header, TOOLRAIL_VERSION, package.json and package-lock.json must agree.');
     failed = true;
   } else if (stable === others[0]) {
     console.log(`\nok All version sources agree: ${others[0]}`);

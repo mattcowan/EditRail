@@ -3757,23 +3757,99 @@ test.describe('tool availability (R9) and pressed semantics (R10)', () => {
     // is live under the overview (canvas: false), so this can run
     // without leaving the mode.
     await page.locator('#toolrail-rail [data-tool="settings"]').click();
-    for (const preset of ['light', 'gray']) {
+    const dimToken = () => page.evaluate(() =>
+      document.getElementById('toolrail-region').style.getPropertyValue('--toolrail-dim')
+    );
+    // The preset must CARRY its own token (review 2026-08-29: a bare
+    // >= 3 here passed on the stylesheet's dark default alone).
+    for (const [preset, token] of [['light', '#838383'], ['gray', '#737679']]) {
       await page.locator(`input[data-appearance="${preset}"]`).check();
-      await expect.poll(() => ratio(), preset).toBeGreaterThanOrEqual(3);
+      await expect.poll(() => dimToken(), preset).toBe(token);
+      expect(await ratio(), preset).toBeGreaterThanOrEqual(3);
     }
     await page.locator('input[data-appearance="custom"]').check();
     await setColor(page, 'toolrail-settings-appearance-bg', '#ffffff');
     await setColor(page, 'toolrail-settings-appearance-fg', '#1e1e1e');
     await expect.poll(() => ratio(), 'custom good pair').toBeGreaterThanOrEqual(3);
+    // An ORDINARY passing pair (7.46:1 in the dialog) must still get a
+    // dim that is visibly not the foreground — the first derivation
+    // collapsed exactly here (review 2026-08-29: the 45% mix measured
+    // 2.55:1, failed the floor, and dim === fg with no warning shown).
+    await setColor(page, 'toolrail-settings-appearance-fg', '#555555');
+    await expect.poll(() => dimToken(), 'ordinary pair').not.toBe('#555555');
+    expect(await ratio(), 'ordinary pair on bg').toBeGreaterThanOrEqual(3);
+    expect(await ratio(), 'ordinary pair dimmer than fg').toBeLessThan(await liveRatioNow());
     // A hostile pair cannot clear 3:1 at all (fg:bg itself is ~1.6:1);
-    // the derivation must then fall back to the pair's own fg rather
-    // than a still-dimmer mix — the dimmed icon is never WORSE than the
-    // live one.
+    // the derivation then falls back to the pair's own fg rather than
+    // a still-dimmer mix — the dialog already warns about that pair.
     await setColor(page, 'toolrail-settings-appearance-bg', '#777777');
     await setColor(page, 'toolrail-settings-appearance-fg', '#999999');
-    await expect.poll(async () => page.evaluate(() =>
-      document.getElementById('toolrail-region').style.getPropertyValue('--toolrail-dim')
-    )).toBe('#999999');
+    await expect.poll(() => dimToken(), 'hostile pair').toBe('#999999');
+
+    async function liveRatioNow() {
+      return page.evaluate(() => {
+        const parse = (s) => s.match(/\d+(\.\d+)?/g).slice(0, 3).map(Number);
+        const lum = (rgb) => {
+          const [r, g, b] = rgb.map((v) => {
+            v /= 255;
+            return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+          });
+          return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        };
+        const fg = parse(getComputedStyle(document.querySelector('#toolrail-rail [data-tool="help"]')).color);
+        const bg = parse(getComputedStyle(document.getElementById('toolrail-rail')).backgroundColor);
+        const [hi, lo] = [lum(fg), lum(bg)].sort((a, b) => b - a);
+        return (hi + 0.05) / (lo + 0.05);
+      });
+    }
+  });
+
+  test('the wide-mode chevron is a toggle: bar, no armed fill (review 2026-08-29)', async ({ page }) => {
+    await openNewPost(page);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('#toolrail-settings-widetoggle').check();
+    await page.keyboard.press('Escape');
+    const chevron = page.locator('#toolrail-rail [data-tool="wide-toggle"]');
+    await expect(chevron).toBeVisible();
+    await chevron.click();
+    await expect(chevron).toHaveAttribute('aria-pressed', 'true');
+    const armedFill = await page.evaluate(() =>
+      getComputedStyle(document.getElementById('toolrail-region')).getPropertyValue('--toolrail-pressed').trim()
+    );
+    const paint = await page.evaluate(() => {
+      const btn = document.querySelector('#toolrail-rail [data-tool="wide-toggle"]');
+      return { kind: btn.dataset.kind, bg: getComputedStyle(btn).backgroundColor, bar: getComputedStyle(btn, '::before').width };
+    });
+    expect(paint.kind).toBe('toggle');
+    expect(paint.bar).toBe('3px');
+    // #3858e9 is rgb(56, 88, 233); the toggle must not wear it.
+    expect(paint.bg).not.toBe('rgb(56, 88, 233)');
+    expect(armedFill).toBe('#3858e9');
+  });
+
+  test('ArrowRight does not open the flyout of a fully dimmed container (review 2026-08-29)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewBlocks(page);
+    // Two arming children under Heading: the parent AND every child
+    // need the canvas, so the button dims as a unit.
+    await page.evaluate(() => {
+      window.toolrail.registerTool({ id: 'e2e-h-a', label: 'A', parent: 'heading', insertBlock: 'core/quote' });
+      window.toolrail.registerTool({ id: 'e2e-h-b', label: 'B', parent: 'heading', insertBlock: 'core/list' });
+    });
+    const heading = page.locator('#toolrail-rail [data-tool="pin:core/heading"]');
+    // Control: in edit mode the key opens it.
+    await heading.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(page.locator('.toolrail-flyout')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.toolrail-flyout')).toHaveCount(0);
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(heading).toHaveAttribute('aria-disabled', 'true');
+    await heading.focus();
+    await page.keyboard.press('ArrowRight');
+    await page.waitForTimeout(200);
+    await expect(page.locator('.toolrail-flyout')).toHaveCount(0);
   });
 });
 

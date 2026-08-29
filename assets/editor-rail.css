@@ -536,8 +536,12 @@ body.toolrail-dragging * {
    mode. Dimmed with a contrast-checked COLOR token rather than opacity —
    opacity would make the ratio depend on whatever sits under the button,
    and every preset (and the custom-pair derivation) carries a --toolrail-dim
-   that clears 3:1 on its own background. aria-disabled, not disabled:
-   the button keeps its place in the arrow order and its name. */
+   that clears 3:1 on its own background. The token also paints 13px
+   TEXT (flyout rows, wide-mode labels) at 3.3–3.6:1: below the 4.5:1
+   text minimum on purpose — WCAG 1.4.3 exempts inactive components, and
+   a dimmed label that read at full text contrast would not read as
+   dimmed. aria-disabled, not disabled: the button keeps its place in the
+   arrow order and its name. */
 .toolrail-tool[aria-disabled="true"],
 .toolrail-flyout-item[aria-disabled="true"] {
     color: var(--toolrail-dim);

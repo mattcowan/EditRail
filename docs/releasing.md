@@ -13,7 +13,7 @@ How the plugin gets from a git commit to an installable zip. GitHub is the sourc
 
 ## Cut a release
 
-1. Set the version in all four places: `toolrail.php` header `Version:`, `TOOLRAIL_VERSION`, `readme.txt` `Stable tag:`, `package.json` `version`. The first three must agree, or CI fails. `Stable tag` must equal them for a stable release. For a beta, leave `Stable tag` at the last stable version (lower than the code version); CI accepts that state. Add a changelog entry to `readme.txt`.
+1. Set the version in all six places: `toolrail.php` header `Version:`, `TOOLRAIL_VERSION`, `readme.txt` `Stable tag:`, `package.json` `version`, and the two `version` entries at the top of `package-lock.json` (or run `npm install --package-lock-only` after `package.json`). All but `Stable tag` must agree, or CI fails. `Stable tag` must equal them for a stable release. For a beta, leave `Stable tag` at the last stable version (lower than the code version); CI accepts that state. Add a changelog entry to `readme.txt`.
 2. Check locally: `node scripts/check-versions.js` and `npm run package`. Open the zip. Make sure that nothing from `private/`, `tests/` or `node_modules/` is in it.
 3. Commit and push to `main`. Wait for CI to pass.
 4. GitHub → Releases → Draft a new release. Create tag `vX.Y.Z` on `main`. Write the release notes. For a beta, tag `vX.Y.Z-beta.N` and select "Set as a pre-release". A beta keeps `Stable tag` at the last stable version, which is lower than the beta's base version, and the guard checks that.
