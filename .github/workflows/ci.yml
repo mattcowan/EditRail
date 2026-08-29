@@ -1,0 +1,79 @@
+# CI: version check, PHP unit tests, browser (e2e) tests, and a packaging
+# proof on every push to main and every pull request.
+#
+# Run this workflow manually (Actions -> CI -> Run workflow) to get an
+# installable plugin zip as a build artifact. See docs/releasing.md.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  php-tests:
+    name: PHP tests (PHPUnit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          tools: composer
+      - run: composer install --no-interaction --prefer-dist
+      - run: vendor/bin/phpunit
+
+  e2e-tests:
+    name: Browser tests (Playwright on wp-env)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # wp-env (Docker) hosts a throwaway WordPress with this checkout
+      # mapped in as the plugin, per .wp-env.json. Its default admin
+      # account is admin / password on port 8888.
+      - run: npx wp-env start
+      - run: npm run test:e2e
+        env:
+          TOOLRAIL_URL: http://localhost:8888
+          TOOLRAIL_ADMIN_USER: admin
+          TOOLRAIL_ADMIN_PASS: password
+      - name: Upload Playwright output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-output-${{ github.sha }}
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
+
+  package:
+    name: Version check + package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # The four version sources (plugin header, TOOLRAIL_VERSION, readme
+      # Stable tag, package.json) must always agree - fail fast if not.
+      - run: node scripts/check-versions.js
+      - run: npm run package
+      # On manual runs, keep the zip as an artifact (7 days) so a test
+      # build of any branch is one click away.
+      - name: Upload zip artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: toolrail-${{ github.sha }}
+          path: toolrail.zip
+          retention-days: 7

@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.1.16
+Stable tag: 0.1.17
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -38,6 +38,10 @@ Against your user account on this site, the same as pinned blocks and saved sets
 Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a position under "Toolbar position".
 
 == Changelog ==
+
+= 0.1.17 =
+* Fix: on a short post, opening the Section overview shrank the canvas to the height of the content, so the editor's gray background showed under the last block. The canvas now keeps at least the height it had before the overview opened; the zoom is unchanged.
+* Add release tooling on GitHub: a CI workflow runs the PHP and browser tests and proves the plugin packages, and publishing a GitHub Release attaches an installable toolrail.zip. `npm run package` builds the same zip locally from .distignore. Nothing is sent to WordPress.org yet.
 
 = 0.1.16 =
 * Fix: with the "There is an autosave" notice open, the Section overview fit the page to a space taller than the canvas really had — the bottom section sat below the edge and no amount of scrolling could reach it. The overview now measures the space below the notice, keeps the notice visible and clickable above the mode, and refits itself if the notice appears or is dismissed while the overview is open.

@@ -1,0 +1,48 @@
+# .distignore — the single source of truth for what does NOT ship to users.
+#
+# Everything not excluded here IS distributed: into the zip built by
+# `npm run package` (scripts/package.js reads this file), and — when the
+# plugin is listed — to WordPress.org SVN trunk by a deploy action that
+# reads the same file (10up/action-wordpress-plugin-deploy).
+# Gitignore-style syntax. When you add a new dev-only file or folder, add
+# it here; new production files ship automatically.
+
+# --- VCS / CI / tooling directories ---
+/.git
+/.github
+/.wordpress-org
+/.claude
+/.playwright-mcp
+/playwright-profile
+/playwright-report
+/test-results
+/node_modules
+/vendor
+/build
+/scripts
+/tests
+/docs
+/private
+
+# --- root config / dev files ---
+/.distignore
+/.gitattributes
+/.gitignore
+/.phpunit.result.cache
+/.wp-env.json
+/composer.json
+/composer.lock
+/package-lock.json
+/package.json
+/phpunit.xml
+/phpunit.xml.dist
+
+# --- docs that live on GitHub, not in the distributed plugin ---
+# (readme.txt DOES ship: it is the WordPress.org listing.)
+/CLAUDE.md
+/README.md
+
+# --- misc ---
+*.zip
+.DS_Store
+Thumbs.db
