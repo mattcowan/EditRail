@@ -1,5 +1,14 @@
 # CI: version check, PHP unit tests, browser (e2e) tests, and a packaging
-# proof on every push to main and every pull request.
+# proof.
+#
+# The cheap jobs (PHPUnit, version check + package) run on every push to
+# main and every pull request. The browser suite (~17 min, ~90 serial
+# editor loads) runs on pull requests and on manual runs - NOT on the
+# merge commit to main: a merged PR is code that just passed on the PR,
+# and the repo is private (2,000 Actions minutes/month), so the repeat
+# run cost more than it told us. A nightly run (a `schedule:` trigger)
+# is deliberately NOT set up until the plugin is ready for submission;
+# add it then, so a WordPress core change is caught before a user does.
 #
 # Run this workflow manually (Actions -> CI -> Run workflow) to get an
 # installable plugin zip as a build artifact. See docs/releasing.md.
@@ -33,6 +42,9 @@ jobs:
   e2e-tests:
     name: Browser tests (Playwright on wp-env)
     runs-on: ubuntu-latest
+    # Skipped on the push to main (see the header); every other trigger
+    # runs it.
+    if: github.event_name != 'push'
     # The suite is ~90 serial editor loads: 15-20 minutes when healthy.
     # A wedged run must fail here, not burn the 6-hour default.
     timeout-minutes: 40

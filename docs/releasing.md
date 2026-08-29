@@ -6,8 +6,9 @@ How the plugin gets from a git commit to an installable zip. GitHub is the sourc
 
 | Trigger | Workflow | What happens |
 |---|---|---|
-| Push to `main`, any pull request | `.github/workflows/ci.yml` | Version check, PHPUnit, Playwright e2e on a wp-env WordPress, and a packaging proof (`npm run package` must succeed). |
-| Actions → CI → Run workflow | `.github/workflows/ci.yml` | Same, plus `toolrail.zip` is kept as a build artifact for 7 days. Use this to get a test build of any branch. |
+| Any pull request (each push to it) | `.github/workflows/ci.yml` | Version check, PHPUnit, Playwright e2e on a wp-env WordPress, and a packaging proof (`npm run package` must succeed). Approve a PR only when this is green. |
+| Push to `main` (the merge) | `.github/workflows/ci.yml` | Version check, PHPUnit and the packaging proof only. The e2e suite is skipped: the merged code passed it on the PR. |
+| Actions → CI → Run workflow | `.github/workflows/ci.yml` | The full set, plus `toolrail.zip` is kept as a build artifact for 7 days. Use this to get a test build of any branch. |
 | A GitHub Release is **published** | `.github/workflows/release.yml` | Version guard against the tag, then `toolrail.zip` is attached to the Release. |
 
 ## Cut a release
