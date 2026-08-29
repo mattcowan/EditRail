@@ -9,7 +9,9 @@
  *
  * Modes:
  *   node scripts/check-versions.js
- *     Consistency mode (CI, every push): all four must match each other.
+ *     Consistency mode (CI, every push, and `npm run package`): header,
+ *     constant and package.json must match each other; Stable tag must
+ *     equal them or be lower (the beta-in-preparation state).
  *
  *   node scripts/check-versions.js v0.1.17
  *     Tag mode (release workflow): all four must equal the tag (leading
@@ -85,14 +87,29 @@ let failed = false;
 // `=== null`, not `!tagArg`: an empty-string tag must reach tag mode and
 // fail there, never fall through to consistency mode and exit 0.
 if (tagArg === null) {
-  const values = Object.values(versions);
+  // Header, constant and package.json must agree. Stable tag must equal
+  // them OR be lower: a beta in preparation keeps Stable tag at the last
+  // stable release on purpose (see pre-release mode), and this check
+  // runs on every push and inside `npm run package`, so it must accept
+  // that state or no beta could ever be built. A HIGHER Stable tag is
+  // always wrong. The stable-release tag guard is the hard gate where
+  // all four must equal the tag.
+  const stable = versions['Stable tag (readme.txt)'];
+  const others = Object.entries(versions)
+    .filter(([k]) => !k.startsWith('Stable tag'))
+    .map(([, v]) => v);
   console.log('Version consistency check:');
   table(null);
-  if (!values.every((v) => v === values[0])) {
-    console.error('\nx Version mismatch - the four version sources must agree.');
+  if (!others.every((v) => v === others[0])) {
+    console.error('\nx Version mismatch - plugin header, TOOLRAIL_VERSION and package.json must agree.');
     failed = true;
+  } else if (stable === others[0]) {
+    console.log(`\nok All version sources agree: ${others[0]}`);
+  } else if (/^\d+(\.\d+)*$/.test(stable) && compareVersions(stable, others[0]) < 0) {
+    console.log(`\nok Code is at ${others[0]}; Stable tag stays at ${stable} (pre-release state - a stable release must move it).`);
   } else {
-    console.log(`\nok All version sources agree: ${values[0]}`);
+    console.error(`\nx Stable tag is ${stable} but the code is at ${others[0]} - Stable tag may equal the code version or be lower, never higher.`);
+    failed = true;
   }
 } else {
   const tag = tagArg.replace(/^v/, '');
