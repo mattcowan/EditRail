@@ -90,7 +90,14 @@ archive.on('error', function (err) {
 
 archive.pipe(output);
 // Top-level folder inside the zip = the plugin slug, like wp.org zips.
-archive.directory(distDir, pluginSlug, { mode: 0o755 });
+// Modes are set per entry: an options-object `mode` applies 0755 to every
+// FILE too, and an admin unzipping by hand on Linux would get a
+// world-executable toolrail.php. Explicit rather than inherited from the
+// host, so a zip built on Windows (which reports 0666/0777) matches CI's.
+archive.directory(distDir, pluginSlug, (entry) => {
+  entry.mode = entry.stats && entry.stats.isDirectory() ? 0o755 : 0o644;
+  return entry;
+});
 archive.finalize();
 
 /**

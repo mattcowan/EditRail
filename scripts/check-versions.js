@@ -18,7 +18,7 @@
  *
  *   node scripts/check-versions.js v0.2.0-beta.1 --prerelease
  *     Pre-release mode: header/constant/package.json must equal the BASE
- *     version (0.2.0) and Stable tag must NOT equal it, so a beta never
+ *     version (0.2.0) and Stable tag must be LOWER than it, so a beta never
  *     moves the tag WordPress.org would serve.
  *
  * Also warns (never fails) when `Tested up to:` carries a patch version —
@@ -32,7 +32,19 @@ const read = (f) => fs.readFileSync(path.join(rootDir, f), 'utf8');
 
 const args = process.argv.slice(2);
 const prerelease = args.includes('--prerelease');
-const tagArg = args.find((a) => !a.startsWith('--')) || null;
+const tagArg = args.find((a) => !a.startsWith('--')) ?? null;
+
+/** Compare two dotted numeric versions: <0, 0, >0. */
+function compareVersions(a, b) {
+  const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
 
 function extract(pattern, text, label, file) {
   const m = text.match(pattern);
@@ -59,8 +71,8 @@ function table(expectedByKey) {
   for (const [key, value] of Object.entries(versions)) {
     const expected = expectedByKey ? expectedByKey[key] : null;
     let marker = '';
-    if (expected === 'must-differ') {
-      marker = value !== expectedByKey.base ? '  ok' : `  x must NOT be ${expectedByKey.base}`;
+    if (expected === 'must-be-lower') {
+      marker = compareVersions(value, expectedByKey.base) < 0 ? '  ok' : `  x must be lower than ${expectedByKey.base}`;
     } else if (expected) {
       marker = value === expected ? '  ok' : `  x expected ${expected}`;
     }
@@ -70,7 +82,9 @@ function table(expectedByKey) {
 
 let failed = false;
 
-if (!tagArg) {
+// `=== null`, not `!tagArg`: an empty-string tag must reach tag mode and
+// fail there, never fall through to consistency mode and exit 0.
+if (tagArg === null) {
   const values = Object.values(versions);
   console.log('Version consistency check:');
   table(null);
@@ -102,7 +116,7 @@ if (!tagArg) {
     console.log(`Pre-release version check against tag ${tagArg} (base ${base}):`);
     const expected = { base };
     for (const key of Object.keys(versions)) {
-      expected[key] = key.startsWith('Stable tag') ? 'must-differ' : base;
+      expected[key] = key.startsWith('Stable tag') ? 'must-be-lower' : base;
     }
     table(expected);
     const stable = versions['Stable tag (readme.txt)'];
@@ -113,8 +127,8 @@ if (!tagArg) {
       console.error(`\nx Plugin header / TOOLRAIL_VERSION / package.json must equal the base version ${base} for a pre-release.`);
       failed = true;
     }
-    if (stable === base) {
-      console.error(`\nx Stable tag equals ${base} - during a beta the Stable tag must keep pointing at the last STABLE release.`);
+    if (!/^\d+(\.\d+)*$/.test(stable) || compareVersions(stable, base) >= 0) {
+      console.error(`\nx Stable tag is ${stable} - during a beta it must be a plain version LOWER than ${base}, the last STABLE release.`);
       failed = true;
     }
     if (!failed) {

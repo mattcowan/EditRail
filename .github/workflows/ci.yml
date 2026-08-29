@@ -11,13 +11,19 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Read-only token for every job: nothing here writes to the repo, and the
+# jobs run third-party lifecycle scripts (npm ci, composer, Playwright).
+permissions:
+  contents: read
+
 jobs:
   php-tests:
     name: PHP tests (PHPUnit)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
+      # Pinned to a commit: v2 is a moving tag on the one non-GitHub action.
+      - uses: shivammathur/setup-php@b604ade2a87db23f8871b7182e69ec5e75effb45 # v2 (2026-08-28)
         with:
           php-version: '8.2'
           tools: composer

@@ -34,16 +34,25 @@ jobs:
 
       # Fail BEFORE packaging if the plugin header, TOOLRAIL_VERSION,
       # readme Stable tag and package.json do not match the release tag.
+      # The tag name goes through env, never straight into the script:
+      # ${{ }} is substituted before the shell parses the line, and git
+      # accepts tag names containing backticks and $( ) - a quoted "$TAG"
+      # is data, an interpolated one is code.
       - name: Version guard (stable)
         if: ${{ !github.event.release.prerelease }}
-        run: node scripts/check-versions.js "${{ github.event.release.tag_name }}"
+        run: node scripts/check-versions.js "$TAG"
+        env:
+          TAG: ${{ github.event.release.tag_name }}
       - name: Version guard (pre-release)
         if: ${{ github.event.release.prerelease }}
-        run: node scripts/check-versions.js "${{ github.event.release.tag_name }}" --prerelease
+        run: node scripts/check-versions.js "$TAG" --prerelease
+        env:
+          TAG: ${{ github.event.release.tag_name }}
 
       - run: npm run package
 
       - name: Attach zip to the GitHub Release
-        run: gh release upload "${{ github.event.release.tag_name }}" toolrail.zip --clobber
+        run: gh release upload "$TAG" toolrail.zip --clobber
         env:
+          TAG: ${{ github.event.release.tag_name }}
           GH_TOKEN: ${{ github.token }}
