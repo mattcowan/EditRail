@@ -3217,13 +3217,19 @@
   // moveOverviewBlockTo (a verified move only) and drillTo; cleared only
   // on open/close — deselecting a box on the way out must not forget it.
   var overviewLastTouched = '';
-  // In-flight close-centering scroll animation (rAF id). It outlives
-  // closeOverview on purpose (the glide IS the close's last act);
-  // reopening cancels it so it cannot fight the fresh scroll-home.
+  // The close-centering re-apply (rAF id): one frame behind the close's
+  // synchronous pre-scroll, belt for chrome that lands with the render.
+  // It outlives closeOverview on purpose; reopening cancels it so it
+  // cannot fight the fresh scroll-home.
   var overviewCloseScrollFrame = null;
-  // The one corrective write scheduled after core's ~0.4s iframe shrink
-  // settles (see centerBlockAfterClose) — cancelled on reopen too.
+  // The one corrective write scheduled behind that, for late-arriving
+  // editor chrome (see centerBlockAfterClose) — cancelled on reopen.
   var overviewCloseScrollTimer = null;
+  // The fading overlay's removal timer, and the frame that lifts the
+  // body's toolrail-ov-closing stamp — both cleared on reopen so a
+  // rapid close-then-reopen starts from a clean body and ONE overlay.
+  var overviewFadeTimer = null;
+  var overviewClosingFrame = null;
 
   function contentRegion() {
     return document.querySelector('.interface-interface-skeleton__content');
@@ -4699,9 +4705,12 @@
     overviewPan = 0;
     overviewUserScale = 0;
     overviewExtentDirty = true;
-    // A close-centering glide (or its settle correction) still in
-    // flight would fight the scroll-home below — a rapid
-    // close-then-reopen must start clean.
+    // A close still winding down — its re-apply/corrective scrolls, the
+    // fading overlay, the body's closing stamp — must not leak into a
+    // fresh open: cancel the scroll writes (they would fight the
+    // scroll-home below), remove a fading overlay NOW (overviewNode()
+    // finds the first #toolrail-overview, and two of them would strand
+    // the new build's boxes on the dying one), and lift the stamp.
     if (overviewCloseScrollFrame) {
       window.cancelAnimationFrame(overviewCloseScrollFrame);
       overviewCloseScrollFrame = null;
@@ -4710,6 +4719,19 @@
       window.clearTimeout(overviewCloseScrollTimer);
       overviewCloseScrollTimer = null;
     }
+    if (overviewFadeTimer) {
+      window.clearTimeout(overviewFadeTimer);
+      overviewFadeTimer = null;
+    }
+    if (overviewClosingFrame) {
+      window.cancelAnimationFrame(overviewClosingFrame);
+      overviewClosingFrame = null;
+    }
+    var lingering = document.getElementById('toolrail-overview');
+    if (lingering) {
+      lingering.remove();
+    }
+    document.body.classList.remove('toolrail-ov-closing');
     // The canvas scrolls INSIDE its iframe on iframed editors (measured:
     // the parent content region never overflows) — that scroll position
     // is what "exiting restores where you were" means. Growing the
@@ -4805,15 +4827,16 @@
   /**
    * Center a block in the restored canvas viewport — the close's
    * landing (R11, issue #20). Runs AFTER clearOverviewScale(), the only
-   * time the rects are true again. A short ease-out glide (~260ms) so
-   * the jump reads as "we took you somewhere" rather than a teleport;
-   * under prefers-reduced-motion it is one instant write. Both paths
-   * re-derive the goal from a fresh rect at write time — the 0.1.15
-   * lesson: core moves the iframe with its own animation, so a single
-   * early measurement can be taken mid-flight. The animated path
-   * re-measures every frame (one getBoundingClientRect), the instant
-   * path re-applies once on the next rAF. Scroll only — never DOM
-   * focus, and nothing here writes content.
+   * time the rects are true again, and INSIDE the close's
+   * toolrail-ov-closing window, so the un-grown layout is already final
+   * when the goal is measured. Pre-positioning, not animation (owner
+   * feedback 2026-08-31, replacing the first cut's ~260ms glide): the
+   * author never watches a scroll — the block is in place on the first
+   * painted frame, for everyone, so prefers-reduced-motion needs no
+   * branch here (it gates only the overlay fade in closeOverview).
+   * Every write re-derives the goal from a fresh rect — the 0.1.15
+   * lesson. Scroll only — never DOM focus, and nothing here writes
+   * content.
    *
    * @return {boolean} true if a scroll target existed (the caller skips
    *                   the entry-scroll restore); false to fall back.
@@ -4880,51 +4903,28 @@
       lastWritten = goal();
       writePos(lastWritten);
     };
-    // Removing the overlay class hands the iframe back to core's 0.4s
-    // all-property transition (the entry direction suppresses it in
-    // CSS; the close direction is core's own animated shrink), so any
-    // goal computed inside that window is measured against a moving
-    // viewport. ONE corrective write after it settles lands the exact
-    // center — skipped when the author has scrolled away in the
-    // meantime: their hand on the wheel outranks the correction.
-    var settle = function (delay) {
-      overviewCloseScrollTimer = window.setTimeout(function () {
-        overviewCloseScrollTimer = null;
-        var now = readPos();
-        if (now !== null && Math.abs(now - lastWritten) < 2) {
-          writeGoal();
-        }
-      }, delay);
-    };
-    var reduce = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-    if (reduce || typeof window.requestAnimationFrame !== 'function') {
-      writeGoal();
-      if (typeof window.requestAnimationFrame === 'function') {
-        overviewCloseScrollFrame = window.requestAnimationFrame(function () {
-          overviewCloseScrollFrame = null;
-          writeGoal();
-        });
-      }
-      settle(450);
-      return true;
-    }
-    var startTs = null;
-    var step = function (ts) {
-      if (startTs === null) {
-        startTs = ts;
-      }
-      var t = Math.min(1, (ts - startTs) / 260);
-      var eased = 1 - Math.pow(1 - t, 3);
-      lastWritten = start + (goal() - start) * eased;
-      writePos(lastWritten);
-      if (t < 1) {
-        overviewCloseScrollFrame = window.requestAnimationFrame(step);
-      } else {
+    // Synchronous: with the shrink instant (the toolrail-ov-closing
+    // stamp), the scroll range exists right now and this write is what
+    // the first post-close frame paints. The rAF re-apply and the ONE
+    // corrective write behind it are belt for chrome that lands with
+    // the render (an arriving notice resizes the viewport the goal was
+    // measured against); the correction is skipped when the author has
+    // scrolled away in the meantime — their hand on the wheel outranks
+    // it.
+    writeGoal();
+    if (typeof window.requestAnimationFrame === 'function') {
+      overviewCloseScrollFrame = window.requestAnimationFrame(function () {
         overviewCloseScrollFrame = null;
-        settle(200);
+        writeGoal();
+      });
+    }
+    overviewCloseScrollTimer = window.setTimeout(function () {
+      overviewCloseScrollTimer = null;
+      var now = readPos();
+      if (now !== null && Math.abs(now - lastWritten) < 2) {
+        writeGoal();
       }
-    };
-    overviewCloseScrollFrame = window.requestAnimationFrame(step);
+    }, 250);
     return true;
   }
 
@@ -4948,9 +4948,33 @@
     });
     overviewLastTouched = '';
     finishOverviewDrag();
+    // Order matters here (owner feedback 2026-08-31 — no visible
+    // scroll-to on close):
+    //  1. Stamp toolrail-ov-closing FIRST: it keeps core's 0.4s iframe
+    //     transition suppressed through the un-grow, so the shrink is
+    //     instant and the scroll range exists in this same task (a
+    //     still-grown iframe clamps every scrollTo to 0).
+    //  2. Hand the canvas back and pre-scroll it (below).
+    //  3. Let the overlay FADE rather than vanish: what it reveals is
+    //     already the finished document, so nothing moves under it.
+    //     Reduced motion removes it at once instead; either way it is
+    //     hidden from AT and the pointer immediately.
+    // The stamp lifts two frames later — the styles it suppressed have
+    // painted by then, and lifting it re-triggers nothing.
+    document.body.classList.add('toolrail-ov-closing');
     var overlay = overviewNode();
     if (overlay) {
-      overlay.remove();
+      var reduceClose = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+      if (reduceClose) {
+        overlay.remove();
+      } else {
+        overlay.classList.add('toolrail-ov-fadeout');
+        overlay.setAttribute('aria-hidden', 'true');
+        overviewFadeTimer = window.setTimeout(function () {
+          overviewFadeTimer = null;
+          overlay.remove();
+        }, 200);
+      }
     }
     document.body.classList.remove('toolrail-overview-on');
     clearOverviewScale();
@@ -4975,6 +4999,21 @@
           content.scrollTop = overviewEntryScroll;
         }
       }
+    }
+    // Lift the closing stamp two frames on: the transition-suppressed
+    // styles have painted by then, and core's own iframe transition is
+    // the editor's to keep — the stamp must never outlive the close.
+    if (typeof window.requestAnimationFrame === 'function') {
+      overviewClosingFrame = window.requestAnimationFrame(function () {
+        overviewClosingFrame = window.requestAnimationFrame(function () {
+          overviewClosingFrame = null;
+          document.body.classList.remove('toolrail-ov-closing');
+        });
+      });
+    } else {
+      window.setTimeout(function () {
+        document.body.classList.remove('toolrail-ov-closing');
+      }, 100);
     }
     overviewEntryScroll = null;
     overviewRoot = '';

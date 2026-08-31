@@ -2713,9 +2713,9 @@ test.describe('section overview (R6)', () => {
     await expect(page.locator('#toolrail-overview')).toHaveCount(0);
 
     // Behavior, not mechanism: the block's center lands within a
-    // quarter-viewport of the canvas viewport's center (the glide and
-    // its settle correction take ~0.5s; poll rides them out), and the
-    // block is selected.
+    // quarter-viewport of the canvas viewport's center (the canvas is
+    // pre-positioned at close; the poll also covers the corrective
+    // write behind it), and the block is selected.
     await expect.poll(async () => {
       const m = await landingOffset(page, picked);
       return m ? m.off < m.vh / 4 : false;
@@ -2770,7 +2770,8 @@ test.describe('section overview (R6)', () => {
     await expect(page.locator('#toolrail-overview')).toHaveCount(0);
 
     // The moved CHILD (last touched wins over the drilled root) is
-    // selected and centered — with no glide to wait out.
+    // selected and centered — reduced motion only skips the overlay
+    // fade; the landing itself is identical for everyone.
     expect(await page.evaluate(() =>
       window.wp.data.select('core/block-editor').getSelectedBlockClientId()
     )).toBe(innerIds[1]);

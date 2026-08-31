@@ -41,7 +41,7 @@ Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a 
 == Changelog ==
 
 = 0.1.19 =
-* Closing the Section overview now takes you to the block you last picked, moved or stepped into: the canvas centers that block, selects it, and the close announcement names it. A short scroll glide shows the move; with the "reduce motion" system preference set, the canvas moves in one step instead. If you picked nothing, closing still returns you to where you were scrolled, exactly as before.
+* Closing the Section overview now takes you to the block you last picked, moved or stepped into: the overview fades out over a canvas already scrolled to that block — there is no scroll to watch — the block is selected, and the close announcement names it. With the "reduce motion" system preference set, the overview disappears at once instead of fading. If you touched nothing, closing still returns you to where you were scrolled, exactly as before.
 
 = 0.1.18 =
 * Tools that insert on a canvas click are dimmed while the Section overview is open. Before, they could be armed under the overview, showed as pressed, and could never insert. Dimmed tools stay in the arrow-key order and keep their names for screen readers; their tooltip says why. Select, Help, Toolbar settings, the overview itself, and tools that open a panel stay available. Opening the overview announces this once.
