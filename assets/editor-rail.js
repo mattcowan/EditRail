@@ -3003,7 +3003,7 @@
         title: __('Section overview', 'toolrail'),
         body: [
           __('The Section overview tool zooms the canvas out and outlines every top-level block. Click an outline to show its reorder controls — arrows to move it, "Reorder inside" to step into a section — or simply drag an outline to a new spot. Zoom with the +/− buttons and pan long documents with the mouse wheel.', 'toolrail'),
-          __('Escape collapses the open controls, then steps up one level, then closes the overview. Closing returns you to where you were scrolled.', 'toolrail')
+          __('Escape collapses the open controls, then steps up one level, then closes the overview. Closing centers and selects the block you last picked, moved or stepped into; if you touched nothing, it returns you to where you were scrolled.', 'toolrail')
         ]
       },
       {
@@ -3209,6 +3209,27 @@
   // feedback 2026-08-27), so the selection is cleared for the
   // overview's lifetime and put back on close.
   var overviewPriorSelection = '';
+  // The block the author last PICKED, MOVED or DRILLED INTO during this
+  // overview session (R11, issue #20). On close, this — not the entry
+  // scroll — is where the author's attention is: the canvas centers and
+  // selects it. '' means the author touched nothing, and close falls
+  // back to the entry scroll + prior selection. Set by selectOverviewBox,
+  // moveOverviewBlockTo (a verified move only) and drillTo; cleared only
+  // on open/close — deselecting a box on the way out must not forget it.
+  var overviewLastTouched = '';
+  // The close-centering re-apply (rAF id): one frame behind the close's
+  // synchronous pre-scroll, belt for chrome that lands with the render.
+  // It outlives closeOverview on purpose; reopening cancels it so it
+  // cannot fight the fresh scroll-home.
+  var overviewCloseScrollFrame = null;
+  // The one corrective write scheduled behind that, for late-arriving
+  // editor chrome (see centerBlockAfterClose) — cancelled on reopen.
+  var overviewCloseScrollTimer = null;
+  // The fading overlay's removal timer, and the frame that lifts the
+  // body's toolrail-ov-closing stamp — both cleared on reopen so a
+  // rapid close-then-reopen starts from a clean body and ONE overlay.
+  var overviewFadeTimer = null;
+  var overviewClosingFrame = null;
 
   function contentRegion() {
     return document.querySelector('.interface-interface-skeleton__content');
@@ -3724,6 +3745,7 @@
       the outline stays clean until the author asks. */
   function selectOverviewBox(clientId) {
     overviewSelected = clientId;
+    overviewLastTouched = clientId;
     syncOverviewSelection();
     var box = overviewBoxFor(clientId);
     if (!box) {
@@ -4427,6 +4449,9 @@
       return;
     }
     overviewSignature = overviewCurrentSignature();
+    // Only a move that VERIFIED counts as touched — a refused move must
+    // not make close center a block the author never actually moved.
+    overviewLastTouched = clientId;
 
     if (focusAction) {
       overviewSelected = clientId;
@@ -4464,6 +4489,11 @@
    */
   function drillTo(root, announcePrefix) {
     overviewRoot = root || '';
+    // Drilling INTO a section is touching it; climbing back to the top
+    // level ('') is not — the last touched child stays the landing spot.
+    if (overviewRoot) {
+      overviewLastTouched = overviewRoot;
+    }
     // Each level gets its own zoom, pan and selection.
     overviewSelected = '';
     overviewPan = 0;
@@ -4671,9 +4701,37 @@
     overviewOpen = true;
     overviewRoot = '';
     overviewSelected = '';
+    overviewLastTouched = '';
     overviewPan = 0;
     overviewUserScale = 0;
     overviewExtentDirty = true;
+    // A close still winding down — its re-apply/corrective scrolls, the
+    // fading overlay, the body's closing stamp — must not leak into a
+    // fresh open: cancel the scroll writes (they would fight the
+    // scroll-home below), remove a fading overlay NOW (overviewNode()
+    // finds the first #toolrail-overview, and two of them would strand
+    // the new build's boxes on the dying one), and lift the stamp.
+    if (overviewCloseScrollFrame) {
+      window.cancelAnimationFrame(overviewCloseScrollFrame);
+      overviewCloseScrollFrame = null;
+    }
+    if (overviewCloseScrollTimer) {
+      window.clearTimeout(overviewCloseScrollTimer);
+      overviewCloseScrollTimer = null;
+    }
+    if (overviewFadeTimer) {
+      window.clearTimeout(overviewFadeTimer);
+      overviewFadeTimer = null;
+    }
+    if (overviewClosingFrame) {
+      window.cancelAnimationFrame(overviewClosingFrame);
+      overviewClosingFrame = null;
+    }
+    var lingering = document.getElementById('toolrail-overview');
+    if (lingering) {
+      lingering.remove();
+    }
+    document.body.classList.remove('toolrail-ov-closing');
     // The canvas scrolls INSIDE its iframe on iframed editors (measured:
     // the parent content region never overflows) — that scroll position
     // is what "exiting restores where you were" means. Growing the
@@ -4766,22 +4824,168 @@
     ));
   }
 
+  /**
+   * Center a block in the restored canvas viewport — the close's
+   * landing (R11, issue #20). Runs AFTER clearOverviewScale(), the only
+   * time the rects are true again, and INSIDE the close's
+   * toolrail-ov-closing window, so the un-grown layout is already final
+   * when the goal is measured. Pre-positioning, not animation (owner
+   * feedback 2026-08-31, replacing the first cut's ~260ms glide): the
+   * author never watches a scroll — the block is in place on the first
+   * painted frame, for everyone, so prefers-reduced-motion needs no
+   * branch here (it gates only the overlay fade in closeOverview).
+   * Every write re-derives the goal from a fresh rect — the 0.1.15
+   * lesson. Scroll only — never DOM focus, and nothing here writes
+   * content.
+   *
+   * @return {boolean} true if a scroll target existed (the caller skips
+   *                   the entry-scroll restore); false to fall back.
+   */
+  function centerBlockAfterClose(clientId) {
+    var doc = canvasDoc();
+    if (!doc) {
+      return false;
+    }
+    var el = doc.querySelector('[data-block="' + String(clientId).replace(/"/g, '') + '"]');
+    if (!el) {
+      return false;
+    }
+    var frame = canvasFrame();
+    var readPos, writePos, goal;
+    if (frame && frame.contentWindow && doc !== document) {
+      var win = frame.contentWindow;
+      readPos = function () {
+        try {
+          return win.scrollY || 0;
+        } catch (e) {
+          return null;
+        }
+      };
+      writePos = function (y) {
+        try {
+          win.scrollTo(0, y);
+        } catch (e) {
+          /* Cross-origin surprise — stop writing. */
+        }
+      };
+      goal = function () {
+        var r = el.getBoundingClientRect();
+        var vh = win.innerHeight || doc.documentElement.clientHeight;
+        var max = Math.max(0, doc.documentElement.scrollHeight - vh);
+        // A block taller than the viewport centers to its TOP —
+        // (vh - height)/2 would push its start off-screen upward.
+        return Math.min(max, Math.max(0, (win.scrollY || 0) + r.top - Math.max(0, (vh - r.height) / 2)));
+      };
+    } else {
+      var scroller = contentRegion();
+      if (!scroller) {
+        return false;
+      }
+      readPos = function () {
+        return scroller.scrollTop;
+      };
+      writePos = function (y) {
+        scroller.scrollTop = y;
+      };
+      goal = function () {
+        var r = el.getBoundingClientRect();
+        var s = scroller.getBoundingClientRect();
+        var max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+        return Math.min(max, Math.max(0, scroller.scrollTop + (r.top - s.top) - Math.max(0, (scroller.clientHeight - r.height) / 2)));
+      };
+    }
+    var start = readPos();
+    if (start === null) {
+      return false;
+    }
+    var lastWritten = start;
+    var writeGoal = function () {
+      lastWritten = goal();
+      writePos(lastWritten);
+    };
+    // Synchronous: with the shrink instant (the toolrail-ov-closing
+    // stamp), the scroll range exists right now and this write is what
+    // the first post-close frame paints. The rAF re-apply and the ONE
+    // corrective write behind it are belt for chrome that lands with
+    // the render (an arriving notice resizes the viewport the goal was
+    // measured against); the correction is skipped when the author has
+    // scrolled away in the meantime — their hand on the wheel outranks
+    // it.
+    writeGoal();
+    if (typeof window.requestAnimationFrame === 'function') {
+      overviewCloseScrollFrame = window.requestAnimationFrame(function () {
+        overviewCloseScrollFrame = null;
+        writeGoal();
+      });
+    }
+    overviewCloseScrollTimer = window.setTimeout(function () {
+      overviewCloseScrollTimer = null;
+      var now = readPos();
+      if (now !== null && Math.abs(now - lastWritten) < 2) {
+        writeGoal();
+      }
+    }, 250);
+    return true;
+  }
+
   function closeOverview(refocus) {
     if (!overviewOpen) {
       return;
     }
     overviewOpen = false;
+    // Where to land (R11, issue #20): the block the author last picked,
+    // moved or drilled into; a block deleted mid-session falls through
+    // to the drilled root; nothing touched means '' — today's entry
+    // scroll + prior selection. Captured BEFORE the state resets below.
+    var closeSel = wp.data.select('core/block-editor');
+    var landing = '';
+    [overviewLastTouched, overviewRoot].some(function (id) {
+      if (id && closeSel && closeSel.getBlock(id)) {
+        landing = id;
+        return true;
+      }
+      return false;
+    });
+    overviewLastTouched = '';
     finishOverviewDrag();
+    // Order matters here (owner feedback 2026-08-31 — no visible
+    // scroll-to on close):
+    //  1. Stamp toolrail-ov-closing FIRST: it keeps core's 0.4s iframe
+    //     transition suppressed through the un-grow, so the shrink is
+    //     instant and the scroll range exists in this same task (a
+    //     still-grown iframe clamps every scrollTo to 0).
+    //  2. Hand the canvas back and pre-scroll it (below).
+    //  3. Let the overlay FADE rather than vanish: what it reveals is
+    //     already the finished document, so nothing moves under it.
+    //     Reduced motion removes it at once instead; either way it is
+    //     hidden from AT and the pointer immediately.
+    // The stamp lifts two frames later — the styles it suppressed have
+    // painted by then, and lifting it re-triggers nothing.
+    document.body.classList.add('toolrail-ov-closing');
     var overlay = overviewNode();
     if (overlay) {
-      overlay.remove();
+      var reduceClose = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+      if (reduceClose) {
+        overlay.remove();
+      } else {
+        overlay.classList.add('toolrail-ov-fadeout');
+        overlay.setAttribute('aria-hidden', 'true');
+        overviewFadeTimer = window.setTimeout(function () {
+          overviewFadeTimer = null;
+          overlay.remove();
+        }, 200);
+      }
     }
     document.body.classList.remove('toolrail-overview-on');
     clearOverviewScale();
-    // Restore the pre-entry scroll position — the iframe's own window
-    // on iframed editors (its viewport just shrank back, so the scroll
-    // range exists again), the content region otherwise.
-    if (overviewEntryScroll !== null) {
+    // Land on the touched block, centered; otherwise restore the
+    // pre-entry scroll position — the iframe's own window on iframed
+    // editors (its viewport just shrank back, so the scroll range
+    // exists again), the content region otherwise. The centering can
+    // come up empty (no DOM element for the block yet) — then the
+    // entry restore runs as if nothing was touched.
+    var landed = landing ? centerBlockAfterClose(landing) : false;
+    if (!landed && overviewEntryScroll !== null) {
       var frame = canvasFrame();
       if (frame && frame.contentWindow) {
         try {
@@ -4795,6 +4999,21 @@
           content.scrollTop = overviewEntryScroll;
         }
       }
+    }
+    // Lift the closing stamp two frames on: the transition-suppressed
+    // styles have painted by then, and core's own iframe transition is
+    // the editor's to keep — the stamp must never outlive the close.
+    if (typeof window.requestAnimationFrame === 'function') {
+      overviewClosingFrame = window.requestAnimationFrame(function () {
+        overviewClosingFrame = window.requestAnimationFrame(function () {
+          overviewClosingFrame = null;
+          document.body.classList.remove('toolrail-ov-closing');
+        });
+      });
+    } else {
+      window.setTimeout(function () {
+        document.body.classList.remove('toolrail-ov-closing');
+      }, 100);
     }
     overviewEntryScroll = null;
     overviewRoot = '';
@@ -4829,16 +5048,26 @@
       window.cancelAnimationFrame(overviewPanFrame);
       overviewPanFrame = null;
     }
-    // Restore the selection the overview cleared on open, if the block
-    // is still there (a dispatched selectBlock takes no DOM focus, so
-    // this never fights the refocus below).
-    if (overviewPriorSelection) {
+    // Select the landing block — or, when nothing was touched, restore
+    // the selection the overview cleared on open, if the block is still
+    // there. A dispatched selectBlock takes no DOM focus itself, but
+    // EITHER dispatch re-renders editor chrome a frame later (the
+    // selected block's toolbar mounts), which is why the refocus below
+    // re-asserts for both (review 2026-08-31, finding 1 — the first
+    // guard covered only the landing path and left the
+    // restored-selection close with the same steal).
+    var reselected = '';
+    if (landing) {
+      wp.data.dispatch('core/block-editor').selectBlock(landing);
+      reselected = landing;
+    } else if (overviewPriorSelection) {
       var editorSel = wp.data.select('core/block-editor');
       if (editorSel && editorSel.getBlock(overviewPriorSelection)) {
         wp.data.dispatch('core/block-editor').selectBlock(overviewPriorSelection);
+        reselected = overviewPriorSelection;
       }
-      overviewPriorSelection = '';
     }
+    overviewPriorSelection = '';
     syncPressed(true);
     announceModeChange();
     if (refocus) {
@@ -4846,8 +5075,44 @@
       if (btn) {
         btn.focus();
       }
+      // Any selectBlock above re-renders editor chrome (the selected
+      // block's toolbar mounts), and that render can land focus off
+      // the rail AFTER this frame — measured: the keyboard-only e2e's
+      // Escape-close left activeElement off the tool. Focus on the
+      // overview button is issue #20's "must keep", so re-assert it
+      // once the render settles — fresh queries both times (a heal may
+      // have rebuilt the rail). The guard skips only when focus
+      // already sits inside the rail; a focus the author moved OUTSIDE
+      // the rail during this ~2-frame window WOULD be pulled back —
+      // accepted, because the window is ~32ms behind a close gesture
+      // aimed at the rail itself (review 2026-08-31, finding 4: the
+      // guard protects the rail's own focus, nothing more).
+      if (reselected && typeof window.requestAnimationFrame === 'function') {
+        var reassertFocus = function () {
+          var rail = document.getElementById('toolrail-rail');
+          var fresh = overviewButton();
+          if (fresh && (!rail || !rail.contains(document.activeElement))) {
+            fresh.focus();
+          }
+        };
+        window.requestAnimationFrame(function () {
+          reassertFocus();
+          window.requestAnimationFrame(reassertFocus);
+        });
+      }
     }
-    speak(__('Section overview closed.', 'toolrail'));
+    // The close announcement names the landing block (issue #20's "must
+    // keep") — one speak() call, because a second this close behind
+    // would clobber the first.
+    if (landing) {
+      speak(sprintf(
+        /* translators: %s: block title. */
+        __('Section overview closed. %s is selected.', 'toolrail'),
+        overviewBlockLabel(landing)
+      ));
+    } else {
+      speak(__('Section overview closed.', 'toolrail'));
+    }
   }
 
   /** Re-create the overlay if a React re-render swept it away while the

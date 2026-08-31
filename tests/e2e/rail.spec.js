@@ -2661,6 +2661,166 @@ test.describe('section overview (R6)', () => {
     )).toBe(scrolled);
   });
 
+  /** Where a block sits relative to the canvas viewport after close —
+      distance of its center from the viewport's center, in iframe px,
+      plus what "close" counts as (R11: a block taller than the viewport
+      centers to its top instead). */
+  async function landingOffset(page, clientId) {
+    return page.evaluate((id) => {
+      const frame = document.querySelector('iframe[name="editor-canvas"]');
+      const win = frame.contentWindow;
+      const el = frame.contentDocument.querySelector(`[data-block="${id}"]`);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      const vh = win.innerHeight;
+      // Tall branch: the implementation lands a viewport-tall block's
+      // TOP at 0, so the miss is r.top itself — not a distance to the
+      // viewport middle (review 2026-08-31, finding 3).
+      const target = r.height >= vh ? -r.top : vh / 2 - (r.top + r.height / 2);
+      return { off: Math.abs(target), vh };
+    }, clientId);
+  }
+
+  test('closing centers and selects the last PICKED block, and the announcement names it', async ({ page }) => {
+    await openNewPost(page);
+    // Many short blocks so the document scrolls, the picked block's
+    // rect fits well inside the viewport (the centered assertion is
+    // about the block's CENTER), and room remains on BOTH sides of it —
+    // a block near the document's end can only ever clamp, not center.
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        Array.from({ length: 40 }, (_, i) =>
+          createBlock('core/paragraph', { content: 'CENTER-PARA-' + i })
+        )
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(40);
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    // Mid-document, below the fold at entry scroll 0. Focus + Enter,
+    // not click: at floor zoom the box may sit below the overlay's
+    // edge, and the overlay's focusin handler pans it into view — the
+    // same path a keyboard user takes.
+    const picked = ids[20];
+    await overviewBoxButton(page, picked, 'pick').focus();
+    await page.keyboard.press('Enter');
+    await page.locator('#toolrail-overview [data-ov-action="close"]').click();
+    await expect(page.locator('#toolrail-overview')).toHaveCount(0);
+
+    // Behavior, not mechanism: the block's center lands within a
+    // quarter-viewport of the canvas viewport's center (the canvas is
+    // pre-positioned at close; the poll also covers the corrective
+    // write behind it), and the block is selected.
+    await expect.poll(async () => {
+      const m = await landingOffset(page, picked);
+      return m ? m.off < m.vh / 4 : false;
+    }).toBe(true);
+    expect(await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getSelectedBlockClientId()
+    )).toBe(picked);
+
+    // The close announcement names the landed block (issue #20).
+    await expect.poll(async () => page.evaluate(() =>
+      document.getElementById('a11y-speak-polite').textContent
+    )).toContain('Section overview closed. Paragraph is selected.');
+  });
+
+  test('under reduced motion, closing after a drill + move still lands on the MOVED child — instantly', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await openNewPost(page);
+    // A group mid-document with filler on BOTH sides, so landing on its
+    // child is a real scroll that can genuinely center (a group at the
+    // very end can only clamp against the document's bottom).
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      const filler = (tag) => Array.from({ length: 15 }, (_, i) =>
+        createBlock('core/paragraph', { content: tag + '-' + i })
+      );
+      window.wp.data.dispatch('core/block-editor').resetBlocks([
+        ...filler('BEFORE'),
+        createBlock('core/group', {}, [
+          createBlock('core/paragraph', { content: 'CHILD-ONE' }),
+          createBlock('core/heading', { content: 'CHILD-TWO' }),
+        ]),
+        ...filler('AFTER'),
+      ]);
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(31);
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const groupId = (await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    ))[15];
+    // Focus + Enter: the focusin pan brings a below-the-edge box into
+    // view before the pick, same as the keyboard path.
+    await overviewBoxButton(page, groupId, 'pick').focus();
+    await page.keyboard.press('Enter');
+    await overviewBoxButton(page, groupId, 'enter').click();
+    const innerIds = await page.evaluate((gid) =>
+      window.wp.data.select('core/block-editor').getBlockOrder(gid), groupId
+    );
+    await overviewBoxButton(page, innerIds[1], 'pick').click();
+    await overviewBoxButton(page, innerIds[1], 'up').click();
+    await page.locator('#toolrail-overview [data-ov-action="close"]').click();
+    await expect(page.locator('#toolrail-overview')).toHaveCount(0);
+
+    // The moved CHILD (last touched wins over the drilled root) is
+    // selected and centered — reduced motion only skips the overlay
+    // fade; the landing itself is identical for everyone.
+    expect(await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getSelectedBlockClientId()
+    )).toBe(innerIds[1]);
+    await expect.poll(async () => {
+      const m = await landingOffset(page, innerIds[1]);
+      return m ? m.off < m.vh / 4 : false;
+    }).toBe(true);
+  });
+
+  test('a deleted last-touched block falls back to the entry scroll without throwing', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        Array.from({ length: 24 }, (_, i) =>
+          createBlock('core/paragraph', { content: 'FALLBACK-' + i })
+        )
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(24);
+    const scrolled = await page.evaluate(() => {
+      const win = document.querySelector('iframe[name="editor-canvas"]').contentWindow;
+      win.scrollTo(0, 300);
+      return win.scrollY;
+    });
+    expect(scrolled).toBe(300);
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    await overviewBoxButton(page, ids[3], 'pick').click();
+    // The touched block vanishes before close — the landing must fall
+    // through to the entry scroll, never throw or select a ghost.
+    // selectPrevious=false: core's default would select the previous
+    // block, and this test's point is the NOTHING-selected fallback.
+    await page.evaluate((id) =>
+      window.wp.data.dispatch('core/block-editor').removeBlock(id, false), ids[3]
+    );
+    await page.locator('#toolrail-overview [data-ov-action="close"]').click();
+    await expect(page.locator('#toolrail-overview')).toHaveCount(0);
+    await expect.poll(async () => page.evaluate(() =>
+      document.querySelector('iframe[name="editor-canvas"]').contentWindow.scrollY
+    )).toBe(scrolled);
+    expect(await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getSelectedBlockClientId()
+    )).toBeNull();
+  });
+
   test('a movement-locked block gets disabled arrows — never a false "moved" announcement', async ({ page }) => {
     await openNewPost(page);
     await page.evaluate(() => {
@@ -2874,6 +3034,16 @@ test.describe('section overview (R6)', () => {
     expect(await page.evaluate(() =>
       window.wp.data.select('core/block-editor').getSelectedBlockClientId()
     )).toBe(picked);
+
+    // The focus contract holds on THIS path too: restoring the prior
+    // selection re-renders chrome a frame later, the same steal the
+    // landing path had (review 2026-08-31, finding 1) — the re-assert
+    // must cover both. Poll: the steal and its recovery are async.
+    await expect.poll(async () => page.evaluate(() =>
+      document.activeElement && document.activeElement.dataset
+        ? document.activeElement.dataset.tool
+        : ''
+    )).toBe('overview');
   });
 
   test('a drilled root taller than the viewport is top-aligned and pans — never centered', async ({ page }) => {

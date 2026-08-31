@@ -1058,6 +1058,19 @@ body.toolrail-overview-on iframe[name="editor-canvas"] {
     transition: none !important;
 }
 
+/* The same suppression for the CLOSE direction: removing the class
+   above hands the iframe back to core's 0.4s transition, which turned
+   the hand-back into an animated shrink — and the close-centering
+   pre-scroll cannot land while the iframe is still taller than its
+   viewport (a grown iframe has no scroll range, so every scrollTo
+   clamps to 0). closeOverview stamps this class BEFORE it removes
+   toolrail-overview-on, so the shrink is instant and the canvas can be
+   pre-scrolled in the same task; the stamp is lifted two frames later,
+   which re-triggers nothing (the height is already final). */
+body.toolrail-ov-closing iframe[name="editor-canvas"] {
+    transition: none !important;
+}
+
 /* The scale lives on the iframe's PARENT (stamped .toolrail-ov-scale-host
    by the JS — core's own scale-container on current builds), never the
    iframe: the same core animation pins the iframe's transform at
@@ -1089,6 +1102,18 @@ body.toolrail-overview-on .toolrail-ov-scale-host {
     z-index: 30;
     overflow: hidden;
     pointer-events: auto;
+}
+
+/* The close fade (owner ask 2026-08-31): by the time this class lands,
+   the canvas underneath is already un-zoomed and pre-scrolled to the
+   landing block, so the fading overlay reveals a finished document —
+   nothing moves under it. pointer-events off at once: a dying overlay
+   must not eat clicks. Under prefers-reduced-motion the JS removes the
+   node immediately instead, so this rule never runs there. */
+#toolrail-overview.toolrail-ov-fadeout {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 150ms ease-out;
 }
 
 /* The mode frame: a visible boundary around the whole overview area, so
