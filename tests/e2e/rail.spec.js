@@ -2673,7 +2673,10 @@ test.describe('section overview (R6)', () => {
       if (!el) return null;
       const r = el.getBoundingClientRect();
       const vh = win.innerHeight;
-      const target = r.height >= vh ? vh / 2 - r.top : vh / 2 - (r.top + r.height / 2);
+      // Tall branch: the implementation lands a viewport-tall block's
+      // TOP at 0, so the miss is r.top itself — not a distance to the
+      // viewport middle (review 2026-08-31, finding 3).
+      const target = r.height >= vh ? -r.top : vh / 2 - (r.top + r.height / 2);
       return { off: Math.abs(target), vh };
     }, clientId);
   }
@@ -3030,6 +3033,16 @@ test.describe('section overview (R6)', () => {
     expect(await page.evaluate(() =>
       window.wp.data.select('core/block-editor').getSelectedBlockClientId()
     )).toBe(picked);
+
+    // The focus contract holds on THIS path too: restoring the prior
+    // selection re-renders chrome a frame later, the same steal the
+    // landing path had (review 2026-08-31, finding 1) — the re-assert
+    // must cover both. Poll: the steal and its recovery are async.
+    await expect.poll(async () => page.evaluate(() =>
+      document.activeElement && document.activeElement.dataset
+        ? document.activeElement.dataset.tool
+        : ''
+    )).toBe('overview');
   });
 
   test('a drilled root taller than the viewport is top-aligned and pans — never centered', async ({ page }) => {

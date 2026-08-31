@@ -3003,7 +3003,7 @@
         title: __('Section overview', 'toolrail'),
         body: [
           __('The Section overview tool zooms the canvas out and outlines every top-level block. Click an outline to show its reorder controls — arrows to move it, "Reorder inside" to step into a section — or simply drag an outline to a new spot. Zoom with the +/− buttons and pan long documents with the mouse wheel.', 'toolrail'),
-          __('Escape collapses the open controls, then steps up one level, then closes the overview. Closing centers and selects the block you last picked or moved; if you picked nothing, it returns you to where you were scrolled.', 'toolrail')
+          __('Escape collapses the open controls, then steps up one level, then closes the overview. Closing centers and selects the block you last picked, moved or stepped into; if you touched nothing, it returns you to where you were scrolled.', 'toolrail')
         ]
       },
       {
@@ -5011,14 +5011,21 @@
     }
     // Select the landing block — or, when nothing was touched, restore
     // the selection the overview cleared on open, if the block is still
-    // there (a dispatched selectBlock takes no DOM focus, so neither
-    // ever fights the refocus below).
+    // there. A dispatched selectBlock takes no DOM focus itself, but
+    // EITHER dispatch re-renders editor chrome a frame later (the
+    // selected block's toolbar mounts), which is why the refocus below
+    // re-asserts for both (review 2026-08-31, finding 1 — the first
+    // guard covered only the landing path and left the
+    // restored-selection close with the same steal).
+    var reselected = '';
     if (landing) {
       wp.data.dispatch('core/block-editor').selectBlock(landing);
+      reselected = landing;
     } else if (overviewPriorSelection) {
       var editorSel = wp.data.select('core/block-editor');
       if (editorSel && editorSel.getBlock(overviewPriorSelection)) {
         wp.data.dispatch('core/block-editor').selectBlock(overviewPriorSelection);
+        reselected = overviewPriorSelection;
       }
     }
     overviewPriorSelection = '';
@@ -5029,16 +5036,19 @@
       if (btn) {
         btn.focus();
       }
-      // The selectBlock above re-renders editor chrome (the landed
-      // block's toolbar appears), and that render can land focus off
+      // Any selectBlock above re-renders editor chrome (the selected
+      // block's toolbar mounts), and that render can land focus off
       // the rail AFTER this frame — measured: the keyboard-only e2e's
       // Escape-close left activeElement off the tool. Focus on the
       // overview button is issue #20's "must keep", so re-assert it
       // once the render settles — fresh queries both times (a heal may
-      // have rebuilt the rail), and only while the rail no longer
-      // holds focus, so a focus the author moved on purpose is never
-      // stolen back.
-      if (landing && typeof window.requestAnimationFrame === 'function') {
+      // have rebuilt the rail). The guard skips only when focus
+      // already sits inside the rail; a focus the author moved OUTSIDE
+      // the rail during this ~2-frame window WOULD be pulled back —
+      // accepted, because the window is ~32ms behind a close gesture
+      // aimed at the rail itself (review 2026-08-31, finding 4: the
+      // guard protects the rail's own focus, nothing more).
+      if (reselected && typeof window.requestAnimationFrame === 'function') {
         var reassertFocus = function () {
           var rail = document.getElementById('toolrail-rail');
           var fresh = overviewButton();
