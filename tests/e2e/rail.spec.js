@@ -2291,6 +2291,43 @@ function overviewBoxButton(page, clientId, action) {
   );
 }
 
+/** Seed six flat paragraphs P-A..P-F for the multi-select specs
+    (issue #21). lockSecond gives P-B a movement lock. Unsaved editor
+    state only — nothing is ever saved (the standing rule). */
+async function seedOverviewParagraphs(page, lockSecond) {
+  await page.evaluate((lockIt) => {
+    const { createBlock } = window.wp.blocks;
+    window.wp.data.dispatch('core/block-editor').resetBlocks(
+      ['P-A', 'P-B', 'P-C', 'P-D', 'P-E', 'P-F'].map((content, i) =>
+        createBlock('core/paragraph', i === 1 && lockIt
+          ? { content, lock: { move: true, remove: false } }
+          : { content })
+      )
+    );
+  }, !!lockSecond);
+  await expect.poll(async () => (await blockNames(page)).length).toBe(6);
+}
+
+/** Top-level paragraph contents in document order — the assertion
+    surface for group moves. */
+function overviewContents(page) {
+  return page.evaluate(() => {
+    const sel = window.wp.data.select('core/block-editor');
+    return sel.getBlockOrder('').map((id) => String(sel.getBlockAttributes(id).content));
+  });
+}
+
+function ovAnnouncement(page) {
+  return page.evaluate(() => {
+    const region = document.getElementById('a11y-speak-polite');
+    return region ? region.textContent : '';
+  });
+}
+
+function ovSelectedBoxes(page) {
+  return page.locator('#toolrail-overview .toolrail-ov-box.is-selected');
+}
+
 test.describe('section overview (R6)', () => {
   test('the Overview tool zooms a tall document fully into view with chips in document order; closing restores everything', async ({ page }) => {
     await openNewPost(page);
@@ -2415,6 +2452,235 @@ test.describe('section overview (R6)', () => {
     }));
     expect(focus.action).toBe('down');
     expect(focus.box.clientid).toBe(ids[0]);
+  });
+
+  test('Shift+click selects a range, Ctrl+click toggles, Alt+click removes — each announced with the count (issue #21)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+
+    await overviewBoxButton(page, ids[0], 'pick').click();
+    await expect(ovSelectedBoxes(page)).toHaveCount(1);
+
+    // Shift+click the third box: the whole A..C range.
+    await overviewBoxButton(page, ids[2], 'pick').click({ modifiers: ['Shift'] });
+    await expect(ovSelectedBoxes(page)).toHaveCount(3);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('3 blocks selected.');
+    // The disclosure follows the range's end and acts for the group.
+    await expect(page.locator(
+      `#toolrail-overview .toolrail-ov-box[data-clientid="${ids[2]}"] .toolrail-ov-controls`
+    )).toBeVisible();
+    await expect(page.locator(
+      `#toolrail-overview .toolrail-ov-box[data-clientid="${ids[2]}"] .toolrail-ov-label`
+    )).toHaveText('3 blocks selected');
+
+    // Ctrl+click adds a detached box…
+    await overviewBoxButton(page, ids[4], 'pick').click({ modifiers: ['Control'] });
+    await expect(ovSelectedBoxes(page)).toHaveCount(4);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('4 blocks selected.');
+
+    // …and Alt+click removes one.
+    await overviewBoxButton(page, ids[0], 'pick').click({ modifiers: ['Alt'] });
+    await expect(ovSelectedBoxes(page)).toHaveCount(3);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('3 blocks selected.');
+
+    // A plain click collapses the multi-selection back to one box.
+    await overviewBoxButton(page, ids[1], 'pick').click();
+    await expect(ovSelectedBoxes(page)).toHaveCount(1);
+  });
+
+  test('a drag on empty overlay space draws a marquee that selects the boxes it touches; a plain empty click still clears (issue #21)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    const boxSel = (id) => page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${id}"]`);
+    const lastBox = await boxSel(ids[5]).boundingBox();
+    const targetBox = await boxSel(ids[4]).boundingBox();
+    const overlayBox = await page.locator('#toolrail-overview').boundingBox();
+
+    // Start on EMPTY overlay space below the last box, then draw up
+    // through the last two boxes.
+    const startX = overlayBox.x + overlayBox.width / 2;
+    const startY = Math.min(lastBox.y + lastBox.height + 40, overlayBox.y + overlayBox.height - 8);
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(startX, targetBox.y + targetBox.height / 2, { steps: 8 });
+    // The rectangle is visible while the drag is live.
+    await expect(page.locator('#toolrail-overview .toolrail-ov-marquee')).toBeVisible();
+    await page.mouse.up();
+
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('2 blocks selected.');
+
+    // A sub-threshold click on the same empty spot clears everything —
+    // today's behavior, kept.
+    await page.mouse.click(startX, startY);
+    await expect(ovSelectedBoxes(page)).toHaveCount(0);
+    await expect(page.locator('#toolrail-overview .toolrail-ov-controls:not([hidden])')).toHaveCount(0);
+  });
+
+  test('the arrows move a contiguous group as one step, announced with the count, focus kept (issue #21)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+
+    await overviewBoxButton(page, ids[0], 'pick').click();
+    await overviewBoxButton(page, ids[1], 'pick').click({ modifiers: ['Shift'] });
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+
+    await overviewBoxButton(page, ids[1], 'down').click();
+
+    // A and B stepped together past C.
+    await expect.poll(async () => overviewContents(page)).toEqual(['P-C', 'P-A', 'P-B', 'P-D', 'P-E', 'P-F']);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('Moved 2 blocks to position 2 of 6.');
+
+    // The group stays selected and focus stays on the arrow that moved
+    // it (the settings-arrows contract).
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+    const focus = await page.evaluate(() => ({
+      action: document.activeElement.dataset ? document.activeElement.dataset.ovAction : null,
+      box: document.activeElement.closest
+        ? (document.activeElement.closest('.toolrail-ov-box') || {}).dataset
+        : null,
+    }));
+    expect(focus.action).toBe('down');
+    expect(focus.box.clientid).toBe(ids[1]);
+  });
+
+  test('a non-contiguous selection lands contiguous, in document order (issue #21)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+
+    await overviewBoxButton(page, ids[0], 'pick').click();
+    await overviewBoxButton(page, ids[2], 'pick').click({ modifiers: ['Control'] });
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+
+    await overviewBoxButton(page, ids[2], 'down').click();
+
+    // A and C left their gaps, compacted, and stepped past D together.
+    await expect.poll(async () => overviewContents(page)).toEqual(['P-B', 'P-D', 'P-A', 'P-C', 'P-E', 'P-F']);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('Moved 2 blocks to position 3 of 6.');
+  });
+
+  test('dragging any selected box moves the whole group to the drop line (issue #21)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+
+    await overviewBoxButton(page, ids[0], 'pick').click();
+    await overviewBoxButton(page, ids[1], 'pick').click({ modifiers: ['Shift'] });
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+
+    const firstBox = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[0]}"]`).boundingBox();
+    const lastBox = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[5]}"]`).boundingBox();
+    await page.mouse.move(firstBox.x + firstBox.width / 2, firstBox.y + firstBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(firstBox.x + firstBox.width / 2, lastBox.y + lastBox.height + 20, { steps: 10 });
+    await page.mouse.up();
+
+    // The whole group landed at the end, order kept.
+    await expect.poll(async () => overviewContents(page)).toEqual(['P-C', 'P-D', 'P-E', 'P-F', 'P-A', 'P-B']);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('Moved 2 blocks to position 5 of 6.');
+  });
+
+  test('a locked block shows its lock, stays put when its group moves, and the announcement says so (issue #21)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page, true);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+
+    // The movement-locked box is annotated at rest — dashed outline
+    // class and a "Locked" corner tag (plan review 2026-08-31).
+    const lockedBox = page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[1]}"]`);
+    await expect(lockedBox).toHaveClass(/is-locked/);
+    await expect(lockedBox.locator('.toolrail-ov-locktag')).toContainText('Locked');
+
+    // Selecting it is allowed; the count says up front what cannot move.
+    await overviewBoxButton(page, ids[0], 'pick').click();
+    await overviewBoxButton(page, ids[1], 'pick').click({ modifiers: ['Shift'] });
+    await expect.poll(async () => ovAnnouncement(page)).toContain('2 blocks selected. 1 is locked and cannot move.');
+
+    await overviewBoxButton(page, ids[1], 'down').click();
+
+    // A moved past B and C; locked B stayed exactly where it was.
+    await expect.poll(async () => overviewContents(page)).toEqual(['P-B', 'P-C', 'P-A', 'P-D', 'P-E', 'P-F']);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('stays where it is.');
+  });
+
+  test('Shift+ArrowDown extends the selection from the focused box; Ctrl+Space toggles it (issue #21)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+
+    await overviewBoxButton(page, ids[0], 'pick').focus();
+    await page.keyboard.press('Shift+ArrowDown');
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('2 blocks selected.');
+    // Focus followed the extension to the neighbor's pick button.
+    const focus = await page.evaluate(() => ({
+      action: document.activeElement.dataset ? document.activeElement.dataset.ovAction : null,
+      box: document.activeElement.closest
+        ? (document.activeElement.closest('.toolrail-ov-box') || {}).dataset
+        : null,
+    }));
+    expect(focus.action).toBe('pick');
+    expect(focus.box.clientid).toBe(ids[1]);
+
+    // Ctrl+Space toggles the focused box back out (and must not open
+    // its disclosure — Space alone would).
+    await page.keyboard.press('Control+ ');
+    await expect(ovSelectedBoxes(page)).toHaveCount(1);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('1 block selected.');
+  });
+
+  test('Escape clears a multi-selection before stepping out (issue #21)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+
+    await overviewBoxButton(page, ids[0], 'pick').click();
+    await overviewBoxButton(page, ids[2], 'pick').click({ modifiers: ['Shift'] });
+    await expect(ovSelectedBoxes(page)).toHaveCount(3);
+
+    // First Escape: the multi-selection clears; the overlay stays, and
+    // the active box keeps its disclosure for the next rung.
+    await page.keyboard.press('Escape');
+    await expect(ovSelectedBoxes(page)).toHaveCount(1);
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    await expect.poll(async () => ovAnnouncement(page)).toContain('Selection cleared.');
+
+    // Second Escape: the controls collapse, overlay still open.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#toolrail-overview .toolrail-ov-controls:not([hidden])')).toHaveCount(0);
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+
+    // Third Escape: the overview closes.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#toolrail-overview')).toHaveCount(0);
   });
 
   test('keyboard-only: Enter drills into a section, arrows reorder inside it, Escape climbs then closes', async ({ page }) => {

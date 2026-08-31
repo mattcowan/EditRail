@@ -3003,7 +3003,8 @@
         title: __('Section overview', 'toolrail'),
         body: [
           __('The Section overview tool zooms the canvas out and outlines every top-level block. Click an outline to show its reorder controls — arrows to move it, "Reorder inside" to step into a section — or simply drag an outline to a new spot. Zoom with the +/− buttons and pan long documents with the mouse wheel.', 'toolrail'),
-          __('Escape collapses the open controls, then steps up one level, then closes the overview. Closing centers and selects the block you last picked, moved or stepped into; if you touched nothing, it returns you to where you were scrolled.', 'toolrail')
+          __('Select several outlines at once: Shift+click for a range, Ctrl+click (Cmd on Mac) to add or remove one, Alt+click to remove one, or drag a rectangle from empty space. Shift+Arrow extends the selection from the focused outline and Ctrl+Space toggles it. The arrows or a drag then move the whole group; a locked block shows a padlock and stays where it is.', 'toolrail'),
+          __('Escape clears a selection of several outlines, then collapses the open controls, then steps up one level, then closes the overview. Closing centers and selects the block you last picked, moved or stepped into; if you touched nothing, it returns you to where you were scrolled.', 'toolrail')
         ]
       },
       {
@@ -3174,6 +3175,27 @@
   // OUTLINES around each block, and the commands appear only after
   // clicking/entering a box — the always-on chip bars obscured content.
   var overviewSelected = '';
+  // Multi-selection (issue #21): every member's clientId, ALWAYS kept
+  // in document order. overviewSelected stays the ACTIVE box — the one
+  // whose controls disclosure is open — and, whenever a multi-selection
+  // exists, is one of its members; the controls then act on the group.
+  var overviewSelectedIds = [];
+  // The Shift-range anchor: set by a plain pick, a toggle-on, and the
+  // keyboard toggle, so a later Shift+click / Shift+Arrow extends from
+  // the box the author last acted on — the file-manager convention.
+  var overviewAnchor = '';
+  // In-flight marquee ({startX, startY, active, additive, baseIds,
+  // prevActive}) — a drag from EMPTY overlay space that draws a
+  // selection rectangle; every box it touches is selected on release.
+  var overviewMarquee = null;
+  // True while the group-move engine is mid-sequence: a non-contiguous
+  // group is moved as SEVERAL public dispatches (core's reducer moves
+  // one contiguous run per action), and the store subscription must
+  // not rebuild the overlay between them.
+  var overviewGroupMove = false;
+  // Padlock for the locked-box corner tag (visual only; the pick
+  // button's accessible name carries the state to AT).
+  var OVERVIEW_LOCK_ICON = '<svg viewBox="0 0 24 24" width="10" height="10" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm-3 8V7a3 3 0 0 1 6 0v3H9z"/></svg>';
   // Pan offset (visual px, ≥0) down the current root, and the author's
   // explicit zoom (0 = fit the current root). Together they make a very
   // long document SCROLLABLE in the overview instead of shrinking it
@@ -3718,24 +3740,43 @@
       : null;
   }
 
-  /** Paint the selection state onto every box: is-selected class, the
-      pick button's aria-expanded, and the controls strip's hidden. ONE
-      box may be selected at a time. */
+  /** Paint the selection state onto every box: is-selected for the
+      active box AND every multi-selection member; aria-expanded and the
+      controls strip stay keyed to the ACTIVE box alone (one disclosure
+      at a time — it is the group's strip when a multi-selection
+      exists). Membership is ALSO carried on the pick button's
+      accessible name (the base name is stashed at build time). The
+      boxes stay plain buttons on purpose: role=listbox/aria-selected
+      needs option children, and an option may not contain the nested
+      controls strip; aria-pressed beside aria-expanded would
+      double-book the button's toggle semantics. */
   function syncOverviewSelection() {
     var overlay = overviewNode();
     if (!overlay) {
       return;
     }
     Array.prototype.slice.call(overlay.querySelectorAll('.toolrail-ov-box')).forEach(function (box) {
-      var selected = box.dataset.clientid === overviewSelected;
-      box.classList.toggle('is-selected', selected);
+      var id = box.dataset.clientid;
+      var isActive = id === overviewSelected;
+      var isMember = overviewSelectedIds.indexOf(id) !== -1;
+      box.classList.toggle('is-selected', isActive || isMember);
       var pick = box.querySelector('[data-ov-action="pick"]');
       if (pick) {
-        pick.setAttribute('aria-expanded', selected ? 'true' : 'false');
+        pick.setAttribute('aria-expanded', isActive ? 'true' : 'false');
+        var base = pick.dataset.baseLabel;
+        if (base) {
+          pick.setAttribute('aria-label', isMember && overviewSelectedIds.length > 1
+            ? sprintf(
+              /* translators: %s: the pick button's base accessible name. */
+              __('%s — selected', 'toolrail'),
+              base
+            )
+            : base);
+        }
       }
       var controls = box.querySelector('.toolrail-ov-controls');
       if (controls) {
-        controls.hidden = !selected;
+        controls.hidden = !isActive;
       }
     });
   }
@@ -3745,34 +3786,172 @@
       the outline stays clean until the author asks. */
   function selectOverviewBox(clientId) {
     overviewSelected = clientId;
+    // A plain pick collapses any multi-selection to this one box and
+    // re-anchors the Shift range here (the file-manager convention).
+    overviewSelectedIds = [clientId];
+    overviewAnchor = clientId;
     overviewLastTouched = clientId;
-    syncOverviewSelection();
-    var box = overviewBoxFor(clientId);
-    if (!box) {
-      return;
-    }
-    var target = focusableIn(box, '[data-ov-action="down"]')
-      || focusableIn(box, '[data-ov-action="up"]')
-      || focusableIn(box, '[data-ov-action="enter"]')
-      || box.querySelector('[data-ov-action="pick"]');
-    if (target) {
-      target.focus();
-    }
+    // REBUILD, not just repaint: the controls strip's content (label,
+    // arrow wiring, disabled states) is baked per build and varies
+    // with the selection — a strip built in group mode must not
+    // survive into a single pick. Focus lands on the first usable
+    // control, the original disclosure contract.
+    var boxSel = '.toolrail-ov-box[data-clientid="' + clientId + '"] ';
+    buildOverviewContent([
+      boxSel + '[data-ov-action="down"]',
+      boxSel + '[data-ov-action="up"]',
+      boxSel + '[data-ov-action="enter"]',
+      boxSel + '[data-ov-action="pick"]'
+    ]);
   }
 
   function deselectOverviewBox(refocusPick) {
     if (!overviewSelected) {
       return;
     }
-    var box = overviewBoxFor(overviewSelected);
+    var id = overviewSelected;
     overviewSelected = '';
-    syncOverviewSelection();
-    if (refocusPick && box) {
-      var pick = box.querySelector('[data-ov-action="pick"]');
-      if (pick) {
-        pick.focus();
+    // Rebuild for the same reason selectOverviewBox does: the strip's
+    // baked content must track the selection. Without refocusPick the
+    // rebuild re-derives focus from wherever it is (or leaves it).
+    buildOverviewContent(refocusPick
+      ? ['.toolrail-ov-box[data-clientid="' + id + '"] [data-ov-action="pick"]']
+      : undefined);
+  }
+
+  /** The multi-selection's members in document order. */
+  function overviewSelectionInOrder() {
+    return overviewOrder().filter(function (id) {
+      return overviewSelectedIds.indexOf(id) !== -1;
+    });
+  }
+
+  /** canMoveBlocks, guarded: the selector is newer than this plugin's
+      floor, so its absence (or a throw) means "assume movable" — the
+      verify in the move engines still guards every announcement. */
+  function overviewCanMove(clientId) {
+    var sel = wp.data.select('core/block-editor');
+    if (sel && typeof sel.canMoveBlocks === 'function') {
+      try {
+        return !!sel.canMoveBlocks([clientId], overviewRoot);
+      } catch (e) {
+        return true;
       }
     }
+    return true;
+  }
+
+  /** Normalize and store the multi-selection (document order), keep the
+      active-box invariant, and repaint. activeId: undefined leaves the
+      active box alone; '' closes the disclosure; an id opens it there. */
+  function setOverviewSelection(ids, activeId) {
+    var members = {};
+    ids.forEach(function (id) {
+      members[id] = true;
+    });
+    overviewSelectedIds = overviewOrder().filter(function (id) {
+      return members[id];
+    });
+    if (activeId !== undefined) {
+      overviewSelected = activeId || '';
+    }
+    if (overviewSelected && overviewSelectedIds.length
+        && overviewSelectedIds.indexOf(overviewSelected) === -1) {
+      overviewSelected = overviewSelectedIds[0];
+    }
+    syncOverviewSelection();
+  }
+
+  /** Select the inclusive range between the anchor and the target and
+      make the target the active box. A missing anchor re-anchors at
+      the target. */
+  function setOverviewRange(fromId, toId) {
+    var order = overviewOrder();
+    var a = order.indexOf(fromId);
+    var b = order.indexOf(toId);
+    if (b === -1) {
+      return;
+    }
+    if (a === -1) {
+      a = b;
+      fromId = toId;
+    }
+    overviewAnchor = fromId;
+    setOverviewSelection(order.slice(Math.min(a, b), Math.max(a, b) + 1), toId);
+  }
+
+  function toggleOverviewSelectionId(clientId) {
+    if (overviewSelectedIds.indexOf(clientId) !== -1) {
+      removeOverviewSelectionId(clientId);
+      return;
+    }
+    var ids = overviewSelectedIds.slice();
+    // Toggling onto a lone picked box ADDS to it — the pick was a
+    // selection of one, and Ctrl+click means "and this one too".
+    if (!ids.length && overviewSelected && overviewSelected !== clientId) {
+      ids.push(overviewSelected);
+    }
+    ids.push(clientId);
+    overviewAnchor = clientId;
+    setOverviewSelection(ids, clientId);
+  }
+
+  /** Drop one box from the selection (Alt+click, and toggle-off). If it
+      was the active box, the disclosure moves to the nearest remaining
+      member — by document distance — or closes when none remain. */
+  function removeOverviewSelectionId(clientId) {
+    var ids = overviewSelectedIds.filter(function (id) {
+      return id !== clientId;
+    });
+    var nextActive;
+    if (overviewSelected === clientId) {
+      nextActive = '';
+      var order = overviewOrder();
+      var from = order.indexOf(clientId);
+      var bestDist = Infinity;
+      ids.forEach(function (id) {
+        var d = Math.abs(order.indexOf(id) - from);
+        if (d < bestDist) {
+          bestDist = d;
+          nextActive = id;
+        }
+      });
+    }
+    setOverviewSelection(ids, nextActive);
+  }
+
+  function clearOverviewMultiSelection() {
+    overviewSelectedIds = [];
+    overviewAnchor = '';
+    syncOverviewSelection();
+  }
+
+  /** ONE composed speak() per completed selection gesture: the count,
+      plus how many of the members are locked — said HERE so a keyboard
+      user learns before asking for a move, not after (the move engine
+      repeats it as its "stays where it is" suffix). */
+  function announceOverviewSelection() {
+    var n = overviewSelectedIds.length;
+    if (!n) {
+      speak(__('Selection cleared.', 'toolrail'));
+      return;
+    }
+    var lockedCount = overviewSelectedIds.filter(function (id) {
+      return !overviewCanMove(id);
+    }).length;
+    var message = sprintf(
+      /* translators: %d: number of selected blocks. */
+      _n('%d block selected.', '%d blocks selected.', n, 'toolrail'),
+      n
+    );
+    if (lockedCount) {
+      message += ' ' + sprintf(
+        /* translators: %d: number of locked blocks in the selection. */
+        _n('%d is locked and cannot move.', '%d are locked and cannot move.', lockedCount, 'toolrail'),
+        lockedCount
+      );
+    }
+    speak(message);
   }
 
   // -------------------------------------------------------------------
@@ -3789,18 +3968,21 @@
     if (e.button !== 0 || overviewDrag) {
       return;
     }
-    var sel = wp.data.select('core/block-editor');
-    if (sel && typeof sel.canMoveBlocks === 'function') {
-      try {
-        if (!sel.canMoveBlocks([clientId], overviewRoot)) {
-          return;
-        }
-      } catch (err) {
-        /* Selector newer than this WP — assume movable, the verify in
-           moveOverviewBlockTo still guards the announcement. */
+    var groupIds = null;
+    if (overviewSelectedIds.length > 1 && overviewSelectedIds.indexOf(clientId) !== -1) {
+      // Dragging any member drags the whole selection — its movable
+      // members, the way the group arrows move them. Refused only when
+      // NONE is movable; a partially locked group still drags.
+      groupIds = overviewSelectionInOrder().filter(function (id) {
+        return overviewCanMove(id);
+      });
+      if (!groupIds.length) {
+        return;
       }
+    } else if (!overviewCanMove(clientId)) {
+      return;
     }
-    overviewDrag = { clientId: clientId, startX: e.clientX, startY: e.clientY, active: false, toIndex: -1 };
+    overviewDrag = { clientId: clientId, ids: groupIds, startX: e.clientX, startY: e.clientY, active: false, toIndex: -1, gap: -1 };
     document.addEventListener('mousemove', onOverviewDragMove, true);
     document.addEventListener('mouseup', onOverviewDragEnd, true);
   }
@@ -3815,10 +3997,13 @@
       }
       overviewDrag.active = true;
       document.body.classList.add('toolrail-ov-dragging');
-      var box = overviewBoxFor(overviewDrag.clientId);
-      if (box) {
-        box.classList.add('is-dragging');
-      }
+      // A group drag dims EVERY box it will move.
+      (overviewDrag.ids || [overviewDrag.clientId]).forEach(function (id) {
+        var box = overviewBoxFor(id);
+        if (box) {
+          box.classList.add('is-dragging');
+        }
+      });
     }
     e.preventDefault();
     updateOverviewDropline(e.clientX, e.clientY);
@@ -3969,6 +4154,10 @@
       // so the insertion is always BEFORE it.
       insertIndex = row.entries[0].index;
     }
+    // The RAW insertion gap (0..n in the current order) — the group
+    // move engine does its own moving-members adjustment; the single
+    // path keeps the original already-adjusted index below.
+    overviewDrag.gap = insertIndex;
     overviewDrag.toIndex = insertIndex > idx ? insertIndex - 1 : insertIndex;
 
     if (row && row.entries.length > 1) {
@@ -4017,10 +4206,10 @@
       line.remove();
     }
     document.body.classList.remove('toolrail-ov-dragging');
-    var box = overviewBoxFor(overviewDrag.clientId);
-    if (box) {
-      box.classList.remove('is-dragging');
-    }
+    Array.prototype.slice.call(document.querySelectorAll('#toolrail-overview .toolrail-ov-box.is-dragging'))
+      .forEach(function (box) {
+        box.classList.remove('is-dragging');
+      });
     document.removeEventListener('mousemove', onOverviewDragMove, true);
     document.removeEventListener('mouseup', onOverviewDragEnd, true);
     overviewDrag = null;
@@ -4033,6 +4222,8 @@
     var wasActive = overviewDrag.active;
     var clientId = overviewDrag.clientId;
     var to = overviewDrag.toIndex;
+    var gap = overviewDrag.gap;
+    var groupIds = overviewDrag.ids;
     finishOverviewDrag();
     if (!wasActive) {
       // A plain click — let the disclosure toggle proceed.
@@ -4046,7 +4237,11 @@
     window.setTimeout(function () {
       overviewDragConsumedClick = false;
     }, 0);
-    if (to !== -1) {
+    if (groupIds) {
+      if (gap !== -1) {
+        moveOverviewBlocksTo(groupIds, gap, null);
+      }
+    } else if (to !== -1) {
       moveOverviewBlockTo(clientId, to, null);
     }
   }
@@ -4091,8 +4286,10 @@
     if (!overlay) {
       return;
     }
-    // A rebuild replaces every box a drag is measuring — abandon it.
+    // A rebuild replaces every box a drag or marquee is measuring —
+    // abandon both.
     finishOverviewDrag();
+    cancelOverviewMarquee(false);
     var sel = wp.data.select('core/block-editor');
 
     if (!focusSelectors && overlay.contains(document.activeElement)) {
@@ -4232,6 +4429,21 @@
     if (overviewSelected && order.indexOf(overviewSelected) === -1) {
       overviewSelected = '';
     }
+    // Prune the multi-selection too — members can vanish between
+    // rebuilds (deleted blocks, a root change) — and keep the
+    // active-box invariant (the active box, when a multi-selection
+    // exists, is one of its members).
+    if (overviewSelectedIds.length) {
+      if (overviewSelected && overviewSelectedIds.indexOf(overviewSelected) === -1) {
+        overviewSelectedIds.push(overviewSelected);
+      }
+      overviewSelectedIds = order.filter(function (id) {
+        return overviewSelectedIds.indexOf(id) !== -1;
+      });
+    }
+    if (overviewAnchor && order.indexOf(overviewAnchor) === -1) {
+      overviewAnchor = '';
+    }
 
     // Drilled in, everything OUTSIDE the root gets a 50% veil (owner
     // feedback 2026-08-27): four strips punched around the root's rect,
@@ -4252,9 +4464,17 @@
     list.className = 'toolrail-ov-list';
     order.forEach(function (clientId, i) {
       var label = overviewBlockLabel(clientId);
-      var selected = clientId === overviewSelected;
+      var isActive = clientId === overviewSelected;
+      var isMember = overviewSelectedIds.indexOf(clientId) !== -1;
+      var groupSize = overviewSelectedIds.length;
+      // Group mode: the active member's controls strip acts on the
+      // whole selection (issue #21).
+      var groupActive = isActive && isMember && groupSize > 1;
+      var movable = overviewCanMove(clientId);
       var li = document.createElement('li');
-      li.className = 'toolrail-ov-box' + (selected ? ' is-selected' : '');
+      li.className = 'toolrail-ov-box'
+        + (isActive || isMember ? ' is-selected' : '')
+        + (movable ? '' : ' is-locked');
       li.dataset.clientid = clientId;
 
       // The whole box is one focusable disclosure: click it (or press
@@ -4263,24 +4483,68 @@
       pick.type = 'button';
       pick.className = 'toolrail-ov-selectbtn';
       pick.dataset.ovAction = 'pick';
-      pick.setAttribute('aria-expanded', selected ? 'true' : 'false');
-      pick.setAttribute('aria-label', sprintf(
+      pick.setAttribute('aria-expanded', isActive ? 'true' : 'false');
+      var pickLabel = sprintf(
         /* translators: 1: block title, 2: its position, 3: count. */
         __('%1$s, position %2$d of %3$d — show reorder controls', 'toolrail'),
         label,
         i + 1,
         order.length
-      ));
+      );
+      if (!movable) {
+        pickLabel = sprintf(
+          /* translators: %s: the pick button's accessible name. */
+          __('%s — locked, cannot be moved', 'toolrail'),
+          pickLabel
+        );
+      }
+      // The base name is stashed so syncOverviewSelection can append
+      // (and drop) the membership suffix without a rebuild.
+      pick.dataset.baseLabel = pickLabel;
+      pick.setAttribute('aria-label', isMember && groupSize > 1
+        ? sprintf(
+          /* translators: %s: the pick button's base accessible name. */
+          __('%s — selected', 'toolrail'),
+          pickLabel
+        )
+        : pickLabel);
       pick.addEventListener('mousedown', function (e) {
         startOverviewDrag(e, clientId);
       });
-      pick.addEventListener('click', function () {
-        // A completed drag's release fires a click on this same button;
-        // the latch keeps it from also toggling the controls.
+      pick.addEventListener('click', function (e) {
+        // A completed drag's (or marquee's) release fires a click on
+        // this same button; the latch keeps it from also toggling the
+        // controls.
         if (overviewDragConsumedClick) {
           return;
         }
+        // Modifier clicks build the multi-selection (issue #21) and
+        // never run the plain disclosure toggle. Cmd is first-class:
+        // macOS gives Ctrl+click to the context menu.
+        if (e.shiftKey) {
+          overviewLastTouched = clientId;
+          setOverviewRange(overviewAnchor || overviewSelected || clientId, clientId);
+          // Rebuild after every selection gesture: the active strip's
+          // content is baked per build (focus re-derives to this pick).
+          buildOverviewContent();
+          announceOverviewSelection();
+          return;
+        }
+        if (e.ctrlKey || e.metaKey) {
+          overviewLastTouched = clientId;
+          toggleOverviewSelectionId(clientId);
+          buildOverviewContent();
+          announceOverviewSelection();
+          return;
+        }
+        if (e.altKey) {
+          removeOverviewSelectionId(clientId);
+          buildOverviewContent();
+          announceOverviewSelection();
+          return;
+        }
         if (overviewSelected === clientId) {
+          clearOverviewMultiSelection();
           deselectOverviewBox(true);
         } else {
           selectOverviewBox(clientId);
@@ -4291,13 +4555,30 @@
       var tag = settingsRow('span', 'toolrail-ov-tag');
       tag.textContent = label;
       tag.setAttribute('aria-hidden', 'true');
+      if (!movable) {
+        // Visible lock annotation (plan review 2026-08-31): before
+        // this, a locked box looked like any other until its arrows
+        // came up disabled. aria-hidden with the tag — the pick
+        // button's name carries "locked" to AT.
+        var lockTag = settingsRow('span', 'toolrail-ov-locktag');
+        lockTag.innerHTML = OVERVIEW_LOCK_ICON + ' ';
+        lockTag.appendChild(document.createTextNode(__('Locked', 'toolrail')));
+        tag.appendChild(document.createTextNode(' '));
+        tag.appendChild(lockTag);
+      }
       li.appendChild(tag);
 
       var controls = settingsRow('div', 'toolrail-ov-controls');
-      controls.hidden = !selected;
+      controls.hidden = !isActive;
 
       var name = settingsRow('span', 'toolrail-ov-label');
-      name.textContent = label;
+      name.textContent = groupActive
+        ? sprintf(
+          /* translators: %d: number of selected blocks. */
+          _n('%d block selected', '%d blocks selected', groupSize, 'toolrail'),
+          groupSize
+        )
+        : label;
       controls.appendChild(name);
 
       var pos = settingsRow('span', 'toolrail-ov-pos');
@@ -4309,34 +4590,45 @@
       );
       controls.appendChild(pos);
 
-      // canMoveBlocks: core's own moveBlocksToPosition refuses (silently)
-      // for a movement-locked block, so the arrows must not offer a move
-      // core will refuse — announcing an unperformed move would lie to a
-      // screen-reader user (review 2026-08-27, finding 1; the selector
-      // is guarded because it is newer than this plugin's floor).
-      var movable = true;
-      if (sel && typeof sel.canMoveBlocks === 'function') {
-        try {
-          movable = !!sel.canMoveBlocks([clientId], overviewRoot);
-        } catch (e) {
-          movable = true;
-        }
-      }
+      // canMoveBlocks (via overviewCanMove, computed above): the arrows
+      // must not offer a move core will silently refuse — announcing an
+      // unperformed move would lie to a screen-reader user (review
+      // 2026-08-27, finding 1). In group mode the arrows stay enabled
+      // while ANY member is movable; the move engine excludes the
+      // locked members and the announcement says so.
+      var groupMembers = groupActive ? overviewSelectionInOrder() : [];
+      var groupCanMove = groupMembers.some(function (id) {
+        return overviewCanMove(id);
+      });
+      var firstMemberAt = groupActive ? order.indexOf(groupMembers[0]) : -1;
+      var lastMemberAt = groupActive ? order.indexOf(groupMembers[groupMembers.length - 1]) : -1;
 
       var upBtn = document.createElement('button');
       upBtn.type = 'button';
       upBtn.className = 'toolrail-ov-btn toolrail-ov-move';
       upBtn.dataset.ovAction = 'up';
       upBtn.textContent = '↑';
-      upBtn.setAttribute('aria-label', sprintf(
-        /* translators: 1: block title, 2: its position. */
-        __('Move %1$s, position %2$d, up', 'toolrail'),
-        label,
-        i + 1
-      ));
-      upBtn.disabled = i === 0 || !movable;
+      upBtn.setAttribute('aria-label', groupActive
+        ? sprintf(
+          /* translators: %d: number of selected blocks. */
+          _n('Move %d selected block up', 'Move %d selected blocks up', groupSize, 'toolrail'),
+          groupSize
+        )
+        : sprintf(
+          /* translators: 1: block title, 2: its position. */
+          __('Move %1$s, position %2$d, up', 'toolrail'),
+          label,
+          i + 1
+        ));
+      upBtn.disabled = groupActive
+        ? (firstMemberAt <= 0 || !groupCanMove)
+        : (i === 0 || !movable);
       upBtn.addEventListener('click', function () {
-        moveOverviewBlock(clientId, -1);
+        if (groupActive) {
+          moveOverviewGroupStep(-1, 'up');
+        } else {
+          moveOverviewBlock(clientId, -1);
+        }
       });
       controls.appendChild(upBtn);
 
@@ -4345,15 +4637,27 @@
       downBtn.className = 'toolrail-ov-btn toolrail-ov-move';
       downBtn.dataset.ovAction = 'down';
       downBtn.textContent = '↓';
-      downBtn.setAttribute('aria-label', sprintf(
-        /* translators: 1: block title, 2: its position. */
-        __('Move %1$s, position %2$d, down', 'toolrail'),
-        label,
-        i + 1
-      ));
-      downBtn.disabled = i === order.length - 1 || !movable;
+      downBtn.setAttribute('aria-label', groupActive
+        ? sprintf(
+          /* translators: %d: number of selected blocks. */
+          _n('Move %d selected block down', 'Move %d selected blocks down', groupSize, 'toolrail'),
+          groupSize
+        )
+        : sprintf(
+          /* translators: 1: block title, 2: its position. */
+          __('Move %1$s, position %2$d, down', 'toolrail'),
+          label,
+          i + 1
+        ));
+      downBtn.disabled = groupActive
+        ? (lastMemberAt >= order.length - 1 || !groupCanMove)
+        : (i === order.length - 1 || !movable);
       downBtn.addEventListener('click', function () {
-        moveOverviewBlock(clientId, 1);
+        if (groupActive) {
+          moveOverviewGroupStep(1, 'down');
+        } else {
+          moveOverviewBlock(clientId, 1);
+        }
       });
       controls.appendChild(downBtn);
 
@@ -4483,6 +4787,360 @@
   }
 
   /**
+   * Contiguous runs of `ids` in the current order, as [{start, ids}] in
+   * document order. The group-move engine folds these together.
+   */
+  function overviewContiguousRuns(ids) {
+    var runs = [];
+    var last = -2;
+    overviewOrder().forEach(function (id, i) {
+      if (ids.indexOf(id) === -1) {
+        return;
+      }
+      if (i === last + 1 && runs.length) {
+        runs[runs.length - 1].ids.push(id);
+      } else {
+        runs.push({ start: i, ids: [id] });
+      }
+      last = i;
+    });
+    return runs;
+  }
+
+  /**
+   * Move the selection as a GROUP to an insertion gap (issue #21): the
+   * members land next to each other, in document order, where the gap
+   * falls among the blocks that are not moving.
+   *
+   * Same public dispatch as the single path — but core's same-root
+   * reducer moves ONE contiguous slice per action (moveTo from the
+   * first id's index), so a non-contiguous selection is moved as a
+   * SEQUENCE: every later run is folded up against the first
+   * (compaction never reorders the non-members, nor the members among
+   * themselves), then one dispatch places the now-contiguous group. A
+   * contiguous selection — the only kind List View can even express —
+   * is exactly one dispatch, byte-identical to the same move made
+   * there. Undo cost: one step per dispatch. The single-step
+   * alternative (__unstableMarkNextChangeAsNotPersistent) is an
+   * unstable API and R6 is public-APIs-only — a documented trade, not
+   * an oversight.
+   *
+   * Locked members are EXCLUDED and stay where they are — the issue's
+   * contract — and the one composed announcement says so. The store
+   * subscription is fenced off for the sequence (overviewGroupMove);
+   * the final order is VERIFIED before any success is announced.
+   *
+   * @param {string[]}    ids         Selection members (any order).
+   * @param {number}      gap         Insertion gap in the CURRENT
+   *                                  order (0..length), e.g. from the
+   *                                  drop line — NOT a post-removal
+   *                                  index.
+   * @param {string|null} focusAction 'up'/'down' from the arrows
+   *                                  (focus stays on that arrow); null
+   *                                  from a drag.
+   */
+  function moveOverviewBlocksTo(ids, gap, focusAction) {
+    var order = overviewOrder();
+    var members = order.filter(function (id) {
+      return ids.indexOf(id) !== -1;
+    });
+    if (!members.length) {
+      return;
+    }
+    var movable = members.filter(function (id) {
+      return overviewCanMove(id);
+    });
+    var locked = members.filter(function (id) {
+      return movable.indexOf(id) === -1;
+    });
+    var lockedSuffix = '';
+    if (locked.length === 1) {
+      lockedSuffix = ' ' + sprintf(
+        /* translators: %s: block title. */
+        __('%s is locked and stays where it is.', 'toolrail'),
+        overviewBlockLabel(locked[0])
+      );
+    } else if (locked.length) {
+      lockedSuffix = ' ' + sprintf(
+        /* translators: %d: number of locked blocks. */
+        __('%d locked blocks stay where they are.', 'toolrail'),
+        locked.length
+      );
+    }
+    if (!movable.length) {
+      speak(sprintf(
+        /* translators: %d: number of selected blocks. */
+        _n(
+          'The selected block is locked and cannot be moved.',
+          'The %d selected blocks are locked and cannot be moved.',
+          members.length,
+          'toolrail'
+        ),
+        members.length
+      ));
+      return;
+    }
+    gap = Math.min(Math.max(0, gap), order.length);
+    if (movable.length === 1 && !locked.length) {
+      // One movable block is the existing, fully verified single path.
+      var idx = order.indexOf(movable[0]);
+      moveOverviewBlockTo(movable[0], gap > idx ? gap - 1 : gap, focusAction);
+      return;
+    }
+
+    // Where the group lands: its final start index = how many
+    // NON-MOVING blocks sit before the gap. Non-members never reorder
+    // during the sequence, so this is invariant through compaction.
+    var insertAt = 0;
+    for (var i = 0; i < gap; i++) {
+      if (movable.indexOf(order[i]) === -1) {
+        insertAt++;
+      }
+    }
+    var others = order.filter(function (id) {
+      return movable.indexOf(id) === -1;
+    });
+    var desired = others.slice(0, insertAt).concat(movable, others.slice(insertAt));
+    if (desired.join(',') === order.join(',')) {
+      // Dropping the group where it already sits — like the single
+      // path's to === idx: nothing to do, nothing to announce.
+      return;
+    }
+
+    var dispatcher = wp.data.dispatch('core/block-editor');
+    overviewGroupMove = true;
+    try {
+      // COMPACT: fold run 2 up against run 1 until one run remains.
+      // Folding a LATER run never shifts the first run's indices, and
+      // the reducer's index is the moved slice's FINAL start. Runs are
+      // recomputed from the live order after every dispatch; a refused
+      // dispatch (a lock landing mid-sequence) leaves the count
+      // unchanged and breaks out — the verify below fails safe.
+      var runs = overviewContiguousRuns(movable);
+      var guard = runs.length + 1;
+      while (runs.length > 1 && guard-- > 0) {
+        dispatcher.moveBlocksToPosition(
+          runs[1].ids, overviewRoot, overviewRoot,
+          runs[0].start + runs[0].ids.length
+        );
+        var next = overviewContiguousRuns(movable);
+        if (next.length >= runs.length) {
+          break;
+        }
+        runs = next;
+      }
+      // PLACE: one dispatch drops the contiguous group at its final
+      // start. Skipped if compaction broke out — the verify announces
+      // the honest result either way.
+      if (runs.length === 1) {
+        dispatcher.moveBlocksToPosition(movable, overviewRoot, overviewRoot, insertAt);
+      }
+    } finally {
+      overviewGroupMove = false;
+    }
+
+    // VERIFY before announcing — the moveOverviewBlockTo discipline:
+    // never tell a screen-reader user a move happened when the final
+    // order says otherwise.
+    var finalOrder = overviewOrder();
+    var ok = movable.every(function (id, at) {
+      return finalOrder[insertAt + at] === id;
+    });
+    overviewSignature = overviewCurrentSignature();
+    if (ok) {
+      overviewLastTouched = overviewSelected && movable.indexOf(overviewSelected) !== -1
+        ? overviewSelected
+        : movable[0];
+    }
+    if (focusAction) {
+      if (!overviewSelected || members.indexOf(overviewSelected) === -1) {
+        overviewSelected = movable[0];
+      }
+      var boxSel = '.toolrail-ov-box[data-clientid="' + overviewSelected + '"] ';
+      buildOverviewContent([
+        boxSel + '[data-ov-action="' + focusAction + '"]',
+        boxSel + '[data-ov-action="' + (focusAction === 'up' ? 'down' : 'up') + '"]'
+      ]);
+    } else {
+      buildOverviewContent();
+    }
+    scheduleOverviewSettle();
+
+    if (ok) {
+      speak(sprintf(
+        /* translators: 1: number of moved blocks, 2: new position of the first, 3: count. */
+        _n(
+          'Moved %1$d block to position %2$d of %3$d.',
+          'Moved %1$d blocks to position %2$d of %3$d.',
+          movable.length,
+          'toolrail'
+        ),
+        movable.length,
+        insertAt + 1,
+        finalOrder.length
+      ) + lockedSuffix);
+    } else {
+      speak(__('The move could not be completed.', 'toolrail'));
+    }
+  }
+
+  /** The group arrows: one step past the neighbor. Everything before
+      the FIRST member is a non-member by definition, so "the nearest
+      non-selected block before it" is simply the one at first−1; the
+      mirror holds for down. At an edge the arrows are disabled, so
+      returning early here is belt only. */
+  function moveOverviewGroupStep(delta, focusAction) {
+    var order = overviewOrder();
+    var members = overviewSelectionInOrder();
+    if (!members.length) {
+      return;
+    }
+    var gap;
+    if (delta < 0) {
+      var first = order.indexOf(members[0]);
+      if (first <= 0) {
+        return;
+      }
+      gap = first - 1;
+    } else {
+      var last = order.indexOf(members[members.length - 1]);
+      if (last === -1 || last >= order.length - 1) {
+        return;
+      }
+      gap = last + 2;
+    }
+    moveOverviewBlocksTo(members, gap, focusAction);
+  }
+
+  // -------------------------------------------------------------------
+  // Marquee select — a drag from EMPTY overlay space draws a rectangle;
+  // every box it touches is selected on release (issue #21). Pointer
+  // sugar like the box drag: the keyboard's path to the same selection
+  // is Shift+Arrow / Ctrl+Space in onOverviewKeydown. Coordinates are
+  // viewport-space, so a wheel-pan mid-marquee just changes which boxes
+  // the fixed rectangle touches — the next mousemove re-hit-tests.
+  // -------------------------------------------------------------------
+
+  function startOverviewMarquee(e) {
+    overviewMarquee = {
+      startX: e.clientX,
+      startY: e.clientY,
+      active: false,
+      // With a modifier held the marquee ADDS to the selection instead
+      // of replacing it.
+      additive: !!(e.ctrlKey || e.metaKey || e.shiftKey),
+      baseIds: overviewSelectedIds.slice(),
+      prevActive: overviewSelected
+    };
+    document.addEventListener('mousemove', onOverviewMarqueeMove, true);
+    document.addEventListener('mouseup', onOverviewMarqueeEnd, true);
+  }
+
+  /** Tear the marquee down. restore=true (Escape) puts the selection
+      back the way the mousedown found it; false lets the caller own
+      what happens next. */
+  function cancelOverviewMarquee(restore) {
+    if (!overviewMarquee) {
+      return;
+    }
+    var m = overviewMarquee;
+    overviewMarquee = null;
+    var rect = document.querySelector('#toolrail-overview .toolrail-ov-marquee');
+    if (rect) {
+      rect.remove();
+    }
+    document.removeEventListener('mousemove', onOverviewMarqueeMove, true);
+    document.removeEventListener('mouseup', onOverviewMarqueeEnd, true);
+    if (restore && m.active) {
+      setOverviewSelection(m.baseIds, m.prevActive);
+    }
+  }
+
+  function onOverviewMarqueeMove(e) {
+    if (!overviewMarquee) {
+      return;
+    }
+    if (!overviewMarquee.active) {
+      if (Math.abs(e.clientX - overviewMarquee.startX) < 5 && Math.abs(e.clientY - overviewMarquee.startY) < 5) {
+        return;
+      }
+      overviewMarquee.active = true;
+      // The rectangle replaces the disclosure: a marquee starts on
+      // empty space, and empty-space presses have always collapsed the
+      // open controls.
+      overviewSelected = '';
+    }
+    e.preventDefault();
+    var overlay = overviewNode();
+    if (!overlay) {
+      return;
+    }
+    var oRect = overlay.getBoundingClientRect();
+    var x1 = Math.min(Math.max(Math.min(e.clientX, overviewMarquee.startX), oRect.left), oRect.right);
+    var x2 = Math.min(Math.max(Math.max(e.clientX, overviewMarquee.startX), oRect.left), oRect.right);
+    var y1 = Math.min(Math.max(Math.min(e.clientY, overviewMarquee.startY), oRect.top), oRect.bottom);
+    var y2 = Math.min(Math.max(Math.max(e.clientY, overviewMarquee.startY), oRect.top), oRect.bottom);
+    var rect = overlay.querySelector('.toolrail-ov-marquee');
+    if (!rect) {
+      rect = document.createElement('div');
+      rect.className = 'toolrail-ov-marquee';
+      rect.setAttribute('aria-hidden', 'true');
+      overlay.appendChild(rect);
+    }
+    rect.style.left = (x1 - oRect.left) + 'px';
+    rect.style.top = (y1 - oRect.top) + 'px';
+    rect.style.width = (x2 - x1) + 'px';
+    rect.style.height = (y2 - y1) + 'px';
+
+    // "Every box the rectangle touches": any positive overlap on both
+    // axes. Live-painted so the author sees the selection build; the
+    // announcement waits for the release (one speak per gesture).
+    var hits = [];
+    Array.prototype.slice.call(overlay.querySelectorAll('.toolrail-ov-box')).forEach(function (box) {
+      if (box.style.display === 'none') {
+        return;
+      }
+      var b = box.getBoundingClientRect();
+      if (b.left < x2 && b.right > x1 && b.top < y2 && b.bottom > y1) {
+        hits.push(box.dataset.clientid);
+      }
+    });
+    setOverviewSelection(overviewMarquee.additive ? overviewMarquee.baseIds.concat(hits) : hits, '');
+  }
+
+  function onOverviewMarqueeEnd(e) {
+    var m = overviewMarquee;
+    cancelOverviewMarquee(false);
+    if (!m) {
+      return;
+    }
+    if (!m.active) {
+      // The plain empty-space click this always was: collapse the open
+      // controls and clear any multi-selection.
+      clearOverviewMultiSelection();
+      deselectOverviewBox(false);
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    // Released over a box, the browser still fires click on its pick
+    // button — the drag latch keeps that from toggling the disclosure.
+    overviewDragConsumedClick = true;
+    window.setTimeout(function () {
+      overviewDragConsumedClick = false;
+    }, 0);
+    var members = overviewSelectionInOrder();
+    if (members.length) {
+      overviewSelected = members[0];
+      overviewAnchor = members[0];
+      overviewLastTouched = members[0];
+    }
+    // Rebuild: the active member's strip becomes the group's strip.
+    buildOverviewContent();
+    announceOverviewSelection();
+  }
+
+  /**
    * Re-root the overview ('' = top level) — the drill-in machinery. The
    * SAME chips reorder children inside a section; the root change is
    * announced, and the zoom refits to the new root.
@@ -4496,6 +5154,8 @@
     }
     // Each level gets its own zoom, pan and selection.
     overviewSelected = '';
+    overviewSelectedIds = [];
+    overviewAnchor = '';
     overviewPan = 0;
     overviewUserScale = 0;
     overviewSignature = overviewCurrentSignature();
@@ -4526,31 +5186,114 @@
   }
 
   /**
-   * Escape walks back out one layer at a time — collapse the open
-   * controls, then climb a level, then close — but ONLY when focus is
-   * inside the overlay (the help panel lesson: an Escape aimed at the
-   * inserter or a sidebar must never be hijacked).
+   * Escape walks back out one layer at a time — cancel a marquee or
+   * drag, clear a multi-selection, collapse the open controls, then
+   * climb a level, then close — but ONLY when focus is inside the
+   * overlay (the help panel lesson: an Escape aimed at the inserter or
+   * a sidebar must never be hijacked) or a pointer gesture is in
+   * flight (its mousedown took no focus, and it must still be
+   * cancellable). Shift+Arrow extends the selection from the focused
+   * box and Ctrl+Space (Cmd+Space) toggles it (issue #21) — both live
+   * here so the pick buttons need no per-box key handlers.
    */
   function onOverviewKeydown(e) {
-    if (e.key !== 'Escape' || !overviewOpen) {
+    if (!overviewOpen) {
       return;
     }
     var overlay = overviewNode();
-    if (!overlay || !overlay.contains(document.activeElement)) {
+    if (!overlay) {
       return;
     }
-    e.preventDefault();
-    e.stopPropagation();
-    if (overviewDrag) {
-      // Abandon an in-flight drag; nothing moves.
-      finishOverviewDrag();
-    } else if (overviewSelected) {
-      deselectOverviewBox(true);
-    } else if (overviewRoot) {
-      var sel = wp.data.select('core/block-editor');
-      drillTo((sel && sel.getBlockRootClientId(overviewRoot)) || '');
-    } else {
-      closeOverview(true);
+    var inOverlay = overlay.contains(document.activeElement);
+
+    if (e.key === 'Escape') {
+      if (!inOverlay && !overviewDrag && !overviewMarquee) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      if (overviewMarquee) {
+        // Abandon the rectangle; the selection goes back as found.
+        cancelOverviewMarquee(true);
+      } else if (overviewDrag) {
+        // Abandon an in-flight drag; nothing moves.
+        finishOverviewDrag();
+      } else if (overviewSelectedIds.length > 1) {
+        // Clear the multi-selection BEFORE stepping out (issue #21's
+        // "must keep") — the disclosure stays put for the next rung.
+        // The rebuild returns the group strip to single mode; focus
+        // re-derives onto the control it was on.
+        clearOverviewMultiSelection();
+        buildOverviewContent();
+        speak(__('Selection cleared.', 'toolrail'));
+      } else if (overviewSelected) {
+        clearOverviewMultiSelection();
+        deselectOverviewBox(true);
+      } else if (overviewRoot) {
+        var sel = wp.data.select('core/block-editor');
+        drillTo((sel && sel.getBlockRootClientId(overviewRoot)) || '');
+      } else {
+        closeOverview(true);
+      }
+      return;
+    }
+
+    // The selection keys act on the FOCUSED box's pick button only.
+    if (!inOverlay) {
+      return;
+    }
+    var active = document.activeElement;
+    if (!active || !active.dataset || active.dataset.ovAction !== 'pick') {
+      return;
+    }
+    var box = active.closest ? active.closest('.toolrail-ov-box') : null;
+    var clientId = box ? box.dataset.clientid : '';
+    if (!clientId) {
+      return;
+    }
+
+    if ((e.ctrlKey || e.metaKey) && (e.key === ' ' || e.key === 'Spacebar')) {
+      // preventDefault on KEYDOWN: buttons click on Space keyup, and
+      // the toggle must not also flip the disclosure.
+      e.preventDefault();
+      e.stopPropagation();
+      overviewLastTouched = clientId;
+      toggleOverviewSelectionId(clientId);
+      // Rebuild (strip content tracks the selection), focus kept on
+      // this same pick button.
+      buildOverviewContent(['.toolrail-ov-box[data-clientid="' + clientId + '"] [data-ov-action="pick"]']);
+      announceOverviewSelection();
+      return;
+    }
+
+    if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      var rtl = overviewIsRtl();
+      var delta = 0;
+      if (e.key === 'ArrowDown' || e.key === (rtl ? 'ArrowLeft' : 'ArrowRight')) {
+        delta = 1;
+      } else if (e.key === 'ArrowUp' || e.key === (rtl ? 'ArrowRight' : 'ArrowLeft')) {
+        delta = -1;
+      }
+      if (!delta) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      var order = overviewOrder();
+      var at = order.indexOf(clientId);
+      var neighbor = at === -1 ? '' : order[at + delta];
+      if (!neighbor) {
+        return;
+      }
+      if (!overviewAnchor || order.indexOf(overviewAnchor) === -1) {
+        overviewAnchor = clientId;
+      }
+      setOverviewRange(overviewAnchor, neighbor);
+      overviewLastTouched = neighbor;
+      // Rebuild (strip content tracks the selection) with focus on the
+      // neighbor's pick — the focusin handler pans it into view free.
+      buildOverviewContent(['.toolrail-ov-box[data-clientid="' + neighbor + '"] [data-ov-action="pick"]']);
+      announceOverviewSelection();
     }
   }
 
@@ -4585,6 +5328,11 @@
       climbs to the top level rather than stranding the overview. */
   function onOverviewStoreChange() {
     if (!overviewOpen) {
+      return;
+    }
+    if (overviewGroupMove) {
+      // Mid-sequence dispatches from the group-move engine; it writes
+      // the final signature and rebuilds once, after its verify.
       return;
     }
     var sel = wp.data.select('core/block-editor');
@@ -4634,7 +5382,16 @@
 
     overlay.addEventListener('mousedown', function (e) {
       if (e.target === overlay || (e.target.classList && e.target.classList.contains('toolrail-ov-list'))) {
-        deselectOverviewBox(false);
+        // Empty space: a LEFT press may become a marquee (issue #21) —
+        // the clear/collapse this always did now runs on the RELEASE
+        // of a press that never crossed the threshold, so a plain
+        // click behaves exactly as before.
+        if (e.button === 0 && !overviewDrag && !overviewMarquee) {
+          startOverviewMarquee(e);
+        } else if (!overviewMarquee) {
+          clearOverviewMultiSelection();
+          deselectOverviewBox(false);
+        }
       }
     });
 
@@ -4701,6 +5458,8 @@
     overviewOpen = true;
     overviewRoot = '';
     overviewSelected = '';
+    overviewSelectedIds = [];
+    overviewAnchor = '';
     overviewLastTouched = '';
     overviewPan = 0;
     overviewUserScale = 0;
@@ -4948,6 +5707,7 @@
     });
     overviewLastTouched = '';
     finishOverviewDrag();
+    cancelOverviewMarquee(false);
     // Order matters here (owner feedback 2026-08-31 — no visible
     // scroll-to on close):
     //  1. Stamp toolrail-ov-closing FIRST: it keeps core's 0.4s iframe
@@ -5018,6 +5778,8 @@
     overviewEntryScroll = null;
     overviewRoot = '';
     overviewSelected = '';
+    overviewSelectedIds = [];
+    overviewAnchor = '';
     overviewPan = 0;
     overviewUserScale = 0;
     overviewExtent = 0;

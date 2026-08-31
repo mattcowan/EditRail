@@ -1360,6 +1360,34 @@ span.toolrail-ov-crumb {
     opacity: 0.6;
 }
 
+/* A movement-locked box: dashed lines in a muted blue-gray, so the
+   state reads before the arrows ever come up disabled. The corner tag
+   carries a padlock + "Locked"; AT gets the state from the pick
+   button's accessible name. */
+.toolrail-ov-box.is-locked {
+    border-style: dashed;
+    border-color: #6b7194;
+}
+
+.toolrail-ov-locktag svg {
+    width: 10px;
+    height: 10px;
+    vertical-align: -1px;
+}
+
+/* Marquee select (issue #21): the rectangle a drag from empty overlay
+   space draws. Same two-tone discipline as the outlines and the drop
+   line, so it reads over any content. */
+.toolrail-ov-marquee {
+    position: absolute;
+    border: 2px solid #3858e9;
+    border-radius: 2px;
+    background: rgba(56, 88, 233, 0.12);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.85);
+    pointer-events: none;
+    z-index: 2;
+}
+
 body.toolrail-ov-dragging,
 body.toolrail-ov-dragging * {
     cursor: grabbing !important;
@@ -1505,6 +1533,18 @@ body.toolrail-ov-dragging * {
        state there instead. */
     .toolrail-ov-veil {
         display: none;
+    }
+
+    /* The marquee's translucent fill would be forced OPAQUE (the veil
+       lesson) — keep only the border, which survives in system colors. */
+    .toolrail-ov-marquee {
+        background: none;
+    }
+
+    /* The locked box's muted color flattens; GrayText is the system's
+       own "inactive", and the dashed style survives on its own. */
+    .toolrail-ov-box.is-locked {
+        border-color: GrayText;
     }
 
     .toolrail-ov-btn:focus-visible,
