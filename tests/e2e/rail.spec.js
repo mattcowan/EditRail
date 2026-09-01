@@ -2858,7 +2858,7 @@ test.describe('section overview (R6)', () => {
     await expect.poll(async () => ovAnnouncement(page)).toContain('1 block selected.');
   });
 
-  test('Escape clears a multi-selection before stepping out (issue #21)', async ({ page }) => {
+  test('Escape exits the overview in one press, even with a selection open (owner decision 2026-09-01)', async ({ page }) => {
     await openNewPost(page);
     await seedOverviewParagraphs(page);
     await page.locator('#toolrail-rail [data-tool="overview"]').click();
@@ -2870,24 +2870,54 @@ test.describe('section overview (R6)', () => {
     await overviewBoxButton(page, ids[2], 'pick').click({ modifiers: ['Shift'] });
     await expect(ovSelectedBoxes(page)).toHaveCount(3);
 
-    // First Escape: the multi-selection clears; the overlay stays, and
-    // the active box keeps its disclosure for the next rung.
+    // ONE press leaves, exactly as "Done" does — which is what the
+    // bar's "Esc exits" hint has always promised. Neither the open
+    // selection nor the open controls strip buys an extra rung.
     await page.keyboard.press('Escape');
-    await expect(ovSelectedBoxes(page)).toHaveCount(1);
-    await expect(page.locator('#toolrail-overview')).toBeVisible();
-    await expect.poll(async () => ovAnnouncement(page)).toContain('Selection cleared.');
+    await expect(page.locator('#toolrail-overview')).toHaveCount(0);
+    expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('overview');
+    await expect.poll(async () => ovAnnouncement(page)).toContain('Section overview closed.');
+  });
 
-    // Second Escape: the controls collapse, overlay still open.
+  test('Escape cancels an in-flight drag instead of exiting, and says which happened (owner decision 2026-09-01)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    const before = await overviewContents(page);
+
+    // Start a real drag and cross the threshold.
+    const firstBox = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[0]}"]`).boundingBox();
+    const lastBox = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[5]}"]`).boundingBox();
+    await page.mouse.move(firstBox.x + firstBox.width / 2, firstBox.y + firstBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(firstBox.x + firstBox.width / 2, lastBox.y + lastBox.height / 2, { steps: 10 });
+    await expect(page.locator('#toolrail-overview .toolrail-ov-dropline')).toBeVisible();
+
+    // Escape abandons the DRAG and keeps the mode. This rung is not a
+    // nicety: the mouseup below is still armed, and exiting instead
+    // would let it commit the very move being abandoned.
     await page.keyboard.press('Escape');
-    await expect(page.locator('#toolrail-overview .toolrail-ov-controls:not([hidden])')).toHaveCount(0);
     await expect(page.locator('#toolrail-overview')).toBeVisible();
+    await expect(page.locator('#toolrail-overview .toolrail-ov-dropline')).toHaveCount(0);
+    // The quiet outcome announces, and says what the next press does —
+    // with only two outcomes, silence would leave a screen-reader user
+    // unable to tell whether they had left the mode.
+    await expect.poll(async () => ovAnnouncement(page)).toContain('Move canceled.');
+    expect(await ovAnnouncement(page)).toContain('Press Escape again to close the overview.');
 
-    // Third Escape: the overview closes.
+    await page.mouse.up();
+    // Nothing moved, by the release or by the cancel.
+    expect(await overviewContents(page)).toEqual(before);
+
+    // And the next press exits, as the announcement said.
     await page.keyboard.press('Escape');
     await expect(page.locator('#toolrail-overview')).toHaveCount(0);
   });
 
-  test('keyboard-only: Enter drills into a section, arrows reorder inside it, Escape climbs then closes', async ({ page }) => {
+  test('keyboard-only: Enter drills into a section, arrows reorder inside it, "Up one level" climbs, Escape closes', async ({ page }) => {
     await openNewPost(page);
     await seedOverviewBlocks(page);
     await page.locator('#toolrail-rail [data-tool="overview"]').click();
@@ -2964,21 +2994,37 @@ test.describe('section overview (R6)', () => {
       window.wp.data.select('core/block-editor').getBlockOrder(gid), groupId
     )).toEqual([innerIds[1], innerIds[0]]);
 
-    // Escape walks back out one layer at a time: collapse the open
-    // controls…
-    await page.keyboard.press('Escape');
-    await expect(page.locator('#toolrail-overview .toolrail-ov-controls:not([hidden])')).toHaveCount(0);
-    await expect(page.locator('#toolrail-overview .toolrail-ov-box')).toHaveCount(2);
-
-    // …then climb one level…
-    await page.keyboard.press('Escape');
+    // Climbing a level by keyboard is the "Up one level" button, not
+    // Escape (owner decision 2026-09-01 — Escape exits the mode).
+    await page.locator('#toolrail-overview [data-ov-action="up-level"]').click();
     await expect(page.locator('#toolrail-overview .toolrail-ov-box')).toHaveCount(3);
     await expect(page.locator('#toolrail-overview [aria-current="location"]')).toHaveText('All sections');
 
-    // …then close, returning focus to the tool.
+    // Escape closes from wherever you are, returning focus to the tool.
     await page.keyboard.press('Escape');
     await expect(page.locator('#toolrail-overview')).toHaveCount(0);
     expect(await page.evaluate(() => document.activeElement.dataset.tool)).toBe('overview');
+  });
+
+  test('Escape exits from a drilled-in level in one press (owner decision 2026-09-01)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewBlocks(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const topIds = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    const groupId = topIds[1];
+
+    await overviewBoxButton(page, groupId, 'pick').click();
+    await overviewBoxButton(page, groupId, 'enter').click();
+    await expect(page.locator('#toolrail-overview .toolrail-ov-box')).toHaveCount(2);
+
+    // Two levels of state open — drilled in, with a box picked — and
+    // one press still leaves. Nothing is lost: the move is already in
+    // the store and the close lands on the block last touched.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#toolrail-overview')).toHaveCount(0);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('Section overview closed.');
   });
 
   test('the reorder-controls focus ring clears 3:1 on its own surface', async ({ page }) => {

@@ -3004,7 +3004,7 @@
         body: [
           __('The Section overview tool zooms the canvas out and outlines every top-level block. Click an outline to show its reorder controls — arrows to move it, "Reorder inside" to step into a section — or simply drag an outline to a new spot. Zoom with the +/− buttons and pan long documents with the mouse wheel.', 'toolrail'),
           __('Select several outlines at once: Shift+click for a range, Ctrl+click (Cmd on Mac) to add or remove one, Alt+click to remove one, or drag a rectangle from empty space. Shift+Arrow extends the selection from the focused outline and Ctrl+Space toggles it. The arrows or a drag then move the whole group; a locked block shows a padlock and stays where it is.', 'toolrail'),
-          __('Escape clears a selection of several outlines, then collapses the open controls, then steps up one level, then closes the overview. Closing centers and selects the block you last picked, moved or stepped into; if you touched nothing, it returns you to where you were scrolled.', 'toolrail')
+          __('Escape closes the overview, the same as the Done button. While you drag an outline or draw a selection rectangle, Escape cancels that first and keeps the overview open. To leave a level without closing, use "Up one level" or the breadcrumb. Closing centers and selects the block you last picked, moved or stepped into; if you touched nothing, it returns you to where you were scrolled.', 'toolrail')
         ]
       },
       {
@@ -5309,26 +5309,34 @@
       }
       e.preventDefault();
       e.stopPropagation();
+      // TWO outcomes, not a ladder (owner decision 2026-09-01): an
+      // in-flight pointer gesture is abandoned, and Escape otherwise
+      // EXITS — the same thing "Done" does, which is what the bar's
+      // "Esc exits" hint has always promised.
+      //
+      // The gesture rung is not a nicety. Escape during a drag must
+      // abort the drag, because the pending mouseup is still armed and
+      // closing the mode instead would let it commit the very move the
+      // author is trying to abandon.
+      //
+      // Both outcomes ANNOUNCE, and the quiet one says what the next
+      // Escape will do. With only two outcomes and very different
+      // consequences, a silent cancel would leave a screen-reader user
+      // unable to tell whether they had left the mode. One composed
+      // speak() per press — wp.a11y.speak replaces the region's text.
+      // Nothing here is lost by exiting: moves are already in the
+      // store, the close lands on the last touched block, and the
+      // selection and drill level are view state. Climbing a level
+      // keeps "Up one level" and the breadcrumbs; clearing a selection
+      // without leaving is Enter on the active box.
       if (overviewMarquee) {
         // Abandon the rectangle; the selection goes back as found.
         cancelOverviewMarquee(true);
+        speak(__('Selection rectangle canceled. Press Escape again to close the overview.', 'toolrail'));
       } else if (overviewDrag) {
         // Abandon an in-flight drag; nothing moves.
         finishOverviewDrag();
-      } else if (overviewSelectedIds.length > 1) {
-        // Clear the multi-selection BEFORE stepping out (issue #21's
-        // "must keep") — the disclosure stays put for the next rung.
-        // The rebuild returns the group strip to single mode; focus
-        // re-derives onto the control it was on.
-        clearOverviewMultiSelection();
-        buildOverviewContent();
-        speak(__('Selection cleared.', 'toolrail'));
-      } else if (overviewSelected) {
-        clearOverviewMultiSelection();
-        deselectOverviewBox(true);
-      } else if (overviewRoot) {
-        var sel = wp.data.select('core/block-editor');
-        drillTo((sel && sel.getBlockRootClientId(overviewRoot)) || '');
+        speak(__('Move canceled. Press Escape again to close the overview.', 'toolrail'));
       } else {
         closeOverview(true);
       }
@@ -5671,8 +5679,8 @@
     speak(sprintf(
       /* translators: %d: number of top-level sections. */
       _n(
-        'Section overview — %d section. Choose a section to show its reorder controls; Escape steps back out. Insert tools are unavailable until you close the overview.',
-        'Section overview — %d sections. Choose a section to show its reorder controls; Escape steps back out. Insert tools are unavailable until you close the overview.',
+        'Section overview — %d section. Choose a section to show its reorder controls; Escape closes the overview. Insert tools are unavailable until you close the overview.',
+        'Section overview — %d sections. Choose a section to show its reorder controls; Escape closes the overview. Insert tools are unavailable until you close the overview.',
         count,
         'toolrail'
       ),
