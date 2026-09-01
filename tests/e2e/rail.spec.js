@@ -2681,6 +2681,39 @@ test.describe('section overview (R6)', () => {
     )).toBeHidden();
   });
 
+  test('"Reorder inside" is unavailable while several blocks are selected (issue #21)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewBlocks(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    const groupId = ids[1];
+
+    // Control: picked on its own, the group's "Reorder inside" is live —
+    // so the disabled assertion below is really about the selection.
+    await overviewBoxButton(page, groupId, 'pick').click();
+    await expect(overviewBoxButton(page, groupId, 'enter')).toBeEnabled();
+
+    // Add the paragraph before it to the selection, keeping the group
+    // as the active box. Stepping INTO a section is a single-block
+    // action — the root change would clear the selection the author
+    // just built, and "inside which of them?" has no answer (owner
+    // decision 2026-09-01).
+    await overviewBoxButton(page, ids[0], 'pick').click();
+    await overviewBoxButton(page, groupId, 'pick').click({ modifiers: ['Control'] });
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+    await expect(overviewBoxButton(page, groupId, 'enter')).toBeDisabled();
+
+    // Dropping back to one block restores it. Alt+click removes the
+    // paragraph and leaves the group both selected and active — a
+    // plain click on the active box is the disclosure toggle, which
+    // closes the strip altogether.
+    await overviewBoxButton(page, ids[0], 'pick').click({ modifiers: ['Alt'] });
+    await expect(ovSelectedBoxes(page)).toHaveCount(1);
+    await expect(overviewBoxButton(page, groupId, 'enter')).toBeEnabled();
+  });
+
   test('a locked member at the document edge does not kill an arrow whose move is legal (issue #21)', async ({ page }) => {
     await openNewPost(page);
     await seedOverviewParagraphs(page);

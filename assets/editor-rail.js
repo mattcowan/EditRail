@@ -4706,6 +4706,14 @@
           label,
           i + 1
         ));
+        // Stepping INTO a section is a single-block action: the root
+        // change would clear the selection the author just built, and
+        // "inside WHICH of them?" has no answer while several blocks
+        // are selected. Disabled in group mode rather than silently
+        // dropping the selection (owner decision 2026-09-01).
+        // Revisited for contiguous selections in the follow-up issue —
+        // see the R12 note in private/roadmap.md.
+        enter.disabled = groupActive;
         enter.addEventListener('click', function () {
           drillTo(clientId);
         });
