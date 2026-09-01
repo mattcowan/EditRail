@@ -4700,12 +4700,29 @@
         // action). The visible text leads the accessible name (WCAG
         // 2.5.3 Label in Name).
         enter.textContent = __('Reorder inside', 'toolrail');
-        enter.setAttribute('aria-label', sprintf(
-          /* translators: 1: block title, 2: its position. */
-          __('Reorder inside %1$s, position %2$d', 'toolrail'),
-          label,
-          i + 1
-        ));
+        // The name is group-scoped in group mode, like both arrows —
+        // otherwise a browse-mode pass reads "2 blocks selected", two
+        // group-scoped arrows, then a single-block "Reorder inside
+        // Group, position 2" (MR review 2026-09-01). The visible text
+        // still LEADS the accessible name either way (WCAG 2.5.3),
+        // and the group form states why the button is disabled.
+        enter.setAttribute('aria-label', groupActive
+          ? sprintf(
+            /* translators: %d: number of selected blocks. */
+            _n(
+              'Reorder inside — not available while %d block is selected',
+              'Reorder inside — not available while %d blocks are selected',
+              groupSize,
+              'toolrail'
+            ),
+            groupSize
+          )
+          : sprintf(
+            /* translators: 1: block title, 2: its position. */
+            __('Reorder inside %1$s, position %2$d', 'toolrail'),
+            label,
+            i + 1
+          ));
         // Stepping INTO a section is a single-block action: the root
         // change would clear the selection the author just built, and
         // "inside WHICH of them?" has no answer while several blocks
@@ -5213,6 +5230,15 @@
    * announced, and the zoom refits to the new root.
    */
   function drillTo(root, announcePrefix) {
+    // A root change ALWAYS drops the selection (each level owns its
+    // own), so the "it went away and nothing said so" fix belongs
+    // HERE, not at the doors. Three callers can reach this with a
+    // group selected — the breadcrumb, "Up one level", and the forced
+    // climb when the drilled-into block is deleted — and guarding them
+    // one at a time is how the fourth gets missed. "Reorder inside"
+    // is the one door that refuses instead of announcing, because
+    // "inside which of them?" has no answer (MR review 2026-09-01).
+    var hadGroup = overviewSelectedIds.length > 1;
     overviewRoot = root || '';
     // Drilling INTO a section is touching it; climbing back to the top
     // level ('') is not — the last touched child stays the landing spot.
@@ -5248,8 +5274,12 @@
     }
     // wp.a11y.speak REPLACES the region's text, so a forced root change
     // (the drilled-into block was deleted) composes its reason into ONE
-    // message instead of racing two.
-    speak(announcePrefix ? announcePrefix + ' ' + message : message);
+    // message instead of racing two — and so does the dropped
+    // selection, as a suffix, the way the group move composes its
+    // locked-member note.
+    speak((announcePrefix ? announcePrefix + ' ' : '')
+      + message
+      + (hadGroup ? ' ' + __('Selection cleared.', 'toolrail') : ''));
   }
 
   /**

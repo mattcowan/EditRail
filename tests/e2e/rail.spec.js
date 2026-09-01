@@ -2705,6 +2705,13 @@ test.describe('section overview (R6)', () => {
     await expect(ovSelectedBoxes(page)).toHaveCount(2);
     await expect(overviewBoxButton(page, groupId, 'enter')).toBeDisabled();
 
+    // In group mode the button's NAME is group-scoped too, like both
+    // arrows — a browse-mode pass must not read "2 blocks selected",
+    // two group-scoped arrows, then a single-block "Reorder inside".
+    // The visible text still leads the name (WCAG 2.5.3).
+    await expect(overviewBoxButton(page, groupId, 'enter'))
+      .toHaveAttribute('aria-label', 'Reorder inside — not available while 2 blocks are selected');
+
     // Dropping back to one block restores it. Alt+click removes the
     // paragraph and leaves the group both selected and active — a
     // plain click on the active box is the disclosure toggle, which
@@ -2712,6 +2719,70 @@ test.describe('section overview (R6)', () => {
     await overviewBoxButton(page, ids[0], 'pick').click({ modifiers: ['Alt'] });
     await expect(ovSelectedBoxes(page)).toHaveCount(1);
     await expect(overviewBoxButton(page, groupId, 'enter')).toBeEnabled();
+    await expect(overviewBoxButton(page, groupId, 'enter'))
+      .toHaveAttribute('aria-label', /^Reorder inside Group/);
+  });
+
+  test('every root change that drops a group selection says so (issue #21)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewBlocks(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const topIds = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    const groupId = topIds[1];
+
+    // Drill in, then select both children.
+    const drillIn = async () => {
+      await overviewBoxButton(page, groupId, 'pick').click();
+      await overviewBoxButton(page, groupId, 'enter').click();
+      await expect(page.locator('#toolrail-overview .toolrail-ov-box')).toHaveCount(2);
+      return page.evaluate((gid) =>
+        window.wp.data.select('core/block-editor').getBlockOrder(gid), groupId
+      );
+    };
+    let innerIds = await drillIn();
+
+    // Control first: a root change with only ONE box picked is the
+    // ordinary case and must stay quiet, or the assertions below would
+    // pass for the wrong reason.
+    await overviewBoxButton(page, innerIds[0], 'pick').click();
+    await page.locator('#toolrail-overview [data-ov-action="up-level"]').click();
+    await expect.poll(async () => ovAnnouncement(page)).toContain('Viewing all sections');
+    expect(await ovAnnouncement(page)).not.toContain('Selection cleared');
+
+    // Door 1 — "Up one level" with a group selected.
+    innerIds = await drillIn();
+    await overviewBoxButton(page, innerIds[0], 'pick').click();
+    await overviewBoxButton(page, innerIds[1], 'pick').click({ modifiers: ['Shift'] });
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+    await page.locator('#toolrail-overview [data-ov-action="up-level"]').click();
+    await expect(ovSelectedBoxes(page)).toHaveCount(0);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('Selection cleared.');
+
+    // Door 2 — a breadcrumb with a group selected.
+    innerIds = await drillIn();
+    await overviewBoxButton(page, innerIds[0], 'pick').click();
+    await overviewBoxButton(page, innerIds[1], 'pick').click({ modifiers: ['Shift'] });
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+    await page.locator('#toolrail-overview [data-ov-action="crumb"]').first().click();
+    await expect(ovSelectedBoxes(page)).toHaveCount(0);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('Selection cleared.');
+
+    // Door 3 — the forced climb when the drilled-into block is deleted
+    // out from under the author. The review named the first two; this
+    // one reaches the same drillTo and was never guarded either.
+    innerIds = await drillIn();
+    await overviewBoxButton(page, innerIds[0], 'pick').click();
+    await overviewBoxButton(page, innerIds[1], 'pick').click({ modifiers: ['Shift'] });
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+    await page.evaluate((gid) =>
+      window.wp.data.dispatch('core/block-editor').removeBlock(gid), groupId
+    );
+    // One composed announcement: the reason, the new level, and the
+    // selection — wp.a11y.speak replaces the region, so they cannot race.
+    await expect.poll(async () => ovAnnouncement(page)).toContain('was removed.');
+    expect(await ovAnnouncement(page)).toContain('Selection cleared.');
   });
 
   test('a locked member at the document edge does not kill an arrow whose move is legal (issue #21)', async ({ page }) => {
