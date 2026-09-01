@@ -41,8 +41,8 @@ Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a 
 == Changelog ==
 
 = 0.1.20 =
-* Section overview: select more than one block and move them as a group. Shift+click selects a range; Ctrl+click (Cmd on Mac) adds or removes one box; Alt+click removes one; a drag from empty space draws a rectangle that selects every box it touches. The arrows and a drag on any selected box move the whole group — the blocks keep their order and land next to each other. Keyboard: Shift+Arrow extends the selection, Ctrl+Space (Cmd+Space) toggles the focused box, and every selection change and group move is announced with the count. Escape clears the selection before it steps back out.
-* Locked blocks now show a padlock and the word "Locked" on their corner tag. A locked block in a selection stays where it is when the group moves, and the announcement says so.
+* Section overview: select more than one block and move them as a group. Shift+click selects a range; Ctrl+click (Cmd on Mac) adds or removes one box; Alt+click removes one; a drag from empty space draws a rectangle that selects every box it touches. Each selected outline shows a tick mark, so you can see the full selection without color. The arrows and a drag on any selected box move the whole group — the blocks keep their order and land next to each other. Keyboard: Shift+Arrow extends the selection, Ctrl+Space (Cmd+Space) toggles the focused box, and every selection change and group move is announced with the count. Escape clears the selection before it steps back out.
+* Locked blocks now show a padlock and the word "Locked". The marker stays visible when the block is part of a selection. A locked block stays where it is when the group moves, and the announcement says so. The group arrows stay available while any other block in the selection can move.
 * A group whose blocks are not next to each other moves as more than one editing step, so undo can take more than one press for that move. A selection of neighboring blocks moves as one step — the same result List View writes.
 
 = 0.1.19 =

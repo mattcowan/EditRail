@@ -3196,6 +3196,11 @@
   // Padlock for the locked-box corner tag (visual only; the pick
   // button's accessible name carries the state to AT).
   var OVERVIEW_LOCK_ICON = '<svg viewBox="0 0 24 24" width="10" height="10" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm-3 8V7a3 3 0 0 1 6 0v3H9z"/></svg>';
+  // The selection mark's tick. A SHAPE on its own solid chip, because
+  // the members of a group selection other than the active one show no
+  // controls strip, and a border hue shift alone cannot carry the
+  // state (MR review 2026-08-31, finding 1).
+  var OVERVIEW_CHECK_ICON = '<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" focusable="false"><path fill="currentColor" d="M9.6 16.8 5 12.2l1.4-1.4 3.2 3.2 8-8L19 7.4z"/></svg>';
   // Pan offset (visual px, ≥0) down the current root, and the author's
   // explicit zoom (0 = fit the current root). Together they make a very
   // long document SCROLLABLE in the overview instead of shrinking it
@@ -4555,18 +4560,36 @@
       var tag = settingsRow('span', 'toolrail-ov-tag');
       tag.textContent = label;
       tag.setAttribute('aria-hidden', 'true');
+      li.appendChild(tag);
+
+      // Selection mark: a tick on its own chip, at the corner opposite
+      // the name tag. Built for every box and revealed by CSS on
+      // .is-selected, so the marquee's live class toggles need no
+      // rebuild. It is the non-colour cue 1.4.11 wants — the
+      // #3858e9 → #1d35b4 border shift measures 1.68:1, and forced
+      // colours flatten it away entirely (MR review 2026-08-31,
+      // finding 1). aria-hidden: the pick button's name carries the
+      // state to AT.
+      var mark = settingsRow('span', 'toolrail-ov-selectmark');
+      mark.setAttribute('aria-hidden', 'true');
+      mark.innerHTML = OVERVIEW_CHECK_ICON;
+      li.appendChild(mark);
+
       if (!movable) {
         // Visible lock annotation (plan review 2026-08-31): before
         // this, a locked box looked like any other until its arrows
-        // came up disabled. aria-hidden with the tag — the pick
+        // came up disabled. A DIRECT child of the box, never part of
+        // the name tag — the tag is hidden while a box is selected,
+        // which took the lock marker away at exactly the moment the
+        // author was deciding whether to press the group arrow (MR
+        // review 2026-08-31, finding 2). aria-hidden: the pick
         // button's name carries "locked" to AT.
         var lockTag = settingsRow('span', 'toolrail-ov-locktag');
+        lockTag.setAttribute('aria-hidden', 'true');
         lockTag.innerHTML = OVERVIEW_LOCK_ICON + ' ';
         lockTag.appendChild(document.createTextNode(__('Locked', 'toolrail')));
-        tag.appendChild(document.createTextNode(' '));
-        tag.appendChild(lockTag);
+        li.appendChild(lockTag);
       }
-      li.appendChild(tag);
 
       var controls = settingsRow('div', 'toolrail-ov-controls');
       controls.hidden = !isActive;
@@ -4597,11 +4620,17 @@
       // while ANY member is movable; the move engine excludes the
       // locked members and the announcement says so.
       var groupMembers = groupActive ? overviewSelectionInOrder() : [];
-      var groupCanMove = groupMembers.some(function (id) {
+      // The edge tests run against the MOVABLE members, never the
+      // extreme members: a locked block sitting at a document edge
+      // inside the selection stays where it is, so testing against it
+      // vetoed a move that is perfectly legal for the rest — both
+      // arrows could go dead while the strip said "3 blocks selected"
+      // and nothing was announced (MR review 2026-08-31, finding 3).
+      var groupMovable = groupMembers.filter(function (id) {
         return overviewCanMove(id);
       });
-      var firstMemberAt = groupActive ? order.indexOf(groupMembers[0]) : -1;
-      var lastMemberAt = groupActive ? order.indexOf(groupMembers[groupMembers.length - 1]) : -1;
+      var firstMovableAt = groupMovable.length ? order.indexOf(groupMovable[0]) : -1;
+      var lastMovableAt = groupMovable.length ? order.indexOf(groupMovable[groupMovable.length - 1]) : -1;
 
       var upBtn = document.createElement('button');
       upBtn.type = 'button';
@@ -4621,7 +4650,7 @@
           i + 1
         ));
       upBtn.disabled = groupActive
-        ? (firstMemberAt <= 0 || !groupCanMove)
+        ? (!groupMovable.length || firstMovableAt <= 0)
         : (i === 0 || !movable);
       upBtn.addEventListener('click', function () {
         if (groupActive) {
@@ -4650,7 +4679,7 @@
           i + 1
         ));
       downBtn.disabled = groupActive
-        ? (lastMemberAt >= order.length - 1 || !groupCanMove)
+        ? (!groupMovable.length || lastMovableAt >= order.length - 1)
         : (i === order.length - 1 || !movable);
       downBtn.addEventListener('click', function () {
         if (groupActive) {
@@ -4863,21 +4892,37 @@
     } else if (locked.length) {
       lockedSuffix = ' ' + sprintf(
         /* translators: %d: number of locked blocks. */
-        __('%d locked blocks stay where they are.', 'toolrail'),
+        _n(
+          '%d locked block stays where it is.',
+          '%d locked blocks stay where they are.',
+          locked.length,
+          'toolrail'
+        ),
         locked.length
       );
     }
     if (!movable.length) {
-      speak(sprintf(
-        /* translators: %d: number of selected blocks. */
-        _n(
-          'The selected block is locked and cannot be moved.',
-          'The %d selected blocks are locked and cannot be moved.',
-          members.length,
-          'toolrail'
-        ),
-        members.length
-      ));
+      // One block names itself (reusing the single path's string);
+      // more than one counts. Both _n forms carry the same
+      // placeholder — a locale whose plural rule picks the first form
+      // for n≠1 must still be able to insert the count (MR review
+      // 2026-08-31, finding 4).
+      speak(members.length === 1
+        ? sprintf(
+          /* translators: %s: block title. */
+          __('%s cannot be moved.', 'toolrail'),
+          overviewBlockLabel(members[0])
+        )
+        : sprintf(
+          /* translators: %d: number of selected blocks. */
+          _n(
+            'The %d selected block is locked and cannot be moved.',
+            'The %d selected blocks are locked and cannot be moved.',
+            members.length,
+            'toolrail'
+          ),
+          members.length
+        ));
       return;
     }
     gap = Math.min(Math.max(0, gap), order.length);
@@ -4995,15 +5040,29 @@
     if (!members.length) {
       return;
     }
+    // Step past the nearest block OUTSIDE the movable set. The edge
+    // test must use the movable members, not the extreme members —
+    // the same defect as the arrows' disabled state (MR review
+    // 2026-08-31, finding 3), and the half of it the review did not
+    // name: fixing only the button would have left the arrow live and
+    // the click a silent no-op, which is worse than a dead arrow.
+    var movable = members.filter(function (id) {
+      return overviewCanMove(id);
+    });
+    if (!movable.length) {
+      // Nothing can move — the engine owns the "all locked" message.
+      moveOverviewBlocksTo(members, 0, focusAction);
+      return;
+    }
     var gap;
     if (delta < 0) {
-      var first = order.indexOf(members[0]);
+      var first = order.indexOf(movable[0]);
       if (first <= 0) {
         return;
       }
       gap = first - 1;
     } else {
-      var last = order.indexOf(members[members.length - 1]);
+      var last = order.indexOf(movable[movable.length - 1]);
       if (last === -1 || last >= order.length - 1) {
         return;
       }

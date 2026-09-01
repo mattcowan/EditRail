@@ -2618,10 +2618,110 @@ test.describe('section overview (R6)', () => {
     await overviewBoxButton(page, ids[1], 'pick').click({ modifiers: ['Shift'] });
     await expect.poll(async () => ovAnnouncement(page)).toContain('2 blocks selected. 1 is locked and cannot move.');
 
+    // The lock marker SURVIVES selection — it is the state the group
+    // arrow is about to act on, so hiding it there was exactly
+    // backwards (MR review 2026-08-31, finding 2). Before the fix the
+    // badge lived inside the name tag, which is display:none while a
+    // box is selected.
+    await expect(lockedBox).toHaveClass(/is-selected/);
+    await expect(lockedBox.locator('.toolrail-ov-locktag')).toBeVisible();
+
     await overviewBoxButton(page, ids[1], 'down').click();
 
-    // A moved past B and C; locked B stayed exactly where it was.
+    // ONE press moves the movable member exactly ONE row: P-A steps
+    // past locked P-B, which stays exactly where it was.
+    //
+    // This expectation moved with the finding-3 fix, and the intent is
+    // unchanged — only the arithmetic the arrow uses. The step used to
+    // be measured from the last MEMBER, so a locked member at the end
+    // of the selection made the first press jump TWO rows (P-A over
+    // both P-B and P-C) and every press after it jump one. Measured
+    // from the last MOVABLE member it is one row every time.
+    await expect.poll(async () => overviewContents(page)).toEqual(['P-B', 'P-A', 'P-C', 'P-D', 'P-E', 'P-F']);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('stays where it is.');
+
+    // Pressing again steps one more row — the cadence is now uniform.
+    // The group's strip stays anchored to the ACTIVE box (P-B, the one
+    // the range click landed on), so that is where the arrow lives —
+    // P-A is a member, but a member without the disclosure open.
+    await expect(page.locator('#toolrail-overview .toolrail-ov-controls:not([hidden])')).toHaveCount(1);
+    await overviewBoxButton(page, ids[1], 'down').click();
     await expect.poll(async () => overviewContents(page)).toEqual(['P-B', 'P-C', 'P-A', 'P-D', 'P-E', 'P-F']);
+  });
+
+  test('a group selection marks every member with a shape, not a colour shift (issue #21)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+
+    await overviewBoxButton(page, ids[0], 'pick').click();
+    await overviewBoxButton(page, ids[2], 'pick').click({ modifiers: ['Shift'] });
+    await expect(ovSelectedBoxes(page)).toHaveCount(3);
+
+    // Only the ACTIVE member shows a controls strip; the other two
+    // carried nothing but a border hue shift measuring 1.68:1, under
+    // 1.4.11's 3:1 for a state indicator — and forced colours flatten
+    // every box's border to Highlight, erasing even that (MR review
+    // 2026-08-31, finding 1). Every member now carries a mark of its
+    // own, so the state does not depend on colour at all.
+    await expect(page.locator('#toolrail-overview .toolrail-ov-controls:not([hidden])')).toHaveCount(1);
+    await expect(page.locator('#toolrail-overview .toolrail-ov-box.is-selected .toolrail-ov-selectmark')).toHaveCount(3);
+    for (const id of [ids[0], ids[1], ids[2]]) {
+      await expect(page.locator(
+        `#toolrail-overview .toolrail-ov-box[data-clientid="${id}"] .toolrail-ov-selectmark`
+      )).toBeVisible();
+    }
+    // Control: an unselected box's mark stays hidden, so the assertion
+    // above is really tracking selection and not just "the node exists".
+    await expect(page.locator(
+      `#toolrail-overview .toolrail-ov-box[data-clientid="${ids[4]}"] .toolrail-ov-selectmark`
+    )).toBeHidden();
+  });
+
+  test('a locked member at the document edge does not kill an arrow whose move is legal (issue #21)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+    // Lock the LAST block, so a selection containing it sits against
+    // the end of the document.
+    await page.evaluate(() => {
+      const sel = window.wp.data.select('core/block-editor');
+      const ids = sel.getBlockOrder('');
+      window.wp.data.dispatch('core/block-editor').updateBlockAttributes(
+        ids[5], { lock: { move: true, remove: false } }
+      );
+    });
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+
+    // Guard the guard: core must genuinely refuse to move P-F, or this
+    // proves nothing.
+    const refused = await page.evaluate((id) => {
+      const sel = window.wp.data.select('core/block-editor');
+      return typeof sel.canMoveBlocks === 'function' ? !sel.canMoveBlocks([id], '') : null;
+    }, ids[5]);
+    test.skip(refused === null, 'canMoveBlocks is not on this WordPress');
+    expect(refused).toBe(true);
+
+    // Select P-D (movable, index 3) and the locked P-F (index 5).
+    await overviewBoxButton(page, ids[3], 'pick').click();
+    await overviewBoxButton(page, ids[5], 'pick').click({ modifiers: ['Control'] });
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+
+    // The down arrow was disabled because the LAST member sat at the
+    // document end — but the movable member has a legal move, and the
+    // engine performs it correctly when asked (MR review 2026-08-31,
+    // finding 3). Enabled now, and the click really moves.
+    const down = overviewBoxButton(page, ids[5], 'down');
+    await expect(down).toBeEnabled();
+    await down.click();
+
+    // P-D stepped past P-E; the locked P-F never moved.
+    await expect.poll(async () => overviewContents(page)).toEqual(['P-A', 'P-B', 'P-C', 'P-E', 'P-D', 'P-F']);
     await expect.poll(async () => ovAnnouncement(page)).toContain('stays where it is.');
   });
 

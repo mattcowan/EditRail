@@ -1240,12 +1240,44 @@ span.toolrail-ov-crumb {
     list-style: none;
 }
 
+/* Selected state. The border hue shift and the wash are the
+   at-a-glance read; neither is the STATE cue — #3858e9 → #1d35b4
+   measures 1.68:1, under the 3:1 1.4.11 asks of a component-state
+   indicator, and the wash sits over arbitrary canvas content with no
+   guaranteed ratio. The cue that carries the state is the
+   .toolrail-ov-selectmark chip below (MR review 2026-08-31,
+   finding 1). */
 .toolrail-ov-box.is-selected {
     z-index: 1;
     border-color: #1d35b4;
+    background: rgba(56, 88, 233, 0.16);
     box-shadow:
         0 0 0 2px rgba(255, 255, 255, 0.95),
         inset 0 0 0 2px rgba(255, 255, 255, 0.95);
+}
+
+/* The selection mark: a tick on its own solid chip, at the corner
+   opposite the name tag (top-left) and clear of the controls strip.
+   Built for every box, revealed here — so the marquee's live class
+   toggles need no rebuild. This is what a group selection's non-active
+   members have instead of a controls strip. */
+.toolrail-ov-selectmark {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    display: none;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    background: #1d35b4;
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.9);
+    border-radius: 3px;
+    pointer-events: none;
+}
+
+.toolrail-ov-box.is-selected .toolrail-ov-selectmark {
+    display: grid;
 }
 
 /* The whole box is one focusable disclosure. Transparent — the content
@@ -1367,6 +1399,29 @@ span.toolrail-ov-crumb {
 .toolrail-ov-box.is-locked {
     border-style: dashed;
     border-color: #6b7194;
+}
+
+/* The lock chip sits at the BOTTOM-left, as a child of the box rather
+   than of the name tag: the tag is hidden while a box is selected, so
+   a lock marker inside it disappeared exactly when the author was
+   deciding whether to press the group arrow (MR review 2026-08-31,
+   finding 2). Bottom-left keeps it clear of the tag and the controls
+   strip (top-left) and the selection mark (top-right). */
+.toolrail-ov-locktag {
+    position: absolute;
+    bottom: 2px;
+    left: 2px;
+    max-width: calc(100% - 8px);
+    padding: 1px 6px;
+    background: rgba(30, 30, 30, 0.85);
+    color: #fff;
+    border-radius: 3px;
+    font-size: 11px;
+    line-height: 16px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
 }
 
 .toolrail-ov-locktag svg {
@@ -1545,6 +1600,32 @@ body.toolrail-ov-dragging * {
        own "inactive", and the dashed style survives on its own. */
     .toolrail-ov-box.is-locked {
         border-color: GrayText;
+    }
+
+    /* Selection has to survive the OS palette too. Every box's border
+       is forced to Highlight by the rule above, so the author colors
+       that distinguished a selected box are gone — the mark's own
+       chip and an outline (a width/style cue, not a color one) carry
+       it instead. The wash must be DROPPED: forced colors would make
+       it an OPAQUE system color and paint the document out, the same
+       trap the veil and the marquee already document (MR review
+       2026-08-31, finding 1). */
+    .toolrail-ov-box.is-selected {
+        background: none;
+        outline: 2px solid CanvasText;
+        outline-offset: 1px;
+    }
+
+    .toolrail-ov-selectmark {
+        background: Highlight;
+        color: HighlightText;
+        border-color: CanvasText;
+    }
+
+    .toolrail-ov-locktag {
+        background: Canvas;
+        color: CanvasText;
+        border: 1px solid CanvasText;
     }
 
     .toolrail-ov-btn:focus-visible,
