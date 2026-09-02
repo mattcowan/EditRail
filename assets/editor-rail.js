@@ -46,6 +46,23 @@
  * aria-disabled — reachable, announced, inert — and every other tool
  * stays live. Mode changes fire the 'toolrail:mode-changed' window
  * event with {mode} in detail; window.toolrail.getMode() reads it.
+ *
+ * EXTENSION HOOKS (0.1.21, the first post-release patch on the roadmap's
+ * "guides" phase — built by the toolrail-guides provider plugin):
+ *   window.toolrail.prefs.get(key) / .set(key, stringValue)
+ *     Per-user preferences over the same readKey/writeKey pair the rail
+ *     uses (core/preferences, scope 'toolrail', synced to the account),
+ *     so an extension's state follows the author like the rail's own.
+ *     Keys MUST start with 'toolrail-ext:' (then the extension's own
+ *     prefix, e.g. 'toolrail-ext:guides:snap'); values are strings, null
+ *     means never written. Folding an extension into this file later is
+ *     a file move — its stored keys do not change.
+ *   window.toolrail.getCanvasGeometry()
+ *     Where the canvas document is on screen, so an overlay drawn in the
+ *     PARENT document (rulers, guides) can line up with it in every rail
+ *     mode: { frameRect, scale, pan, scrollX, scrollY, mode }. A canvas
+ *     document point maps to the parent viewport as
+ *     frameRect.left + (x - scrollX) * scale (and the same for y).
  */
 (function (wp) {
   'use strict';
@@ -1815,7 +1832,22 @@
       var item = document.createElement('button');
       item.type = 'button';
       item.className = 'toolrail-flyout-item';
-      item.setAttribute('role', 'menuitem');
+      // A toggle child (onActivate + isActive — a provider's "Snap to
+      // guides") is a checkbox item, so its state is perceivable: a
+      // plain menuitem has no way to say "on". The flyout closes on
+      // activation, so the state is read once, here, per open.
+      if (isToggleTool(child)) {
+        item.setAttribute('role', 'menuitemcheckbox');
+        var checked = false;
+        try {
+          checked = !!child.isActive();
+        } catch (err) {
+          checked = false;
+        }
+        item.setAttribute('aria-checked', String(checked));
+      } else {
+        item.setAttribute('role', 'menuitem');
+      }
       item.dataset.tool = child.id;
       item.tabIndex = -1;
       if (child.icon) {
@@ -7039,6 +7071,115 @@
   }
 
   // -------------------------------------------------------------------
+  // Extension hooks (see the file header). Both are additive and read
+  // only what the rail already tracks — nothing here changes rail state.
+  // -------------------------------------------------------------------
+
+  var EXT_PREFS_PREFIX = 'toolrail-ext:';
+
+  /**
+   * Validate an extension preference key. The prefix keeps an extension
+   * out of the rail's own keys (a stray write to 'toolrail-quick-slots'
+   * would empty the rail) and out of every OTHER extension's keys, and
+   * it is what makes a later fold-in a file move: the key is already
+   * the one the rail would use.
+   *
+   * @param {*} key
+   * @return {string|null} The key, or null (with a console warning).
+   */
+  function extPrefKey(key) {
+    if (typeof key !== 'string' || key.indexOf(EXT_PREFS_PREFIX) !== 0 || key.length === EXT_PREFS_PREFIX.length) {
+      warn('prefs: key must be a string starting with "' + EXT_PREFS_PREFIX + '" — got ' + JSON.stringify(key) + '.');
+      return null;
+    }
+    return key;
+  }
+
+  var extPrefs = {
+    /**
+     * @param {string} key A 'toolrail-ext:…' key.
+     * @return {string|null} The stored string; null = never written or
+     *                       key refused.
+     */
+    get: function (key) {
+      var k = extPrefKey(key);
+      return k === null ? null : readKey(k);
+    },
+    /**
+     * Strings only — JSON-encode structured data — because readKey
+     * stringifies on the way back out, and a caller that stored a
+     * number would read a string and not know why.
+     *
+     * @param {string} key   A 'toolrail-ext:…' key.
+     * @param {string} value
+     * @return {boolean} Whether the write was accepted.
+     */
+    set: function (key, value) {
+      var k = extPrefKey(key);
+      if (k === null) {
+        return false;
+      }
+      if (typeof value !== 'string') {
+        warn('prefs.set("' + k + '"): value must be a string (JSON-encode structured data) — got ' + typeof value + '.');
+        return false;
+      }
+      writeKey(k, value);
+      return true;
+    }
+  };
+
+  /**
+   * The canvas document's on-screen geometry, in parent-viewport px.
+   *
+   * frameRect is the iframe ELEMENT's transformed box, so it already
+   * carries the Section overview's scale and pan translate; scale is
+   * the same ratio overviewBlockViewportRect() uses (on-screen width
+   * over layout width — 1 outside the overview). scrollX/scrollY are the
+   * canvas document's own scroll, which the parent cannot otherwise see.
+   * Non-iframed editors (a page with a pre-v3 block) fall back to the
+   * content region at scale 1.
+   *
+   * @return {Object|null} { frameRect: {left, top, width, height},
+   *                         scale, pan, scrollX, scrollY, mode } or null
+   *                         when there is no canvas to measure.
+   */
+  function getCanvasGeometry() {
+    var frame = canvasFrame();
+    var doc = canvasDoc();
+    var rect;
+    var scale = 1;
+    var scrollX = 0;
+    var scrollY = 0;
+    if (frame) {
+      var f = frame.getBoundingClientRect();
+      rect = { left: f.left, top: f.top, width: f.width, height: f.height };
+      scale = frame.offsetWidth ? f.width / frame.offsetWidth : 1;
+      var win = doc ? doc.defaultView : null;
+      if (win) {
+        scrollX = win.scrollX || win.pageXOffset || 0;
+        scrollY = win.scrollY || win.pageYOffset || 0;
+      }
+    } else {
+      var content = contentRegion();
+      if (!content) {
+        return null;
+      }
+      var c = content.getBoundingClientRect();
+      rect = { left: c.left, top: c.top, width: c.width, height: c.height };
+      scrollX = content.scrollLeft || 0;
+      scrollY = content.scrollTop || 0;
+    }
+    return {
+      frameRect: rect,
+      scale: scale,
+      pan: overviewOpen ? overviewPan : 0,
+      scrollX: scrollX,
+      scrollY: scrollY,
+      mode: railMode()
+    };
+  }
+
+  // -------------------------------------------------------------------
   // Public API
   // -------------------------------------------------------------------
 
@@ -7057,6 +7198,8 @@
     getActiveTool: function () { return activeTool; },
     setActiveTool: setActiveTool,
     getMode: railMode,
+    prefs: extPrefs,
+    getCanvasGeometry: getCanvasGeometry,
     getDock: function () { return position.dock; },
     setDock: function (dock) { return setDock(dock); },
     getPosition: function () { return { dock: position.dock, x: position.x, y: position.y }; }

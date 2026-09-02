@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.1.20
+Stable tag: 0.1.21
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -39,6 +39,9 @@ Against your user account on this site, the same as pinned blocks and saved sets
 Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a position under "Toolbar position".
 
 == Changelog ==
+
+= 0.1.21 =
+* Two hooks for extension plugins: `window.toolrail.prefs` reads and writes per-user preferences under a `toolrail-ext:` key prefix, and `window.toolrail.getCanvasGeometry()` reports where the canvas is on screen, with its scale and pan. The first plugin that uses them is Toolrail Guides (rulers, guides and snap). A tool inside a flyout that turns something on and off now shows its state to screen readers as a checked menu item. Nothing else changes for authors.
 
 = 0.1.20 =
 * Section overview: select more than one block and move them as a group. Shift+click selects a range; Ctrl+click (Cmd on Mac) adds or removes one box; Alt+click removes one; a drag from empty space draws a rectangle that selects every box it touches. Each selected outline shows a tick mark, so you can see the full selection without color. The arrows and a drag on any selected box move the whole group — the blocks keep their order and land next to each other. Keyboard: Shift+Arrow extends the selection, Ctrl+Space (Cmd+Space) toggles the focused box, and every selection change and group move is announced with the count. Escape closes the overview, the same as the Done button; while you drag an outline or draw a rectangle, Escape cancels that first and says so.

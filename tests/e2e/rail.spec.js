@@ -1084,6 +1084,49 @@ test.describe('registration API', () => {
     expect(await blockNames(page)).toContain('core/quote');
   });
 
+  test('a toggle child renders as a checked menu item', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.evaluate(() => {
+      window.__e2eSnap = true;
+      window.toolrail.registerTool({
+        id: 'e2e-parent',
+        label: 'E2E Parent',
+        onActivate: () => {},
+      });
+      window.toolrail.registerTool({
+        id: 'e2e-toggle',
+        label: 'E2E Toggle',
+        parent: 'e2e-parent',
+        onActivate: () => { window.__e2eSnap = !window.__e2eSnap; },
+        isActive: () => window.__e2eSnap,
+      });
+      window.toolrail.registerTool({
+        id: 'e2e-plain',
+        label: 'E2E Plain',
+        parent: 'e2e-parent',
+        onActivate: () => {},
+      });
+    });
+
+    await page.locator('#toolrail-rail [data-tool="e2e-parent"]').focus();
+    await page.keyboard.press('ArrowRight');
+    const toggle = page.locator('.toolrail-flyout [data-tool="e2e-toggle"]');
+    await expect(toggle).toHaveAttribute('role', 'menuitemcheckbox');
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    // Control: a child without isActive stays a plain menuitem.
+    const plain = page.locator('.toolrail-flyout [data-tool="e2e-plain"]');
+    await expect(plain).toHaveAttribute('role', 'menuitem');
+    await expect(plain).not.toHaveAttribute('aria-checked', /.*/);
+
+    // Activating flips it; the next open reads the new state.
+    await toggle.click();
+    await expect(page.locator('.toolrail-flyout')).toHaveCount(0);
+    await page.locator('#toolrail-rail [data-tool="e2e-parent"]').focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(page.locator('.toolrail-flyout [data-tool="e2e-toggle"]')).toHaveAttribute('aria-checked', 'false');
+  });
+
   test('malformed descriptors are refused', async ({ page }) => {
     await openNewPost(page);
 
@@ -1122,6 +1165,72 @@ test.describe('registration API', () => {
     // The rail is still painting pressed state — the sweep survived.
     await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').click();
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveAttribute('aria-pressed', 'true');
+  });
+});
+
+/**
+ * The two extension hooks added for the guides plugin (0.1.21). Both are
+ * read-mostly; the prefs test writes ONE namespaced key, which the shared
+ * admin account then carries — harmless, and the key is the test's own.
+ */
+test.describe('extension hooks', () => {
+  test('prefs accepts only toolrail-ext: keys and string values', async ({ page }) => {
+    await openNewPost(page);
+
+    const results = await page.evaluate(() => {
+      const p = window.toolrail.prefs;
+      return {
+        badGet: p.get('toolrail-quick-slots'),
+        badSet: p.set('toolrail-quick-slots', '[]'),
+        emptyPrefix: p.set('toolrail-ext:', 'x'),
+        nonString: p.set('toolrail-ext:e2e:num', 1),
+        goodSet: p.set('toolrail-ext:e2e:key', 'value-' + 1),
+        goodGet: p.get('toolrail-ext:e2e:key'),
+        unset: p.get('toolrail-ext:e2e:never-written'),
+      };
+    });
+    expect(results).toEqual({
+      badGet: null,
+      badSet: false,
+      emptyPrefix: false,
+      nonString: false,
+      goodSet: true,
+      goodGet: 'value-1',
+      unset: null,
+    });
+    // It landed in the same store, under the same scope, as the rail's
+    // own keys — the fold-in promise ("stored keys do not change").
+    expect(await getPref(page, 'toolrail-ext:e2e:key')).toBe('value-1');
+    // Control: the refused write did not touch the rail's key.
+    expect(await getPref(page, 'toolrail-quick-slots')).not.toBe('[]');
+  });
+
+  test('getCanvasGeometry tracks the canvas frame in edit and overview modes', async ({ page }) => {
+    await openNewPost(page);
+
+    const edit = await page.evaluate(() => {
+      const g = window.toolrail.getCanvasGeometry();
+      const f = document.querySelector('iframe[name="editor-canvas"]').getBoundingClientRect();
+      return { g, frame: { left: f.left, top: f.top, width: f.width, height: f.height } };
+    });
+    expect(edit.g.mode).toBe('edit');
+    expect(edit.g.scale).toBeCloseTo(1, 3);
+    expect(edit.g.pan).toBe(0);
+    expect(edit.g.scrollY).toBe(0);
+    expect(edit.g.frameRect).toEqual(edit.frame);
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    const overview = await page.evaluate(() => {
+      const g = window.toolrail.getCanvasGeometry();
+      const frame = document.querySelector('iframe[name="editor-canvas"]');
+      const f = frame.getBoundingClientRect();
+      return { g, ratio: f.width / frame.offsetWidth, width: f.width };
+    });
+    expect(overview.g.mode).toBe('overview');
+    expect(overview.g.scale).toBeCloseTo(overview.ratio, 3);
+    expect(overview.g.scale).toBeLessThanOrEqual(1);
+    expect(overview.g.frameRect.width).toBeCloseTo(overview.width, 3);
   });
 });
 
