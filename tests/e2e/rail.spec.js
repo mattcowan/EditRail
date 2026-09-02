@@ -3066,6 +3066,76 @@ test.describe('section overview (R6)', () => {
     await expect(ovSelectedBoxes(page)).toHaveCount(1);
   });
 
+  test('the extension prefs API publishes a readiness signal that settles (0.1.21)', async ({ page }) => {
+    await openNewPost(page);
+
+    // The contract an extension writes against: a Promise, a
+    // synchronous read of the same state, and a window event at the
+    // same moment. Before this existed, an extension reading at
+    // script-load could get null for a key the account holds, because
+    // readKey only knows the STORE exists, not that its persistence
+    // has attached (MR review 2026-09-02).
+    const shape = await page.evaluate(() => ({
+      hasReady: !!(window.toolrail.prefs.ready && typeof window.toolrail.prefs.ready.then === 'function'),
+      hasIsReady: typeof window.toolrail.prefs.isReady === 'function',
+    }));
+    expect(shape.hasReady).toBe(true);
+    expect(shape.hasIsReady).toBe(true);
+
+    // It must actually SETTLE — a contract that never resolves would
+    // hang every consumer that awaits it. Resolve-or-timeout, so a
+    // hang fails loudly instead of stalling the spec.
+    const settled = await page.evaluate(() => Promise.race([
+      window.toolrail.prefs.ready.then(() => 'ready'),
+      new Promise((r) => setTimeout(() => r('timeout'), 10000)),
+    ]));
+    expect(settled).toBe('ready');
+    expect(await page.evaluate(() => window.toolrail.prefs.isReady())).toBe(true);
+
+    // Once settled, a round trip through the account store works.
+    const roundTrip = await page.evaluate(() => {
+      window.toolrail.prefs.set('toolrail-ext:spec:probe', 'kept');
+      return window.toolrail.prefs.get('toolrail-ext:spec:probe');
+    });
+    expect(roundTrip).toBe('kept');
+  });
+
+  test('a canceled drag whose release is never seen does not eat a later click (issue #21)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    await expect(ovSelectedBoxes(page)).toHaveCount(0);
+
+    const box = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[0]}"]`).boundingBox();
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx, cy + 120, { steps: 8 });
+    await expect(page.locator('#toolrail-overview .toolrail-ov-dropline')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect.poll(async () => ovAnnouncement(page)).toContain('Move canceled.');
+
+    // The release is NEVER dispatched — the pointer left the document,
+    // or the gesture was cancelled — so the one-shot listener is left
+    // armed with the overview still open.
+    //
+    // The next genuine click must still work. Without the fix that
+    // click's own mouseup spent the stale latch, and the `click` that
+    // followed was discarded, so the box never picked.
+    const target = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[2]}"]`).boundingBox();
+    await page.mouse.click(target.x + target.width / 2, target.y + target.height / 2);
+
+    await expect(ovSelectedBoxes(page)).toHaveCount(1);
+    await expect(page.locator(
+      `#toolrail-overview .toolrail-ov-box[data-clientid="${ids[2]}"] .toolrail-ov-controls`
+    )).toBeVisible();
+  });
+
   test('dragging a group that contains a locked block says what stayed behind (issue #21)', async ({ page }) => {
     await openNewPost(page);
     await seedOverviewParagraphs(page, true);

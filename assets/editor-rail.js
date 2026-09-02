@@ -57,6 +57,13 @@
  *     prefix, e.g. 'toolrail-ext:guides:snap'); values are strings, null
  *     means never written. Folding an extension into this file later is
  *     a file move — its stored keys do not change.
+ *   window.toolrail.prefs.ready / .isReady()
+ *     A read before the account's preferences have ATTACHED sees null
+ *     for a key the author has, and a write then can be lost — and an
+ *     extension's script runs before this file's own boot(). So await
+ *     `ready` (or listen for the 'toolrail:prefs-ready' window event)
+ *     and re-read. Reading eagerly first is fine; just do not treat
+ *     that first answer as final.
  *   window.toolrail.getCanvasGeometry()
  *     Where the canvas document is on screen, so an overlay drawn in the
  *     PARENT document (rulers, guides) can line up with it in every rail
@@ -224,6 +231,59 @@
       }
     }
     writeLocalKey(key, value);
+  }
+
+  // -------------------------------------------------------------------
+  // Preference READINESS (0.1.21 extension API).
+  //
+  // readKey only knows whether the core/preferences STORE exists — not
+  // whether its persistence layer has attached and hydrated the
+  // account's saved values. Before that attach, a key that IS stored on
+  // the account reads back null, and a write can be wiped when the
+  // persisted state lands. The rail repairs its OWN keys through
+  // watchPersistenceAttach(); an extension has no such hook, and reads
+  // at script-load time — which is BEFORE boot(), because boot is
+  // deferred to _wpLoadBlockEditor. So an extension could read null for
+  // a value the author has, or lose an accepted write (MR review
+  // 2026-09-02).
+  //
+  // The contract, deliberately ADDITIVE so nothing existing breaks:
+  // window.toolrail.prefs.ready is a Promise resolving once the rail's
+  // persistence watcher has settled, and 'toolrail:prefs-ready' fires
+  // on window at the same moment. isReady() is the synchronous read.
+  // An extension may read eagerly and simply re-read when this fires.
+  //
+  // Honest about what it means: "settled" is the point at which the
+  // rail's own migrated marker reads back after any attach, which is
+  // the same moment the rail trusts its own state. It is not a promise
+  // from core, which exposes no attach signal of its own.
+  // -------------------------------------------------------------------
+
+  var prefsReady = false;
+  var prefsReadyResolve = null;
+  var prefsReadyPromise = typeof window.Promise === 'function'
+    ? new window.Promise(function (resolve) { prefsReadyResolve = resolve; })
+    : null;
+
+  /** Fire the event. Separate from the one-shot Promise because a
+      repair AFTER the first settle is also a "re-read me" signal, and
+      a Promise can only resolve once. */
+  function emitPrefsReady() {
+    try {
+      window.dispatchEvent(new CustomEvent('toolrail:prefs-ready'));
+    } catch (e) {
+      /* No CustomEvent constructor — the Promise still resolved. */
+    }
+  }
+
+  function markPrefsReady() {
+    if (!prefsReady) {
+      prefsReady = true;
+      if (prefsReadyResolve) {
+        prefsReadyResolve();
+      }
+    }
+    emitPrefsReady();
   }
 
   /**
@@ -4259,8 +4319,19 @@
    */
   function latchOverviewCancelClick() {
     clearOverviewCancelLatch();
-    overviewCancelLatchUp = function () {
+    overviewCancelLatchUp = function (e) {
       clearOverviewCancelLatch();
+      // A fresh PRESS means the release this was waiting for happened
+      // somewhere unobservable — outside the document, or the pointer
+      // was cancelled — so the latch is stale and must be dropped, not
+      // spent on a click the author actually meant. Without this the
+      // listener stayed armed for the rest of the overview session and
+      // silently ate the next real click (MR review 2026-09-02).
+      // mousedown always precedes the click it belongs to, so clearing
+      // here is enough; closeOverview covers leaving the mode entirely.
+      if (e && e.type === 'mousedown') {
+        return;
+      }
       overviewDragConsumedClick = true;
       // Cleared next tick, exactly as a completed drag's latch is:
       // long enough to swallow the click this release produces, short
@@ -4270,11 +4341,13 @@
       }, 0);
     };
     document.addEventListener('mouseup', overviewCancelLatchUp, true);
+    document.addEventListener('mousedown', overviewCancelLatchUp, true);
   }
 
   function clearOverviewCancelLatch() {
     if (overviewCancelLatchUp) {
       document.removeEventListener('mouseup', overviewCancelLatchUp, true);
+      document.removeEventListener('mousedown', overviewCancelLatchUp, true);
       overviewCancelLatchUp = null;
     }
   }
@@ -7157,9 +7230,29 @@
 
   var extPrefs = {
     /**
+     * Resolves once the account's stored preferences are attached and
+     * trustworthy. Read eagerly if you like, then re-read when this
+     * settles: BEFORE it, a key the author has saved can read null,
+     * and a write can be lost when the persisted state lands. The
+     * 'toolrail:prefs-ready' window event fires at the same moment,
+     * for a consumer that would rather listen than await.
+     *
+     * null on a browser with no Promise — use the event there.
+     *
+     * @type {Promise<void>|null}
+     */
+    ready: prefsReadyPromise,
+    /**
+     * @return {boolean} Whether `ready` has already settled.
+     */
+    isReady: function () {
+      return prefsReady;
+    },
+    /**
      * @param {string} key A 'toolrail-ext:…' key.
-     * @return {string|null} The stored string; null = never written or
-     *                       key refused.
+     * @return {string|null} The stored string; null = never written,
+     *                       key refused, OR the preferences are not
+     *                       ready yet (see `ready`).
      */
     get: function (key) {
       var k = extPrefKey(key);
@@ -7333,6 +7426,10 @@
    */
   function watchPersistenceAttach() {
     if (!wp.data || typeof wp.data.subscribe !== 'function' || !prefsSelect()) {
+      // Nothing to wait for — this browser is on the localStorage
+      // fallback, where a read is immediately truthful. Signal ready so
+      // an extension awaiting it is never left hanging.
+      markPrefsReady();
       return;
     }
 
@@ -7344,6 +7441,7 @@
       }
       if (readKey(MIGRATED_KEY) !== null) {
         unsubscribe();
+        markPrefsReady();
         return;
       }
       repairing = true;
@@ -7364,8 +7462,20 @@
       }
       if (readKey(MIGRATED_KEY) !== null) {
         unsubscribe();
+        markPrefsReady();
       }
     }, 'core/preferences');
+
+    // Evaluate readiness ONCE up front as well. wp.data.subscribe only
+    // fires on CHANGES, so when the marker already reads back there may
+    // never be another change — and a consumer awaiting `ready` would
+    // hang forever (measured 2026-09-02: marker "1", isReady false, the
+    // Promise never settling). The subscription stays live so a later
+    // attach that wipes the marker is still repaired, and that repair
+    // re-fires the event for anyone listening.
+    if (readKey(MIGRATED_KEY) !== null) {
+      markPrefsReady();
+    }
   }
 
   // -------------------------------------------------------------------
