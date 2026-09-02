@@ -1,5 +1,5 @@
 /**
- * Editor Tool Rail — a Photoshop-familiar left toolbar for the block editor.
+ * Editor Tool Rail — a graphics-editor-style left toolbar for the block editor.
  *
  * Unlike a launcher rail, tools here ARM: selecting a tool means the next
  * click in the canvas inserts that tool's block at the click point, then the
@@ -17,7 +17,7 @@
  *
  * POSITION: the rail docks to the left edge by default, and can be moved to
  * the right edge (past the settings side panel), to a full-width bar at the
- * top or bottom, or torn off as a floating Photoshop-style palette. Drag it
+ * top or bottom, or torn off as a floating tool palette. Drag it
  * by the grip and release near an edge to snap; the settings dialog carries
  * the equivalent keyboard path. Surfaces open away from the docked edge — a
  * top rail opens its flyouts downward, a bottom rail upward. See the
@@ -320,7 +320,7 @@
   }
 
   // -------------------------------------------------------------------
-  // Rail position — docked to an edge, or floating like a Photoshop
+  // Rail position — docked to an edge, or floating like a graphics-editor
   // palette. A per-user account preference, same as the quick slots.
   //
   // The docks hang off the editor's OWN skeleton rather than being
@@ -6454,7 +6454,7 @@
     e.preventDefault();
 
     // Tear a docked rail off on first movement so it follows the pointer,
-    // the way a docked Photoshop palette does.
+    // the way a docked palette in a graphics editor does.
     if (!drag.torn) {
       drag.torn = true;
       var parent = skeletonBody();
@@ -6761,7 +6761,7 @@
     // pixels and summon a horizontal scrollbar strip at the section's
     // foot (the owner's screenshot, 2026-08-27). These step buttons are
     // the visible affordance instead — each renders only while there is
-    // more to scroll in its direction, Photoshop-style. Pointer sugar
+    // more to scroll in its direction, as in a graphics editor. Pointer sugar
     // like the grip (aria-hidden, unfocusable): wheel and touch scroll
     // the section directly, and the keyboard path is the arrow keys,
     // which scroll the focused tool into view.

@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Editor Tool Rail
  * Plugin URI:        https://mnc4.com/
- * Description:       A movable, Photoshop-familiar toolbar for the block editor — dock it to any edge or float it. Tools insert ordinary core blocks; other plugins and themes register their own tools through a small provider API.
+ * Description:       A movable, graphics-editor-style toolbar for the block editor. Click a tool, then click the canvas to insert a core block at that point.
  * Version:           0.1.21
  * Requires at least: 6.5
  * Requires PHP:      7.4
