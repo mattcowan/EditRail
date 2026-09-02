@@ -3263,6 +3263,9 @@
   // Latched for one tick after a completed drag so the click the
   // browser fires on the same button cannot ALSO toggle its controls.
   var overviewDragConsumedClick = false;
+  // The one-shot mouseup listener that arms that latch after Escape
+  // abandons a gesture (the button is still down at that point).
+  var overviewCancelLatchUp = null;
   // The block that was selected when the overview opened — its floating
   // toolbar stays alive over the zoomed canvas otherwise (owner
   // feedback 2026-08-27), so the selection is cleared for the
@@ -4007,13 +4010,19 @@
     }
     var groupIds = null;
     if (overviewSelectedIds.length > 1 && overviewSelectedIds.indexOf(clientId) !== -1) {
-      // Dragging any member drags the whole selection — its movable
-      // members, the way the group arrows move them. Refused only when
-      // NONE is movable; a partially locked group still drags.
-      groupIds = overviewSelectionInOrder().filter(function (id) {
+      // Dragging any member drags the whole selection. The FULL
+      // ordered selection goes to the move engine — locked members
+      // included — because the engine is what excludes them AND what
+      // composes the "stays where it is" note. Filtering them out here
+      // made a mixed group's DRAG announce only the moved count and
+      // never say what stayed, while the arrows (which pass the whole
+      // selection) said it correctly (MR review 2026-09-02).
+      // canMoveBlocks decides only whether the drag may START.
+      groupIds = overviewSelectionInOrder();
+      var anyMovable = groupIds.some(function (id) {
         return overviewCanMove(id);
       });
-      if (!groupIds.length) {
+      if (!anyMovable) {
         return;
       }
     } else if (!overviewCanMove(clientId)) {
@@ -4231,6 +4240,42 @@
         ? atEntry.rect.top - 4 - oRect.top
         : entries[entries.length - 1].rect.bottom + 2 - oRect.top;
       line.style.top = y + 'px';
+    }
+  }
+
+  /**
+   * Escape abandons a gesture while the mouse button is still DOWN.
+   * The release that follows fires a click on the nearest common
+   * ancestor of the press and the release — which IS the originating
+   * pick button when the pointer came back to it — so that box's
+   * disclosure would toggle after the cancel had already been
+   * announced. finishOverviewDrag removes the drag's own mouseup
+   * handler, so nothing was left to set the usual latch; arm it on the
+   * next release instead (MR review 2026-09-02).
+   *
+   * Tracked so closeOverview can drop it: a release that happens
+   * outside the document never arrives, and a stale one-shot listener
+   * would otherwise swallow a later, legitimate click.
+   */
+  function latchOverviewCancelClick() {
+    clearOverviewCancelLatch();
+    overviewCancelLatchUp = function () {
+      clearOverviewCancelLatch();
+      overviewDragConsumedClick = true;
+      // Cleared next tick, exactly as a completed drag's latch is:
+      // long enough to swallow the click this release produces, short
+      // enough to leave the next real one alone.
+      window.setTimeout(function () {
+        overviewDragConsumedClick = false;
+      }, 0);
+    };
+    document.addEventListener('mouseup', overviewCancelLatchUp, true);
+  }
+
+  function clearOverviewCancelLatch() {
+    if (overviewCancelLatchUp) {
+      document.removeEventListener('mouseup', overviewCancelLatchUp, true);
+      overviewCancelLatchUp = null;
     }
   }
 
@@ -5315,15 +5360,21 @@
   }
 
   /**
-   * Escape walks back out one layer at a time — cancel a marquee or
-   * drag, clear a multi-selection, collapse the open controls, then
-   * climb a level, then close — but ONLY when focus is inside the
-   * overlay (the help panel lesson: an Escape aimed at the inserter or
-   * a sidebar must never be hijacked) or a pointer gesture is in
-   * flight (its mousedown took no focus, and it must still be
-   * cancellable). Shift+Arrow extends the selection from the focused
-   * box and Ctrl+Space (Cmd+Space) toggles it (issue #21) — both live
-   * here so the pick buttons need no per-box key handlers.
+   * Escape has TWO outcomes (owner decision 2026-09-01): a pointer
+   * gesture in flight is abandoned, and otherwise the overview CLOSES
+   * in one press — the same thing "Done" does, which is what the bar's
+   * "Esc exits" hint promises. It no longer clears the selection,
+   * collapses the controls, or climbs a level; climbing has its own
+   * visible controls ("Up one level" and the breadcrumbs).
+   *
+   * It acts ONLY when focus is inside the overlay (the help panel
+   * lesson: an Escape aimed at the inserter or a sidebar must never be
+   * hijacked) or a pointer gesture is in flight (its mousedown took no
+   * focus, and it must still be cancellable).
+   *
+   * Shift+Arrow extends the selection from the focused box and
+   * Ctrl+Space (Cmd+Space) toggles it (issue #21) — both live here so
+   * the pick buttons need no per-box key handlers.
    */
   function onOverviewKeydown(e) {
     if (!overviewOpen) {
@@ -5364,10 +5415,12 @@
       if (overviewMarquee) {
         // Abandon the rectangle; the selection goes back as found.
         cancelOverviewMarquee(true);
+        latchOverviewCancelClick();
         speak(__('Selection rectangle canceled. Press Escape again to close the overview.', 'toolrail'));
       } else if (overviewDrag) {
         // Abandon an in-flight drag; nothing moves.
         finishOverviewDrag();
+        latchOverviewCancelClick();
         speak(__('Move canceled. Press Escape again to close the overview.', 'toolrail'));
       } else {
         closeOverview(true);
@@ -5845,6 +5898,7 @@
     overviewLastTouched = '';
     finishOverviewDrag();
     cancelOverviewMarquee(false);
+    clearOverviewCancelLatch();
     // Order matters here (owner feedback 2026-08-31 — no visible
     // scroll-to on close):
     //  1. Stamp toolrail-ov-closing FIRST: it keeps core's 0.4s iframe
@@ -7089,7 +7143,13 @@
    */
   function extPrefKey(key) {
     if (typeof key !== 'string' || key.indexOf(EXT_PREFS_PREFIX) !== 0 || key.length === EXT_PREFS_PREFIX.length) {
-      warn('prefs: key must be a string starting with "' + EXT_PREFS_PREFIX + '" — got ' + JSON.stringify(key) + '.');
+      // Describe the value, never SERIALIZE it: this validator takes
+      // arbitrary extension input, and JSON.stringify throws a
+      // TypeError on a BigInt or a circular object — which would turn
+      // a refusal that promises null into an exception thrown back at
+      // the caller (MR review 2026-09-02).
+      warn('prefs: key must be a string starting with "' + EXT_PREFS_PREFIX + '" — got '
+        + (typeof key === 'string' ? '"' + key + '"' : typeof key) + '.');
       return null;
     }
     return key;

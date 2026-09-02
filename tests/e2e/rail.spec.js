@@ -3026,6 +3026,82 @@ test.describe('section overview (R6)', () => {
     await expect(page.locator('#toolrail-overview')).toHaveCount(0);
   });
 
+  test('a canceled drag released back on its own box does not toggle that box (issue #21)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+
+    // Nothing selected to begin with.
+    await expect(ovSelectedBoxes(page)).toHaveCount(0);
+
+    const box = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[0]}"]`).boundingBox();
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+
+    // Press, drag past the threshold, Escape, then bring the pointer
+    // BACK to the originating button and release there. The click the
+    // browser then fires targets that button, because it is the
+    // common ancestor of the press and the release.
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx, cy + 120, { steps: 8 });
+    await expect(page.locator('#toolrail-overview .toolrail-ov-dropline')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect.poll(async () => ovAnnouncement(page)).toContain('Move canceled.');
+    await page.mouse.move(cx, cy, { steps: 6 });
+    await page.mouse.up();
+
+    // A canceled gesture has NO follow-on action: the box must not
+    // have picked itself and opened its controls after the cancel was
+    // already announced.
+    await expect(ovSelectedBoxes(page)).toHaveCount(0);
+    await expect(page.locator('#toolrail-overview .toolrail-ov-controls:not([hidden])')).toHaveCount(0);
+
+    // Control: a plain click on that same button still works, so the
+    // latch released instead of deadening the box.
+    await overviewBoxButton(page, ids[0], 'pick').click();
+    await expect(ovSelectedBoxes(page)).toHaveCount(1);
+  });
+
+  test('dragging a group that contains a locked block says what stayed behind (issue #21)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page, true);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+
+    // Guard the guard: P-B must genuinely be unmovable.
+    const refused = await page.evaluate((id) => {
+      const sel = window.wp.data.select('core/block-editor');
+      return typeof sel.canMoveBlocks === 'function' ? !sel.canMoveBlocks([id], '') : null;
+    }, ids[1]);
+    test.skip(refused === null, 'canMoveBlocks is not on this WordPress');
+    expect(refused).toBe(true);
+
+    // Select movable P-A plus locked P-B, then DRAG the group.
+    await overviewBoxButton(page, ids[0], 'pick').click();
+    await overviewBoxButton(page, ids[1], 'pick').click({ modifiers: ['Shift'] });
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+
+    const firstBox = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[0]}"]`).boundingBox();
+    const lastBox = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[5]}"]`).boundingBox();
+    await page.mouse.move(firstBox.x + firstBox.width / 2, firstBox.y + firstBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(firstBox.x + firstBox.width / 2, lastBox.y + lastBox.height + 20, { steps: 10 });
+    await page.mouse.up();
+
+    // The movable member moved to the end; the locked one held its place.
+    await expect.poll(async () => overviewContents(page)).toEqual(['P-B', 'P-C', 'P-D', 'P-E', 'P-F', 'P-A']);
+    // The DRAG must say what stayed, exactly as the arrows do — the
+    // drag used to filter locked ids out before the move engine saw
+    // them, so the engine had nothing left to report.
+    await expect.poll(async () => ovAnnouncement(page)).toContain('stays where it is.');
+  });
+
   test('keyboard-only: Enter drills into a section, arrows reorder inside it, "Up one level" climbs, Escape closes', async ({ page }) => {
     await openNewPost(page);
     await seedOverviewBlocks(page);
