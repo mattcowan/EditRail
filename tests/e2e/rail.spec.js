@@ -214,6 +214,21 @@ async function clickBelowContent(page, opts) {
 }
 
 /** Read one rail preference from the core/preferences store (null = unset). */
+/**
+ * Wait until both pattern-catalog resolutions have finished. The rail
+ * counts a pattern slot as missing only after this point (before it,
+ * "not found" means "not fetched yet"), so a test that asserts a
+ * missing count straight after openNewPost — which waits only for the
+ * rail — would read 0 on a slow fetch (PR review 2026-09-03).
+ */
+async function waitForPatternCatalog(page) {
+  await expect.poll(async () => page.evaluate(() => {
+    const sel = window.wp.data.select('core');
+    return sel.hasFinishedResolution('getBlockPatterns', [])
+      && sel.hasFinishedResolution('getEntityRecords', ['postType', 'wp_block', { per_page: -1, context: 'edit' }]);
+  }), { timeout: 15000 }).toBe(true);
+}
+
 async function getPref(page, key) {
   return page.evaluate((k) => {
     const v = window.wp.data.select('core/preferences').get('toolrail', k);
@@ -5347,6 +5362,7 @@ test.describe('pattern pins and drag (0.1.23)', () => {
 
   test('a set file may carry pattern pins; one this site lacks is kept and counted as unavailable', async ({ page }) => {
     await openNewPost(page);
+    await waitForPatternCatalog(page);
     const result = await page.evaluate(() => window.toolrail.importConfig({
       format: 'toolrail-set',
       version: 1,
@@ -5555,6 +5571,7 @@ test.describe('review 2026-09-03 follow-ups (patterns and drag)', () => {
     expect(loading.missing).toBe(1);
 
     await page.evaluate(() => { window.wp.data.select('core').hasFinishedResolution = window.__realHasFinished; });
+    await waitForPatternCatalog(page);
     const loaded = await page.evaluate(() => window.toolrail.importConfig({
       format: 'toolrail-set', version: 1, name: 'loaded', blocks: ['pattern:user:5150', 'nope/nope'],
     }));
