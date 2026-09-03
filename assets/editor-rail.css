@@ -1661,3 +1661,14 @@ body.toolrail-ov-dragging * {
         border: 1px solid CanvasText;
     }
 }
+
+/* Core's between-block "+" is a popover in the EDITOR document, drawn on
+   top of the canvas iframe. While a tool is armed the next canvas click
+   IS the insertion, so that popover can only steal the click (it opened
+   core's block picker instead of firing the tool — 2026-09-02).
+   editor-rail.js sets the body class while a tool is armed and the
+   "hide the editor's + button" setting is on; display:none also drops
+   the popover from hit-testing, so the click reaches the canvas. */
+body.toolrail-hides-inserter .components-popover.block-editor-block-popover__inbetween {
+    display: none !important;
+}

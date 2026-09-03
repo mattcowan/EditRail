@@ -106,6 +106,8 @@
   var MIGRATED_KEY = 'toolrail-slots-migrated';
   var HELP_SEEN_KEY = 'toolrail-help-seen';
   var HELP_HIDDEN_KEY = 'toolrail-help-hidden';
+  var GROUP_SEEDED_KEY = 'toolrail-group-seeded';
+  var HIDE_CORE_INSERTER_KEY = 'toolrail-hide-core-inserter';
   var WIDE_KEY = 'toolrail-wide';
   var WIDE_TOGGLE_KEY = 'toolrail-wide-toggle';
   var APPEARANCE_KEY = 'toolrail-appearance';
@@ -442,7 +444,6 @@
     heading: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6 4h2.5v7h7V4H18v16h-2.5v-7h-7v7H6z"/></svg>',
     image: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M4 5h16a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6a1 1 0 011-1zm1 2v10h14V7H5zm3 2a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm-2 7l3.5-4 2.5 3 2-2.5L18 16H6z"/></svg>',
     shape: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M9 3a6 6 0 015.2 9H21v9h-9v-6.8A6 6 0 019 3zm5 11.7a6 6 0 01-2 .3v5h7v-5h-5zM9 5a4 4 0 100 8 4 4 0 000-8z"/></svg>',
-    section: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M3 4h18v2H3V4zm2 4h14a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1V9a1 1 0 011-1zm1 2v4h12v-4H6zM3 18h18v2H3v-2z"/></svg>',
     overview: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M3 4h13v4H3V4zm0 6h13v4H3v-4zm0 6h13v4H3v-4zm17.5-12L23 7.5h-1.5V11h-2V7.5H18L20.5 4zM20.5 20L18 16.5h1.5V13h2v3.5H23L20.5 20z"/></svg>',
     pin: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zm0 2.3L6 8.7v6.6l6 3.4 6-3.4V8.7l-6-3.4zM12 8l3.5 2v4L12 16l-3.5-2v-4L12 8z"/></svg>',
     gear: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 9a3 3 0 110 6 3 3 0 010-6zm-1.7-6h3.4l.5 2.4c.6.2 1.1.5 1.6.9l2.3-.8 1.7 3-1.8 1.6a6.7 6.7 0 010 1.8l1.8 1.6-1.7 3-2.3-.8c-.5.4-1 .7-1.6.9l-.5 2.4h-3.4l-.5-2.4a6.6 6.6 0 01-1.6-.9l-2.3.8-1.7-3 1.8-1.6a6.7 6.7 0 010-1.8L4.2 8.5l1.7-3 2.3.8c.5-.4 1-.7 1.6-.9L10.3 3z"/></svg>',
@@ -881,10 +882,12 @@
   // renders a flyout. Registered tools are merged in by railModel().
   // -------------------------------------------------------------------
 
-  // Text, Heading and Image are NOT built-ins — they ship as DEFAULT_SLOTS
-  // (see loadSlots), so authors can reorder, remove and re-pin them like
-  // any other block. Built-ins are only the tools no block type expresses:
-  // Select, the Shape flyout, and Section.
+  // Group, Text, Heading and Image are NOT built-ins — they ship as
+  // DEFAULT_SLOTS (see loadSlots), so authors can reorder, remove and
+  // re-pin them like any other block. Built-ins are only the tools no
+  // block type expresses: Select, the Shape flyout, and Section overview.
+  // (Section was a built-in until 0.1.22; it is the pinned Group now —
+  // owner decision 2026-09-02.)
   var BUILTIN_TOOLS = [
     {
       id: 'select',
@@ -904,16 +907,6 @@
       // able to squat on them before Phase 4 reclaims them. Flip this
       // flag to bring the tool back.
       shelved: true
-    },
-    {
-      id: 'section',
-      label: __('Section', 'toolrail'),
-      hint: __('click in the canvas to insert a group section; Shift-click keeps the tool active', 'toolrail'),
-      icon: ICONS.section,
-      createBlock: function () {
-        return wp.blocks.createBlock('core/group', { layout: { type: 'constrained' } },
-          [wp.blocks.createBlock('core/paragraph')]);
-      }
     },
     {
       id: 'overview',
@@ -1032,15 +1025,32 @@
   }
 
   /**
-   * The out-of-the-box quick slots. Text, Heading and Image are ORDINARY
-   * pinned blocks (owner decision 2026-08-26) — reorderable, removable,
-   * and saved-set–able like anything the author pins.
+   * The out-of-the-box quick slots. Group, Text, Heading and Image are
+   * ORDINARY pinned blocks (owner decisions 2026-08-26 and 2026-09-02) —
+   * reorderable, removable, and saved-set–able like anything the author
+   * pins. Group leads, where the built-in Section tool used to sit.
    *
    * These seed exactly once, from migrateSlots(), and never again: an
-   * author who removes all three stays at an empty rail rather than
+   * author who removes all four stays at an empty rail rather than
    * having them resurrected on the next load.
    */
-  var DEFAULT_SLOTS = ['core/paragraph', 'core/heading', 'core/image'];
+  var DEFAULT_SLOTS = ['core/group', 'core/paragraph', 'core/heading', 'core/image'];
+
+  /**
+   * Pinned blocks that insert something more useful than a bare
+   * createBlock(name). Group was the built-in Section tool until 0.1.22:
+   * a bare Group lands as core's layout picker (Group / Row / Stack /
+   * Grid) and needs a second click before the author can type, so the
+   * pinned Group keeps inserting what Section did — a constrained group
+   * holding one paragraph, ready for text. Every other pinned block
+   * inserts exactly what the inserter would.
+   */
+  var SLOT_BLOCK_FACTORIES = {
+    'core/group': function () {
+      return wp.blocks.createBlock('core/group', { layout: { type: 'constrained' } },
+        [wp.blocks.createBlock('core/paragraph')]);
+    }
+  };
 
   /**
    * The single gate for what may sit in the slot list: strings only, no
@@ -1092,7 +1102,7 @@
    *
    * @return {void}
    */
-  function migrateSlots() {
+  function migrateDefaultSlots() {
     if (null !== readKey(MIGRATED_KEY)) {
       return;
     }
@@ -1122,6 +1132,45 @@
     }).concat(existing);
     writeKey(SLOTS_KEY, JSON.stringify(restored));
     writeKey(MIGRATED_KEY, '1');
+  }
+
+  /**
+   * Second one-time lift (0.1.22): Group joins the defaults. Section was
+   * a built-in tool until now, so no stamped account can have pinned or
+   * unpinned core/group on purpose — it is prepended to whatever the
+   * author has, ahead of their pins, where Section used to sit.
+   *
+   * An author who EMPTIED the rail after the first stamp keeps it empty:
+   * the lift only joins a non-empty, readable list. A corrupt list is
+   * left alone, for the same reason "Restore default tools" refuses it.
+   * A fresh install already carries Group in DEFAULT_SLOTS; the stamp is
+   * written either way so the lift never runs twice.
+   *
+   * @return {void}
+   */
+  function seedGroupSlot() {
+    if (null !== readKey(GROUP_SEEDED_KEY)) {
+      return;
+    }
+    var raw = readKey(SLOTS_KEY);
+    if (null !== raw) {
+      var slots = null;
+      try {
+        slots = normalizeSlots(JSON.parse(raw));
+      } catch (e) {
+        slots = null;
+      }
+      if (slots && slots.length && slots.indexOf('core/group') === -1) {
+        writeKey(SLOTS_KEY, JSON.stringify(['core/group'].concat(slots)));
+      }
+    }
+    writeKey(GROUP_SEEDED_KEY, '1');
+  }
+
+  /** Both one-time lifts, in order: the three defaults, then Group. */
+  function migrateSlots() {
+    migrateDefaultSlots();
+    seedGroupSlot();
   }
 
   // migrateSlots() runs from boot(), after migrateLocalToPrefs() — and
@@ -1285,6 +1334,10 @@
         icon: '',
         blockIcon: type.icon,
         insertBlock: name,
+        // makeBlockFor prefers a factory over the bare insertBlock.
+        createBlock: Object.prototype.hasOwnProperty.call(SLOT_BLOCK_FACTORIES, name)
+          ? SLOT_BLOCK_FACTORIES[name]
+          : null,
         pinnedBlock: name,
         children: []
       };
@@ -1294,7 +1347,8 @@
   /**
    * Where a registered tool's `parent` may land besides a built-in id.
    * 'text'/'heading'/'image' were top-level built-ins before those became
-   * default slots (2026-08-26); the aliases keep every published
+   * default slots (2026-08-26), and 'section' followed on 2026-09-02
+   * (it is the pinned Group now); the aliases keep every published
    * integration (the Typography Stylist handoff uses parent: 'text')
    * working against the slot that replaced them. Block names and full
    * slot ids are accepted too, so a provider can nest under ANY pinned
@@ -1303,7 +1357,8 @@
   var PARENT_SLOT_ALIASES = {
     text: 'core/paragraph',
     heading: 'core/heading',
-    image: 'core/image'
+    image: 'core/image',
+    section: 'core/group'
   };
 
   function slotForParent(slots, parent) {
@@ -1519,11 +1574,70 @@
   }
 
   /**
-   * Insert the armed tool's block at the click point: clicks resolve to the
-   * nearest block, above its vertical midpoint inserts before it, below
-   * inserts after; empty canvas space appends at the end of the document.
-   * (Flow-document position — x/y freeform layout is a later phase.)
+   * Where an armed click lands, as {rootClientId, index}. (Flow-document
+   * position — x/y freeform layout is a later phase.)
+   *
+   * ON a block: above its vertical midpoint inserts before it, below
+   * inserts after — inside that block's own parent, so a click on a
+   * block nested in a Group stays in the Group.
+   *
+   * In the GAP between blocks the click reaches the block list itself
+   * (the root container, or a Group's inner list), not a block, and the
+   * old resolution fell through to "append at the end of the document":
+   * a click plainly between paragraphs two and three put the block at
+   * the bottom. It rarely showed because core's between-block "+"
+   * popover, in the EDITOR document, caught most such clicks first —
+   * once that is hidden while armed (markCanvasArmed) the fall-through
+   * is the whole experience, so the gap now resolves against the list's
+   * own children: the index is the number of them whose midpoint sits
+   * above the pointer, which covers above-the-first (0) and
+   * below-the-last (append) in the same rule.
+   *
+   * Empty canvas below everything, or a click that reaches no list at
+   * all, still appends at the end of the document.
+   *
+   * @param {MouseEvent} e   The canvas click.
+   * @param {Object}     sel The core/block-editor selectors.
+   * @return {{rootClientId: string, index: number}}
    */
+  function resolveInsertionPoint(e, sel) {
+    var target = e.target && e.target.closest ? e.target : null;
+    var blockEl = target ? target.closest('[data-block]') : null;
+    var listEl = target ? target.closest('.block-editor-block-list__layout') : null;
+
+    // A block list nested INSIDE the nearest block means the pointer is
+    // in that block's inner gap, not on the block. No block at all means
+    // the root list's gap (or the empty space under it).
+    if (listEl && (!blockEl || blockEl.contains(listEl))) {
+      var before = 0;
+      Array.prototype.forEach.call(listEl.children, function (el) {
+        if (!el.hasAttribute || !el.hasAttribute('data-block')) {
+          return;
+        }
+        var r = el.getBoundingClientRect();
+        if (e.clientY > r.top + r.height / 2) {
+          before += 1;
+        }
+      });
+      return {
+        rootClientId: blockEl ? blockEl.getAttribute('data-block') : '',
+        index: before
+      };
+    }
+
+    if (blockEl) {
+      var clientId = blockEl.getAttribute('data-block');
+      var index = sel.getBlockIndex(clientId);
+      var rect = blockEl.getBoundingClientRect();
+      if (e.clientY > rect.top + rect.height / 2) {
+        index += 1;
+      }
+      return { rootClientId: sel.getBlockRootClientId(clientId) || '', index: index };
+    }
+
+    return { rootClientId: '', index: sel.getBlockCount('') };
+  }
+
   /**
    * clientIds present at pointerdown, before core has reacted to the
    * gesture at all. handleCanvasClick uses this to tell the block core
@@ -1580,19 +1694,9 @@
 
     var sel = wp.data.select('core/block-editor');
     var dispatch = wp.data.dispatch('core/block-editor');
-    var rootClientId = '';
-    var index = sel.getBlockCount('');
-
-    var target = e.target && e.target.closest ? e.target.closest('[data-block]') : null;
-    if (target) {
-      var clientId = target.getAttribute('data-block');
-      rootClientId = sel.getBlockRootClientId(clientId) || '';
-      index = sel.getBlockIndex(clientId);
-      var rect = target.getBoundingClientRect();
-      if (e.clientY > rect.top + rect.height / 2) {
-        index += 1;
-      }
-    }
+    var point = resolveInsertionPoint(e, sel);
+    var rootClientId = point.rootClientId;
+    var index = point.index;
 
     // preGestureIds is captured at POINTERDOWN, not here. Core has
     // already appended its default block by the time this click handler
@@ -1747,10 +1851,30 @@
     markCanvasArmed();
   }
 
+  /** Whether core's between-block "+" stays hidden while a tool is armed
+      (Toolbar settings; on unless the author turned it off). */
+  function hidesCoreInserterWhileArmed() {
+    return readKey(HIDE_CORE_INSERTER_KEY) !== '0';
+  }
+
   function markCanvasArmed() {
+    var armed = activeTool !== 'select';
     var doc = boundDoc || canvasDoc();
     if (doc && doc.documentElement) {
-      doc.documentElement.classList.toggle('toolrail-armed', activeTool !== 'select');
+      doc.documentElement.classList.toggle('toolrail-armed', armed);
+    }
+    // Core's between-block inserter is a popover in the EDITOR document,
+    // not in the canvas: hovering the gap between two blocks (or the
+    // foot of a Cover) raises a "+" that sits on top of the iframe, so
+    // an armed click there lands on core's inserter instead of the
+    // rail's canvas handler — the tool never fires and core's block
+    // picker opens (observed on a fresh install, 2026-09-02). While a
+    // tool is armed the click IS the insertion, so the popover has
+    // nothing to offer; this body class hides it (editor-rail.css) and
+    // the click falls through to the canvas. On by default, with a
+    // Toolbar settings checkbox to turn it off (owner decision).
+    if (document.body) {
+      document.body.classList.toggle('toolrail-hides-inserter', armed && hidesCoreInserterWhileArmed());
     }
   }
 
@@ -2898,6 +3022,32 @@
     });
     node.appendChild(importInput);
 
+    // --- Inserting ---
+    node.appendChild(settingsDivider());
+    var insertHead = settingsRow('h3', 'toolrail-settings-subtitle');
+    insertHead.textContent = __('Inserting', 'toolrail');
+    node.appendChild(insertHead);
+
+    var hideInserterRow = settingsRow('label', 'toolrail-settings-positionrow');
+    var hideInserter = document.createElement('input');
+    hideInserter.type = 'checkbox';
+    hideInserter.id = 'toolrail-settings-hideinserter';
+    hideInserter.checked = hidesCoreInserterWhileArmed();
+    hideInserter.addEventListener('change', function () {
+      writeKey(HIDE_CORE_INSERTER_KEY, hideInserter.checked ? '1' : '0');
+      // Takes effect on the next arm — or now, if a tool is armed.
+      markCanvasArmed();
+    });
+    var hideInserterText = settingsRow('span', '');
+    hideInserterText.textContent = __('While a tool is armed, hide the editor\'s own "+" button between blocks', 'toolrail');
+    hideInserterRow.appendChild(hideInserter);
+    hideInserterRow.appendChild(hideInserterText);
+    node.appendChild(hideInserterRow);
+
+    var hideInserterHint = settingsRow('p', 'toolrail-settings-empty');
+    hideInserterHint.textContent = __('With this off, the "+" can take the click that was meant for the armed tool.', 'toolrail');
+    node.appendChild(hideInserterHint);
+
     // --- Help ---
     node.appendChild(settingsDivider());
     var helpHead = settingsRow('h3', 'toolrail-settings-subtitle');
@@ -3081,7 +3231,8 @@
         title: __('Inserting with a tool', 'toolrail'),
         body: [
           __('Select a tool, then click in the canvas. The tool\'s block is inserted at the click point and the toolbar returns to Select.', 'toolrail'),
-          __('Shift-click in the canvas to keep the tool armed for repeat inserts. Press Escape to return to Select at any time.', 'toolrail')
+          __('Shift-click in the canvas to keep the tool armed for repeat inserts. Press Escape to return to Select at any time.', 'toolrail'),
+          __('While a tool is armed, the editor\'s own "+" button between blocks is hidden, so your click goes to the tool. A checkbox under "Inserting" in Toolbar settings turns this off.', 'toolrail')
         ]
       },
       {
@@ -3211,6 +3362,15 @@
    */
   var helpFirstRunChecked = false;
 
+  /**
+   * Is core's own first-run "Welcome to the editor" guide up? Its modal
+   * carries this class in the post editor (the site editor's guide never
+   * shares a screen with the rail).
+   */
+  function welcomeGuideShowing() {
+    return !!document.querySelector('.edit-post-welcome-guide');
+  }
+
   function maybeAutoOpenHelp() {
     if (helpFirstRunChecked) {
       return;
@@ -3220,13 +3380,81 @@
       if (helpOpen || settingsOpen || isHelpHidden() || readKey(HELP_SEEN_KEY) !== null) {
         return;
       }
-      var wrapper = document.getElementById('toolrail-region');
-      if (!wrapper) {
+      if (welcomeGuideShowing()) {
+        deferAutoOpenPastWelcomeGuide();
         return;
       }
-      writeKey(HELP_SEEN_KEY, '1');
-      openHelp(wrapper, { takeFocus: false });
+      autoOpenHelp();
     }, 400);
+  }
+
+  /** The first-run open itself: stamp, then open without taking focus. */
+  function autoOpenHelp() {
+    if (helpOpen || settingsOpen || isHelpHidden() || readKey(HELP_SEEN_KEY) !== null) {
+      return;
+    }
+    var wrapper = document.getElementById('toolrail-region');
+    if (!wrapper) {
+      return;
+    }
+    writeKey(HELP_SEEN_KEY, '1');
+    openHelp(wrapper, { takeFocus: false });
+  }
+
+  /**
+   * A fresh account meets TWO first-run surfaces at once: core's
+   * "Welcome to the editor" guide and this panel. Opening under the
+   * guide was worse than noisy — the panel is light-dismiss (any
+   * mousedown outside it closes it), so the click that dismissed the
+   * guide dismissed the help with it, and the seen stamp was already
+   * written: the author never read it and never gets it again
+   * (observed on a fresh install, 2026-09-02). So the auto-open waits
+   * until the guide is gone, and only then stamps.
+   *
+   * Every way out of the guide (Get started, the ×, Escape) flips the
+   * core/edit-post welcomeGuide preference, so a preferences-store
+   * subscription is the wake-up; the DOM is re-checked after a beat
+   * because React unmounts the modal on a later flush than the store
+   * change. A slow interval backs that up for an editor without the
+   * store. The panel still opens focus-free, as it always did.
+   */
+  function deferAutoOpenPastWelcomeGuide() {
+    var settled = false;
+    var unsubscribe = null;
+    var interval = null;
+
+    var finish = function () {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (unsubscribe) {
+        unsubscribe();
+      }
+      if (interval) {
+        window.clearInterval(interval);
+      }
+      autoOpenHelp();
+    };
+    var check = function () {
+      if (settled) {
+        return;
+      }
+      window.setTimeout(function () {
+        if (!settled && !welcomeGuideShowing()) {
+          finish();
+        }
+      }, 400);
+    };
+
+    if (wp.data && typeof wp.data.subscribe === 'function') {
+      try {
+        unsubscribe = wp.data.subscribe(check, 'core/preferences');
+      } catch (e) {
+        unsubscribe = null;
+      }
+    }
+    interval = window.setInterval(check, 1500);
   }
 
   // -------------------------------------------------------------------
