@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.1.22
+Stable tag: 0.1.23
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -18,6 +18,9 @@ Everything the rail inserts is an ordinary core block. Deactivating this plugin 
 
 * Built-in tools: Select and Section overview. Group, Text, Heading and Image ship as ordinary pinned blocks, so you can reorder or remove them like anything else you pin. If you unpin the defaults, a "Restore default tools" button in Toolbar settings brings back the missing ones without touching your own pins.
 * While a tool is armed, the editor's own "+" buttons (between blocks, and beside an empty block) are hidden, so your click goes to the armed tool. The drop line you see while you drag a block is not affected. A checkbox under "Inserting" in Toolbar settings turns this off.
+* Drag a tool from the toolbar into the canvas to place its block where you drop it. Clicking a tool still arms it.
+* Pin patterns too. Search under "Add a block or pattern" in Toolbar settings for your own patterns and the theme's and core's, or drag a pattern from the inserter onto the toolbar. An armed pattern inserts a fresh copy at the click point; a synced pattern inserts a reference, the same as the inserter does.
+* Drop a block from the canvas onto the toolbar and choose: pin its block type, or save the block with its settings and contents as one of your patterns and pin that pattern. The same dialog opens from "Save as pattern and pin to toolbar…" in the block's options menu.
 * Section overview: one tool zooms the canvas out and draws an outline around every top-level block, with a small name tag in the corner. Drag an outline to reorder it, or click it to reveal reorder controls inside the lines — arrows to move it, and a "Reorder inside" button to step into a section and reorder its blocks the same way, with a breadcrumb back out. Select several outlines at once — Shift+click for a range, Ctrl+click (Cmd on Mac) to add or remove one, or a rectangle dragged from empty space — and the arrows or a drag then move the whole group; locked blocks show a padlock and stay where they are. Zoom with the +/− buttons and pan long documents with the mouse wheel. Every move works by keyboard and is announced to screen readers — dragging is a shortcut, never the only way — and closing centers and selects the block you last picked, moved or stepped into (if you touched nothing, it returns you to where you were scrolled). Reordering is an ordinary editing action — the saved post is exactly what the List View would have written.
 * Pin any block type as a quick-insert tool: search for it in Toolbar settings, drag it from the inserter onto the rail, or use "Pin to toolbar" in the block's options menu. Pins, the toolbar position and saved sets are saved to your user account on the site — set the toolbar up once and it follows you across browsers and devices.
 * Save pinned arrangements as named sets, and move them between sites as small JSON files (Export/Import in Toolbar settings). A set may name blocks a site doesn't have — those stay in the set and appear when their plugin or theme is active.
@@ -40,6 +43,11 @@ Against your user account on this site, the same as pinned blocks and saved sets
 Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a position under "Toolbar position".
 
 == Changelog ==
+
+= 0.1.23 =
+* Drag a tool from the toolbar into the canvas to place its block where you drop it, the way the editor's own inserter works. The drop line, the target and the insert are the editor's own. Clicking a tool still arms it, and the keyboard path is unchanged.
+* Pin patterns as well as block types. The settings section is now "Pinned tools", and the search under "Add a block or pattern" lists your own patterns and the theme's and core's, each result tagged Block or Pattern. A pattern dragged from the inserter onto the toolbar pins that pattern. An armed pattern inserts a fresh copy at the click point; a synced pattern inserts a reference. Pattern pins travel in saved sets and stay hidden on a site that does not have the pattern.
+* Drop a block from the canvas onto the toolbar to open a small "Add to toolbar" dialog: pin the block type, or give the block a name and save it, with its settings and contents, as one of your unsynced patterns, pinned to the toolbar. The same dialog opens from "Save as pattern and pin to toolbar…" in the block's options menu, for one block or several. The pin is a snapshot: editing an inserted copy never changes it.
 
 = 0.1.22 =
 * The Section tool is now the Group block, pinned by default at the head of the pinned blocks. Unpin it, move it, or put it in a saved set like any other pin. It inserts the Group block the same way the inserter does, so you pick a layout (Group, Row, Stack or Grid) after it lands. An account that already had the toolbar gets Group added once, ahead of its own pins; a toolbar you emptied stays empty. "Restore default tools" now restores Group too. A plugin that nests a tool under `section` now nests it under the pinned Group; if you unpin Group, that tool shows at the top level of the toolbar.

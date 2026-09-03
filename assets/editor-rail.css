@@ -881,6 +881,23 @@ body.toolrail-dragging * {
     margin: 6px 0;
 }
 
+/* The kind of a pinned tool or a search result — Block / Pattern — as a
+   small chip beside the title (0.1.23). Text, never color alone. */
+.toolrail-settings-tag {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.4;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--toolrail-fg-strong);
+    border: 1px solid var(--toolrail-field-border);
+    border-radius: 999px;
+    vertical-align: middle;
+}
+
 .toolrail-settings-pinned,
 .toolrail-settings-sets {
     list-style: none;
