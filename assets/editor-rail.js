@@ -944,8 +944,12 @@
    * point, this guards every lookup, so an id arriving by some other
    * route can still never turn a DOM sweep into a SyntaxError.
    */
+  function attrValue(value) {
+    return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  }
+
   function toolSelector(id) {
-    return '[data-tool="' + String(id).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]';
+    return '[data-tool="' + attrValue(id) + '"]';
   }
 
   function allToolIds() {
@@ -1439,6 +1443,20 @@
     return found;
   }
 
+  /** Both pattern lists have finished resolving (or cannot resolve at all). */
+  function patternCatalogReady() {
+    var sel = coreSelect();
+    if (!sel || typeof sel.hasFinishedResolution !== 'function') {
+      return true;
+    }
+    try {
+      return sel.hasFinishedResolution('getBlockPatterns', [])
+        && sel.hasFinishedResolution('getEntityRecords', ['postType', 'wp_block', USER_PATTERN_QUERY]);
+    } catch (e) {
+      return true;
+    }
+  }
+
   /** The blocks an armed pattern click (or a rail drag) inserts. */
   function patternBlocks(pattern) {
     if (pattern.kind === 'user' && pattern.synced) {
@@ -1452,9 +1470,13 @@
   /**
    * Fetch both lists once per page load, then keep the rail in step with
    * the core store: a pinned pattern renders as soon as its list lands,
-   * and drops out if its post is deleted. The subscription's signature
-   * is counts, ids and titles only, so the per-keystroke traffic on the
-   * core store (post edits live there too) costs one string compare.
+   * and drops out if its post is deleted. The subscription re-derives a
+   * small signature (the registered count, plus each user pattern's id,
+   * sync status and title) on every core store change — post edits live
+   * there too, so that is per keystroke — and compares it with the last.
+   * Cheap, but not free: which is why it is ids and titles, never
+   * content. The capability check for creating patterns is kicked off
+   * here too, so it has usually resolved before a dialog asks.
    */
   var patternCatalogStarted = false;
   var patternSignature = '';
@@ -1479,6 +1501,9 @@
         if (typeof rs.getEntityRecords === 'function') {
           rs.getEntityRecords('postType', 'wp_block', USER_PATTERN_QUERY).then(null, function () {});
         }
+        if (typeof rs.canUser === 'function') {
+          rs.canUser('create', { kind: 'postType', name: 'wp_block' }).then(null, function () {});
+        }
       }
     } catch (e) {
       /* No core-data — pattern slots simply stay hidden. */
@@ -1492,6 +1517,7 @@
             return;
           }
           patternSignature = next;
+          patternMarkupCache = Object.create(null);
           // Only a pinned pattern (its tool may appear or vanish) or an
           // open settings search (its results) can change with the
           // catalog; anything else would be a rebuild for nothing, and
@@ -2901,9 +2927,20 @@
    */
   var settingsStatus = '';
 
+  /**
+   * How many of these slots this site cannot render right now. A pattern
+   * slot counts only once the catalog has actually loaded: before that,
+   * "not found" means "not fetched yet", and an import or set load that
+   * ran first announced patterns as unavailable that were on their way
+   * (review 2026-09-03, finding 6).
+   */
   function missingBlockCount(blocks) {
+    var catalogReady = patternCatalogReady();
     return blocks.filter(function (name) {
-      return isPatternSlot(name) ? !findPattern(name) : !wp.blocks.getBlockType(name);
+      if (isPatternSlot(name)) {
+        return catalogReady && !findPattern(name);
+      }
+      return !wp.blocks.getBlockType(name);
     }).length;
   }
 
@@ -3240,7 +3277,7 @@
       blockMatches.forEach(function (t) {
         var btn = resultButton(t.title, __('Block', 'toolrail'), sprintf(
           /* translators: %s: block title. */
-          __('Pin %s to the toolbar', 'toolrail'),
+          __('Pin the %s block to the toolbar', 'toolrail'),
           t.title
         ), function () { pinBlock(t.name); });
         btn.dataset.block = t.name;
@@ -6729,7 +6766,7 @@
     if (!region) {
       return;
     }
-    var wantsTop = settingsOpen || helpOpen || !!openFlyout || !!drag || position.dock === 'float';
+    var wantsTop = settingsOpen || helpOpen || addDialogOpen || !!openFlyout || !!drag || position.dock === 'float';
     region.classList.toggle('is-raised', wantsTop);
   }
 
@@ -7537,8 +7574,26 @@
   // Drag between the rail and the canvas (0.1.23)
   // -------------------------------------------------------------------
 
-  /** True while one of the rail's own tools is mid-drag. */
+  /**
+   * True while one of the rail's own tools is mid-drag.
+   *
+   * The button that started the drag may be gone by dragend — a rerender
+   * mid-drag (a catalog change, a tools-updated event) rebuilds every
+   * button, and a detached source's dragend never reaches the document —
+   * which left the flag stuck and the rail refusing drops for the rest
+   * of the page (review 2026-09-03, finding 7). So the flag also clears
+   * on every rerender (the worst that can follow is a no-op re-pin of a
+   * tool that is already pinned) and on any dragend or drop the editor
+   * document sees.
+   */
   var railDragActive = false;
+
+  document.addEventListener('dragend', function () {
+    railDragActive = false;
+  }, true);
+  document.addEventListener('drop', function () {
+    railDragActive = false;
+  }, true);
 
   function onToolDragStart(e, tool) {
     if (!e.dataTransfer || !toolAvailable(tool)) {
@@ -7571,6 +7626,31 @@
   }
 
   /**
+   * Each pattern's own normalized markup, parsed once and reused across
+   * drops (core memoizes this same parse in its inserter; unmemoized it
+   * re-parsed a 50–150 pattern catalog on the main thread per drop —
+   * review 2026-09-03, finding 5). Keyed by slot id plus content length,
+   * so an edited user pattern is parsed again; the whole map is dropped
+   * whenever the catalog signature changes (watchPatternCatalog), which
+   * also bounds it to the live catalog.
+   */
+  var patternMarkupCache = Object.create(null);
+
+  function patternMarkup(p) {
+    var key = p.id + '#' + (p.content ? p.content.length : 0);
+    if (!(key in patternMarkupCache)) {
+      var own;
+      try {
+        own = normalizedMarkup(wp.blocks.parse(p.content || ''));
+      } catch (e) {
+        own = '';
+      }
+      patternMarkupCache[key] = own;
+    }
+    return patternMarkupCache[key];
+  }
+
+  /**
    * Which pattern a set of dropped blocks came from. Core's inserter
    * drags a pattern as its parsed blocks and nothing else — the payload
    * carries no pattern name (verified in this WordPress: the transfer
@@ -7593,12 +7673,7 @@
       if (found || p.synced) {
         return;
       }
-      var own;
-      try {
-        own = normalizedMarkup(wp.blocks.parse(p.content || ''));
-      } catch (e) {
-        own = '';
-      }
+      var own = patternMarkup(p);
       if (own && own === wanted) {
         found = p;
       }
@@ -7609,12 +7684,13 @@
   /**
    * A 'wp-blocks' payload dropped on the rail.
    *
-   * From the inserter ({type: 'inserter', blocks}): a block TYPE pins at
-   * once, as before — one bare block, nothing to ask. A pattern drag
-   * carries the pattern's blocks (several, or one with children) and
-   * pins the pattern itself when one matches; a synced user pattern
-   * arrives as a reference block and pins by its ref. Anything else
-   * still pins the first block's type.
+   * From the inserter ({type: 'inserter', blocks}): a synced user
+   * pattern arrives as one reference block and pins by its ref. Every
+   * other drop is tried as a pattern FIRST — a pattern that is a single
+   * block with no children (a styled heading, a lone image) drags
+   * exactly like a block type and must still pin as the pattern — and
+   * only an unmatched drop pins its first block's type, at once, with
+   * nothing to ask.
    *
    * From the canvas ({srcClientIds}): opens the add-to-toolbar dialog —
    * pin the type, or save the block as a pattern (settings, contents
@@ -7631,20 +7707,26 @@
     if (data.type === 'inserter' && Array.isArray(data.blocks) && data.blocks.length) {
       var blocks = data.blocks;
       var first = blocks[0] || {};
-      var bareType = blocks.length === 1 && !(first.innerBlocks && first.innerBlocks.length);
-      if (bareType && first.name === 'core/block' && first.attributes && first.attributes.ref) {
-        var synced = findPattern(USER_PATTERN_SLOT_PREFIX + first.attributes.ref);
-        if (synced) {
-          pinBlock(synced.id);
-          return;
+      // A synced user pattern: pin it by its ref even before the
+      // wp_block list has landed — the slot renders when it does, like
+      // any pin whose source is not here yet — and never let a bare
+      // core/block through to the type path: a pinned "Block" type
+      // would insert a reference to nothing (review 2026-09-03,
+      // finding 3).
+      if (first.name === 'core/block') {
+        var ref = first.attributes && first.attributes.ref;
+        if (ref && /^[0-9]+$/.test(String(ref))) {
+          pinBlock(USER_PATTERN_SLOT_PREFIX + ref);
         }
+        return;
       }
-      if (!bareType) {
-        var pattern = matchPattern(blocks);
-        if (pattern) {
-          pinBlock(pattern.id);
-          return;
-        }
+      // Pattern first, whatever the shape (review 2026-09-03, finding
+      // 2): the match is by content and memoized per pattern, so a plain
+      // block-type drop costs one serialize and a map of compares.
+      var pattern = matchPattern(blocks);
+      if (pattern) {
+        pinBlock(pattern.id);
+        return;
       }
       if (typeof first.name === 'string' && first.name) {
         pinBlock(first.name);
@@ -7695,7 +7777,7 @@
     document.removeEventListener('focusin', onAddDialogFocusin, true);
     if (refocusClientId) {
       var doc = canvasDoc();
-      var el = doc ? doc.querySelector('[data-block="' + refocusClientId + '"]') : null;
+      var el = doc ? doc.querySelector('[data-block="' + attrValue(refocusClientId) + '"]') : null;
       if (el && typeof el.focus === 'function') {
         el.focus();
       }
@@ -7737,9 +7819,16 @@
   }
 
   /**
-   * Can this author create patterns (wp_block posts) on this site?
-   * The entity form of canUser is WordPress 6.7+; 6.5 and 6.6 know the
-   * resource-name form only, so a missing answer falls back to it.
+   * Can this author create patterns (wp_block posts)? true, false, or
+   * null while core's capability check is still in flight: canUser
+   * reads a cache and returns undefined until its OPTIONS request lands
+   * (verified in core's selector), and "unknown" must not read as
+   * "denied" — the dialog told authors they lacked permission before
+   * the check had run (review 2026-09-03, finding 4). Callers treat
+   * null as "go ahead"; a real refusal then surfaces as the save's own
+   * error. The entity form is WordPress 6.7+; when it has finished
+   * resolving to nothing (6.5 and 6.6), the resource-name form is the
+   * one that core knows.
    */
   function canCreatePatterns() {
     var sel = coreSelect();
@@ -7747,11 +7836,18 @@
       return false;
     }
     try {
-      var can = sel.canUser('create', { kind: 'postType', name: 'wp_block' });
-      if (typeof can !== 'boolean') {
-        can = sel.canUser('create', 'blocks');
+      var entityArgs = ['create', { kind: 'postType', name: 'wp_block' }];
+      var can = sel.canUser.apply(null, entityArgs);
+      if (typeof can === 'boolean') {
+        return can;
       }
-      return !!can;
+      var finished = typeof sel.hasFinishedResolution === 'function'
+        && sel.hasFinishedResolution('canUser', entityArgs);
+      if (!finished) {
+        return null;
+      }
+      can = sel.canUser('create', 'blocks');
+      return typeof can === 'boolean' ? can : null;
     } catch (e) {
       return false;
     }
@@ -7891,7 +7987,7 @@
     patHead.textContent = __('Pattern', 'toolrail');
     node.appendChild(patHead);
     var patNote = settingsRow('p', 'toolrail-settings-empty');
-    if (!canCreatePatterns()) {
+    if (canCreatePatterns() === false) {
       patNote.textContent = __('You cannot create patterns on this site, so this block cannot be saved as one.', 'toolrail');
       node.appendChild(patNote);
     } else {
@@ -8106,6 +8202,7 @@
     if (!wrapper) {
       return;
     }
+    railDragActive = false;
     closeFlyout(false);
     var oldRail = document.getElementById('toolrail-rail');
     var hadFocus = !!(oldRail && oldRail.contains(document.activeElement));
@@ -8371,7 +8468,7 @@
           // several: a multi-block selection saves as one pattern. The
           // menu closes first so its own focus return settles before
           // the dialog takes focus.
-          if (canCreatePatterns()) {
+          if (canCreatePatterns() !== false) {
             var ids = clientIds.slice();
             items.push(el(wp.components.MenuItem, {
               key: 'toolrail-pattern',

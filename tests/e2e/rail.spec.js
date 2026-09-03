@@ -5360,3 +5360,188 @@ test.describe('pattern pins and drag (0.1.23)', () => {
     await page.evaluate(() => window.toolrail.deleteConfig('with patterns'));
   });
 });
+
+test.describe('review 2026-09-03 follow-ups (patterns and drag)', () => {
+  const dropOnRail = (page, payload) => page.evaluate((data) => {
+    const dt = new DataTransfer();
+    dt.setData('wp-blocks', JSON.stringify(data));
+    const region = document.getElementById('toolrail-region');
+    region.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    region.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+  }, payload);
+
+  async function seedQuote(page) {
+    return page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      const q = createBlock('core/quote', {}, [createBlock('core/paragraph', { content: 'Q' })]);
+      window.wp.data.dispatch('core/block-editor').resetBlocks([q]);
+      return q.clientId;
+    });
+  }
+
+  test('the Add to toolbar dialog renders in front of the Document Overview panel (finding 1)', async ({ page }) => {
+    await openNewPost(page);
+    const listView = page.locator('button[aria-label="Document Overview"]');
+    test.skip(!(await listView.count()), 'no Document Overview button in this editor');
+    await listView.click();
+    await expect(page.locator('.interface-interface-skeleton__secondary-sidebar')).toBeVisible();
+
+    const quoteId = await seedQuote(page);
+    await dropOnRail(page, { type: 'block', srcClientIds: [quoteId], srcRootClientId: '' });
+    await expect(page.locator('.toolrail-adddialog')).toBeVisible();
+    await expect(page.locator('#toolrail-region')).toHaveClass(/is-raised/);
+
+    // Assert the STACKING, as the settings-dialog test does: the topmost
+    // element at the dialog's own point must be the dialog.
+    const result = await page.evaluate(() => {
+      const dlg = document.querySelector('.toolrail-adddialog');
+      const sec = document.querySelector('.interface-interface-skeleton__secondary-sidebar');
+      const d = dlg.getBoundingClientRect();
+      const s = sec.getBoundingClientRect();
+      const hit = document.elementFromPoint(Math.round(d.left + d.width / 2), Math.round(d.top + 40));
+      return {
+        overlaps: !(d.right <= s.left || d.left >= s.right),
+        topmostIsDialog: !!(hit && dlg.contains(hit)),
+      };
+    });
+    expect(result.overlaps).toBe(true);
+    expect(result.topmostIsDialog).toBe(true);
+
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.toolrail-adddialog')).toHaveCount(0);
+    await expect(page.locator('#toolrail-region')).not.toHaveClass(/is-raised/);
+    // Put the panel back: its open state persists on the server.
+    await listView.click();
+    await expect(page.locator('.interface-interface-skeleton__secondary-sidebar')).toHaveCount(0);
+  });
+
+  test('a single-block pattern dropped from the inserter pins the pattern, not the block type (finding 2)', async ({ page }) => {
+    await openNewPost(page);
+    // A registered pattern that is exactly one top-level block with no
+    // children — the shape that drags like a plain block type.
+    const pattern = await page.evaluate(async () => {
+      const all = await window.wp.data.resolveSelect('core').getBlockPatterns();
+      const { parse, getBlockType } = window.wp.blocks;
+      for (const p of all) {
+        if (p.inserter === false || typeof p.content !== 'string') continue;
+        const blocks = parse(p.content).filter((b) => b.name);
+        if (blocks.length !== 1 || blocks[0].innerBlocks.length) continue;
+        if (!getBlockType(blocks[0].name)) continue;
+        return { name: p.name, content: p.content, type: blocks[0].name };
+      }
+      return null;
+    });
+    test.skip(!pattern, 'this site registers no single-block pattern');
+
+    const typeWasPinned = await page.evaluate((t) => window.toolrail.isPinned(t), pattern.type);
+    await page.evaluate((content) => {
+      const dt = new DataTransfer();
+      dt.setData('wp-blocks', JSON.stringify({ type: 'inserter', blocks: window.wp.blocks.parse(content) }));
+      document.getElementById('toolrail-region').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    }, pattern.content);
+
+    await expect(page.locator(`#toolrail-rail [data-tool="pin:pattern:${pattern.name}"]`)).toBeVisible();
+    // The block type was NOT pinned by the drop (unless it already was).
+    expect(await page.evaluate((t) => window.toolrail.isPinned(t), pattern.type)).toBe(typeWasPinned);
+    await page.evaluate((s) => window.toolrail.unpinBlock(s), 'pattern:' + pattern.name);
+  });
+
+  test('a synced pattern reference pins by its ref before the list lands; a ref-less core/block pins nothing (finding 3)', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const dt = new DataTransfer();
+      dt.setData('wp-blocks', JSON.stringify({
+        type: 'inserter',
+        blocks: [window.wp.blocks.createBlock('core/block', { ref: 424242 })],
+      }));
+      document.getElementById('toolrail-region').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    });
+    // Stored as the pattern slot (hidden until a wp_block 424242 exists
+    // here), and never as a pinned "Block" type.
+    await expect.poll(async () => JSON.parse(await getPref(page, 'toolrail-quick-slots'))).toContain('pattern:user:424242');
+    expect(await page.evaluate(() => window.toolrail.isPinned('core/block'))).toBe(false);
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/block"]')).toHaveCount(0);
+
+    await page.evaluate(() => {
+      const dt = new DataTransfer();
+      dt.setData('wp-blocks', JSON.stringify({ type: 'inserter', blocks: [window.wp.blocks.createBlock('core/block')] }));
+      document.getElementById('toolrail-region').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    });
+    expect(await page.evaluate(() => window.toolrail.isPinned('core/block'))).toBe(false);
+    await page.evaluate(() => window.toolrail.unpinBlock('pattern:user:424242'));
+  });
+
+  test('an unresolved permission check is not "denied": the save form still shows; a real "no" hides it (finding 4)', async ({ page }) => {
+    await openNewPost(page);
+    const quoteId = await seedQuote(page);
+
+    // select('core') hands out one memoized selectors object, so the
+    // rail's read at dialog time reaches these stubs.
+    await page.evaluate(() => {
+      const sel = window.wp.data.select('core');
+      window.__realCanUser = sel.canUser;
+      sel.canUser = () => undefined;
+    });
+    await dropOnRail(page, { type: 'block', srcClientIds: [quoteId], srcRootClientId: '' });
+    const dialog = page.locator('.toolrail-adddialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('.toolrail-adddialog-savepattern')).toBeVisible();
+    await expect(dialog).not.toContainText('You cannot create patterns');
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+
+    await page.evaluate(() => { window.wp.data.select('core').canUser = () => false; });
+    await dropOnRail(page, { type: 'block', srcClientIds: [quoteId], srcRootClientId: '' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('You cannot create patterns on this site');
+    await expect(dialog.locator('.toolrail-adddialog-savepattern')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => { window.wp.data.select('core').canUser = window.__realCanUser; });
+  });
+
+  test('pattern pins are not counted as missing while the catalog is still loading (finding 6)', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const sel = window.wp.data.select('core');
+      window.__realHasFinished = sel.hasFinishedResolution;
+      sel.hasFinishedResolution = () => false;
+    });
+    const loading = await page.evaluate(() => window.toolrail.importConfig({
+      format: 'toolrail-set', version: 1, name: 'loading', blocks: ['pattern:user:5150', 'nope/nope'],
+    }));
+    // Only the unknown BLOCK is missing; the pattern is "not fetched yet".
+    expect(loading.missing).toBe(1);
+
+    await page.evaluate(() => { window.wp.data.select('core').hasFinishedResolution = window.__realHasFinished; });
+    const loaded = await page.evaluate(() => window.toolrail.importConfig({
+      format: 'toolrail-set', version: 1, name: 'loaded', blocks: ['pattern:user:5150', 'nope/nope'],
+    }));
+    expect(loaded.missing).toBe(2);
+    await page.evaluate(() => { window.toolrail.deleteConfig('loading'); window.toolrail.deleteConfig('loaded'); });
+  });
+
+  test('a rerender mid-drag does not leave the rail refusing drops (finding 7)', async ({ page }) => {
+    await openNewPost(page);
+    // Start a drag from a tool (its own dragend will never fire once the
+    // button is rebuilt), rebuild the rail, then end the drag the way a
+    // canceled one does — and drop something on the rail.
+    await page.evaluate(() => {
+      const btn = document.querySelector('#toolrail-rail [data-tool="pin:core/heading"]');
+      const dt = new DataTransfer();
+      btn.dispatchEvent(new DragEvent('dragstart', { dataTransfer: dt, bubbles: true, cancelable: true }));
+      window.toolrail.pinBlock('core/quote'); // rerenders the rail
+      document.dispatchEvent(new DragEvent('dragend', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    });
+    await dropOnRail(page, { type: 'inserter', blocks: [{ name: 'core/list', attributes: {}, innerBlocks: [] }] });
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/list"]')).toBeVisible();
+  });
+
+  test('a block result\'s accessible name contains its visible "Block" chip (finding 8)', async ({ page }) => {
+    await openNewPost(page);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('#toolrail-settings-search').fill('Quote');
+    const result = page.locator('.toolrail-settings-result[data-block="core/quote"]');
+    await expect(result).toHaveAttribute('aria-label', 'Pin the Quote block to the toolbar');
+    await expect(result.locator('.toolrail-settings-tag')).toHaveText('Block');
+  });
+});
