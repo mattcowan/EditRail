@@ -1,5 +1,5 @@
 /**
- * Editor Tool Rail — a Photoshop-familiar left toolbar for the block editor.
+ * Editor Tool Rail — a graphics-editor-style left toolbar for the block editor.
  *
  * Unlike a launcher rail, tools here ARM: selecting a tool means the next
  * click in the canvas inserts that tool's block at the click point, then the
@@ -17,7 +17,7 @@
  *
  * POSITION: the rail docks to the left edge by default, and can be moved to
  * the right edge (past the settings side panel), to a full-width bar at the
- * top or bottom, or torn off as a floating Photoshop-style palette. Drag it
+ * top or bottom, or torn off as a floating tool palette. Drag it
  * by the grip and release near an edge to snap; the settings dialog carries
  * the equivalent keyboard path. Surfaces open away from the docked edge — a
  * top rail opens its flyouts downward, a bottom rail upward. See the
@@ -104,8 +104,9 @@
   var CONFIGS_KEY = 'toolrail-slot-configs';
   var POSITION_KEY = 'toolrail-position';
   var MIGRATED_KEY = 'toolrail-slots-migrated';
-  var HELP_SEEN_KEY = 'toolrail-help-seen';
   var HELP_HIDDEN_KEY = 'toolrail-help-hidden';
+  var GROUP_SEEDED_KEY = 'toolrail-group-seeded';
+  var HIDE_CORE_INSERTER_KEY = 'toolrail-hide-core-inserter';
   var WIDE_KEY = 'toolrail-wide';
   var WIDE_TOGGLE_KEY = 'toolrail-wide-toggle';
   var APPEARANCE_KEY = 'toolrail-appearance';
@@ -320,7 +321,7 @@
   }
 
   // -------------------------------------------------------------------
-  // Rail position — docked to an edge, or floating like a Photoshop
+  // Rail position — docked to an edge, or floating like a graphics-editor
   // palette. A per-user account preference, same as the quick slots.
   //
   // The docks hang off the editor's OWN skeleton rather than being
@@ -437,12 +438,12 @@
   // -------------------------------------------------------------------
 
   var ICONS = {
+    pattern: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M4 4h7v7H4V4zm2 2v3h3V6H6zm7-2h7v7h-7V4zm2 2v3h3V6h-3zM4 13h7v7H4v-7zm2 2v3h3v-3H6zm9.5-2a3.5 3.5 0 110 7 3.5 3.5 0 010-7zm0 2a1.5 1.5 0 100 3 1.5 1.5 0 000-3z"/></svg>',
     select: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6 3l12 9.4-5.2.8 3 5.9-2.4 1.2-3-5.9-3.9 3.6z"/></svg>',
     text: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M5 5h14v3h-2V7h-4v10h2v2H9v-2h2V7H7v1H5z"/></svg>',
     heading: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6 4h2.5v7h7V4H18v16h-2.5v-7h-7v7H6z"/></svg>',
     image: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M4 5h16a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6a1 1 0 011-1zm1 2v10h14V7H5zm3 2a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm-2 7l3.5-4 2.5 3 2-2.5L18 16H6z"/></svg>',
     shape: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M9 3a6 6 0 015.2 9H21v9h-9v-6.8A6 6 0 019 3zm5 11.7a6 6 0 01-2 .3v5h7v-5h-5zM9 5a4 4 0 100 8 4 4 0 000-8z"/></svg>',
-    section: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M3 4h18v2H3V4zm2 4h14a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1V9a1 1 0 011-1zm1 2v4h12v-4H6zM3 18h18v2H3v-2z"/></svg>',
     overview: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M3 4h13v4H3V4zm0 6h13v4H3v-4zm0 6h13v4H3v-4zm17.5-12L23 7.5h-1.5V11h-2V7.5H18L20.5 4zM20.5 20L18 16.5h1.5V13h2v3.5H23L20.5 20z"/></svg>',
     pin: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zm0 2.3L6 8.7v6.6l6 3.4 6-3.4V8.7l-6-3.4zM12 8l3.5 2v4L12 16l-3.5-2v-4L12 8z"/></svg>',
     gear: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 9a3 3 0 110 6 3 3 0 010-6zm-1.7-6h3.4l.5 2.4c.6.2 1.1.5 1.6.9l2.3-.8 1.7 3-1.8 1.6a6.7 6.7 0 010 1.8l1.8 1.6-1.7 3-2.3-.8c-.5.4-1 .7-1.6.9l-.5 2.4h-3.4l-.5-2.4a6.6 6.6 0 01-1.6-.9l-2.3.8-1.7-3 1.8-1.6a6.7 6.7 0 010-1.8L4.2 8.5l1.7-3 2.3.8c.5-.4 1-.7 1.6-.9L10.3 3z"/></svg>',
@@ -881,10 +882,12 @@
   // renders a flyout. Registered tools are merged in by railModel().
   // -------------------------------------------------------------------
 
-  // Text, Heading and Image are NOT built-ins — they ship as DEFAULT_SLOTS
-  // (see loadSlots), so authors can reorder, remove and re-pin them like
-  // any other block. Built-ins are only the tools no block type expresses:
-  // Select, the Shape flyout, and Section.
+  // Group, Text, Heading and Image are NOT built-ins — they ship as
+  // DEFAULT_SLOTS (see loadSlots), so authors can reorder, remove and
+  // re-pin them like any other block. Built-ins are only the tools no
+  // block type expresses: Select, the Shape flyout, and Section overview.
+  // (Section was a built-in until 0.1.22; it is the pinned Group now —
+  // owner decision 2026-09-02.)
   var BUILTIN_TOOLS = [
     {
       id: 'select',
@@ -904,16 +907,6 @@
       // able to squat on them before Phase 4 reclaims them. Flip this
       // flag to bring the tool back.
       shelved: true
-    },
-    {
-      id: 'section',
-      label: __('Section', 'toolrail'),
-      hint: __('click in the canvas to insert a group section; Shift-click keeps the tool active', 'toolrail'),
-      icon: ICONS.section,
-      createBlock: function () {
-        return wp.blocks.createBlock('core/group', { layout: { type: 'constrained' } },
-          [wp.blocks.createBlock('core/paragraph')]);
-      }
     },
     {
       id: 'overview',
@@ -951,8 +944,12 @@
    * point, this guards every lookup, so an id arriving by some other
    * route can still never turn a DOM sweep into a SyntaxError.
    */
+  function attrValue(value) {
+    return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  }
+
   function toolSelector(id) {
-    return '[data-tool="' + String(id).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]';
+    return '[data-tool="' + attrValue(id) + '"]';
   }
 
   function allToolIds() {
@@ -1032,15 +1029,20 @@
   }
 
   /**
-   * The out-of-the-box quick slots. Text, Heading and Image are ORDINARY
-   * pinned blocks (owner decision 2026-08-26) — reorderable, removable,
-   * and saved-set–able like anything the author pins.
+   * The out-of-the-box quick slots. Group, Text, Heading and Image are
+   * ORDINARY pinned blocks (owner decisions 2026-08-26 and 2026-09-02) —
+   * reorderable, removable, and saved-set–able like anything the author
+   * pins. Group leads, where the built-in Section tool used to sit, and
+   * inserts exactly what the inserter would — core's bare Group, which
+   * lands as the layout picker. A pin never carries settings of its own
+   * (owner decision 2026-09-02; a configured-block pin is a separate
+   * idea, see private/issue-drafts).
    *
    * These seed exactly once, from migrateSlots(), and never again: an
-   * author who removes all three stays at an empty rail rather than
+   * author who removes all four stays at an empty rail rather than
    * having them resurrected on the next load.
    */
-  var DEFAULT_SLOTS = ['core/paragraph', 'core/heading', 'core/image'];
+  var DEFAULT_SLOTS = ['core/group', 'core/paragraph', 'core/heading', 'core/image'];
 
   /**
    * The single gate for what may sit in the slot list: strings only, no
@@ -1092,7 +1094,7 @@
    *
    * @return {void}
    */
-  function migrateSlots() {
+  function migrateDefaultSlots() {
     if (null !== readKey(MIGRATED_KEY)) {
       return;
     }
@@ -1122,6 +1124,45 @@
     }).concat(existing);
     writeKey(SLOTS_KEY, JSON.stringify(restored));
     writeKey(MIGRATED_KEY, '1');
+  }
+
+  /**
+   * Second one-time lift (0.1.22): Group joins the defaults. Section was
+   * a built-in tool until now, so no stamped account can have pinned or
+   * unpinned core/group on purpose — it is prepended to whatever the
+   * author has, ahead of their pins, where Section used to sit.
+   *
+   * An author who EMPTIED the rail after the first stamp keeps it empty:
+   * the lift only joins a non-empty, readable list. A corrupt list is
+   * left alone, for the same reason "Restore default tools" refuses it.
+   * A fresh install already carries Group in DEFAULT_SLOTS; the stamp is
+   * written either way so the lift never runs twice.
+   *
+   * @return {void}
+   */
+  function seedGroupSlot() {
+    if (null !== readKey(GROUP_SEEDED_KEY)) {
+      return;
+    }
+    var raw = readKey(SLOTS_KEY);
+    if (null !== raw) {
+      var slots = null;
+      try {
+        slots = normalizeSlots(JSON.parse(raw));
+      } catch (e) {
+        slots = null;
+      }
+      if (slots && slots.length && slots.indexOf('core/group') === -1) {
+        writeKey(SLOTS_KEY, JSON.stringify(['core/group'].concat(slots)));
+      }
+    }
+    writeKey(GROUP_SEEDED_KEY, '1');
+  }
+
+  /** Both one-time lifts, in order: the three defaults, then Group. */
+  function migrateSlots() {
+    migrateDefaultSlots();
+    seedGroupSlot();
   }
 
   // migrateSlots() runs from boot(), after migrateLocalToPrefs() — and
@@ -1259,12 +1300,275 @@
     return true;
   }
 
+  // -------------------------------------------------------------------
+  // Pattern catalog (0.1.23). A pinned slot may name a PATTERN as well
+  // as a block type (owner decision 2026-09-02): 'pattern:<name>' for a
+  // registered (core/theme/plugin) pattern, 'pattern:user:<post id>'
+  // for one of the author's own (a wp_block post). Both come from
+  // core-data through public selectors — the registered list resolves
+  // over REST once per page, the user list is an ordinary entity query —
+  // so nothing here depends on the inserter's private pattern store.
+  // An armed pattern click inserts a fresh parse of its content; a
+  // SYNCED user pattern inserts a reference block, exactly as the
+  // inserter would.
+  // -------------------------------------------------------------------
+
+  var PATTERN_SLOT_PREFIX = 'pattern:';
+  var USER_PATTERN_SLOT_PREFIX = 'pattern:user:';
+  // The one query shape every read and refresh uses — core-data keys
+  // its cache by it, so a second shape would be a second fetch. The
+  // edit context is what carries the raw block markup.
+  var USER_PATTERN_QUERY = { per_page: -1, context: 'edit' };
+  /** Slot grammar for a pattern: user:<digits>, or namespace/name. */
+  var PATTERN_SLOT_PATTERN = /^pattern:(user:[0-9]+|[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*)$/i;
+
+  function isPatternSlot(name) {
+    return typeof name === 'string' && name.indexOf(PATTERN_SLOT_PREFIX) === 0;
+  }
+
+  function coreSelect() {
+    try {
+      return wp.data && wp.data.select ? (wp.data.select('core') || null) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** Registered patterns the inserter would offer (inserter !== false). */
+  function registeredPatterns() {
+    var sel = coreSelect();
+    if (!sel || typeof sel.getBlockPatterns !== 'function') {
+      return [];
+    }
+    var list;
+    try {
+      list = sel.getBlockPatterns();
+    } catch (e) {
+      return [];
+    }
+    return Array.isArray(list) ? list.filter(function (p) {
+      return p && typeof p.name === 'string' && p.title && p.inserter !== false && typeof p.content === 'string';
+    }) : [];
+  }
+
+  /**
+   * Patterns saved this session through the add-to-toolbar dialog. A
+   * fresh save lands in core-data's item table but not necessarily in
+   * the query cache the list below reads, so they are merged in here
+   * (deduped by id) rather than trusting that cache to notice.
+   */
+  var sessionUserPatterns = [];
+
+  function userPatternRecords() {
+    var sel = coreSelect();
+    var list = [];
+    if (sel && typeof sel.getEntityRecords === 'function') {
+      try {
+        list = sel.getEntityRecords('postType', 'wp_block', USER_PATTERN_QUERY) || [];
+      } catch (e) {
+        list = [];
+      }
+    }
+    var seen = Object.create(null);
+    return list.concat(sessionUserPatterns).filter(function (r) {
+      if (!r || !r.id || seen[r.id]) {
+        return false;
+      }
+      seen[r.id] = true;
+      return true;
+    });
+  }
+
+  /** A REST field that may be {raw, rendered} or a plain string. */
+  function recordText(field) {
+    if (field && typeof field === 'object') {
+      if (typeof field.raw === 'string') {
+        return field.raw;
+      }
+      return typeof field.rendered === 'string' ? field.rendered.replace(/<[^>]+>/g, '') : '';
+    }
+    return typeof field === 'string' ? field : '';
+  }
+
+  /**
+   * One shape for both kinds: {id (the slot id), kind, name, postId,
+   * title, content, synced}.
+   */
+  function userPatternDescriptor(r) {
+    return {
+      id: USER_PATTERN_SLOT_PREFIX + r.id,
+      kind: 'user',
+      name: 'core/block/' + r.id,
+      postId: r.id,
+      title: recordText(r.title) || sprintf(
+        /* translators: %d: pattern post id. */
+        __('Pattern %d', 'toolrail'),
+        r.id
+      ),
+      content: recordText(r.content),
+      synced: r.wp_pattern_sync_status !== 'unsynced'
+    };
+  }
+
+  function registeredPatternDescriptor(p) {
+    return {
+      id: PATTERN_SLOT_PREFIX + p.name,
+      kind: 'registered',
+      name: p.name,
+      postId: 0,
+      title: p.title,
+      content: p.content,
+      synced: false
+    };
+  }
+
+  /** The author's own patterns first, then the theme's and core's. */
+  function allPatterns() {
+    return userPatternRecords().map(userPatternDescriptor)
+      .concat(registeredPatterns().map(registeredPatternDescriptor));
+  }
+
+  /** The descriptor for a pattern slot id, or null when this site has
+      no such pattern (or has not fetched it yet). */
+  function findPattern(slotId) {
+    if (!isPatternSlot(slotId)) {
+      return null;
+    }
+    var found = null;
+    allPatterns().forEach(function (p) {
+      if (!found && p.id === slotId) {
+        found = p;
+      }
+    });
+    return found;
+  }
+
+  /** Both pattern lists have finished resolving (or cannot resolve at all). */
+  function patternCatalogReady() {
+    var sel = coreSelect();
+    if (!sel || typeof sel.hasFinishedResolution !== 'function') {
+      return true;
+    }
+    try {
+      return sel.hasFinishedResolution('getBlockPatterns', [])
+        && sel.hasFinishedResolution('getEntityRecords', ['postType', 'wp_block', USER_PATTERN_QUERY]);
+    } catch (e) {
+      return true;
+    }
+  }
+
+  /** The blocks an armed pattern click (or a rail drag) inserts. */
+  function patternBlocks(pattern) {
+    if (pattern.kind === 'user' && pattern.synced) {
+      return [wp.blocks.createBlock('core/block', { ref: pattern.postId })];
+    }
+    return wp.blocks.parse(pattern.content || '').filter(function (b) {
+      return b && b.name;
+    });
+  }
+
+  /**
+   * Fetch both lists once per page load, then keep the rail in step with
+   * the core store: a pinned pattern renders as soon as its list lands,
+   * and drops out if its post is deleted. The subscription re-derives a
+   * small signature (the registered count, plus each user pattern's id,
+   * sync status and title) on every core store change — post edits live
+   * there too, so that is per keystroke — and compares it with the last.
+   * Cheap, but not free: which is why it is ids and titles, never
+   * content. The capability check for creating patterns is kicked off
+   * here too, so it has usually resolved before a dialog asks.
+   */
+  var patternCatalogStarted = false;
+  var patternSignature = '';
+
+  function patternCatalogSignature() {
+    return registeredPatterns().length + '|' + userPatternRecords().map(function (r) {
+      return r.id + ':' + (r.wp_pattern_sync_status || '') + ':' + recordText(r.title);
+    }).join(',');
+  }
+
+  function watchPatternCatalog() {
+    if (patternCatalogStarted) {
+      return;
+    }
+    patternCatalogStarted = true;
+    try {
+      var rs = wp.data && wp.data.resolveSelect ? wp.data.resolveSelect('core') : null;
+      if (rs) {
+        if (typeof rs.getBlockPatterns === 'function') {
+          rs.getBlockPatterns().then(null, function () {});
+        }
+        if (typeof rs.getEntityRecords === 'function') {
+          rs.getEntityRecords('postType', 'wp_block', USER_PATTERN_QUERY).then(null, function () {});
+        }
+        if (typeof rs.canUser === 'function') {
+          rs.canUser('create', { kind: 'postType', name: 'wp_block' }).then(null, function () {});
+        }
+      }
+    } catch (e) {
+      /* No core-data — pattern slots simply stay hidden. */
+    }
+    patternSignature = patternCatalogSignature();
+    if (wp.data && typeof wp.data.subscribe === 'function') {
+      try {
+        wp.data.subscribe(function () {
+          var next = patternCatalogSignature();
+          if (next === patternSignature) {
+            return;
+          }
+          patternSignature = next;
+          patternMarkupCache = Object.create(null);
+          // Only a pinned pattern (its tool may appear or vanish) or an
+          // open settings search (its results) can change with the
+          // catalog; anything else would be a rebuild for nothing, and
+          // a rebuild moves focus when it was in the rail.
+          if (!loadSlots().some(isPatternSlot) && !settingsOpen) {
+            return;
+          }
+          window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
+          rerender();
+          if (settingsOpen) {
+            refreshSettings('#toolrail-settings-search');
+          }
+        }, 'core');
+      } catch (e) {
+        /* No store-scoped subscribe: the fetches above still land, the
+           rail just shows their patterns on its next rebuild. */
+      }
+    }
+  }
+
   /**
    * Pinned slots as tool descriptors. Unknown block types (their plugin is
-   * deactivated) are SKIPPED, not deleted — reactivating restores them.
+   * deactivated) and patterns this site has not got — or has not fetched
+   * yet — are SKIPPED, not deleted: reactivating, or the fetch landing,
+   * restores them.
    */
   function slotTools() {
     return loadSlots().map(function (name) {
+      if (isPatternSlot(name)) {
+        var pattern = findPattern(name);
+        if (!pattern) {
+          return null;
+        }
+        return {
+          id: 'pin:' + name,
+          label: sprintf(
+            /* translators: %s: pattern title. */
+            __('%s (pinned pattern)', 'toolrail'),
+            pattern.title
+          ),
+          shortLabel: pattern.title,
+          hint: __('click in the canvas to insert this pattern; manage pinned tools in Toolbar settings', 'toolrail'),
+          icon: ICONS.pattern,
+          blockIcon: null,
+          insertBlock: '',
+          createBlock: function () { return patternBlocks(pattern); },
+          pinnedBlock: '',
+          pinnedPattern: name,
+          children: []
+        };
+      }
       var type = wp.blocks.getBlockType(name);
       if (!type) {
         return null;
@@ -1281,7 +1585,7 @@
         // the accessible name (which keeps it) still contains the
         // visible text, so WCAG 2.5.3 Label in Name holds.
         shortLabel: type.title || name,
-        hint: __('click in the canvas to insert; manage pinned blocks in Toolbar settings', 'toolrail'),
+        hint: __('click in the canvas to insert; manage pinned tools in Toolbar settings', 'toolrail'),
         icon: '',
         blockIcon: type.icon,
         insertBlock: name,
@@ -1294,7 +1598,8 @@
   /**
    * Where a registered tool's `parent` may land besides a built-in id.
    * 'text'/'heading'/'image' were top-level built-ins before those became
-   * default slots (2026-08-26); the aliases keep every published
+   * default slots (2026-08-26), and 'section' followed on 2026-09-02
+   * (it is the pinned Group now); the aliases keep every published
    * integration (the Typography Stylist handoff uses parent: 'text')
    * working against the slot that replaced them. Block names and full
    * slot ids are accepted too, so a provider can nest under ANY pinned
@@ -1303,7 +1608,8 @@
   var PARENT_SLOT_ALIASES = {
     text: 'core/paragraph',
     heading: 'core/heading',
-    image: 'core/image'
+    image: 'core/image',
+    section: 'core/group'
   };
 
   function slotForParent(slots, parent) {
@@ -1504,26 +1810,196 @@
     markCanvasArmed();
   }
 
-  function makeBlockFor(tool) {
+  /**
+   * The block(s) a tool inserts, always as an array: a createBlock tool
+   * may return one block or — a pattern — several. Empty when the tool
+   * cannot build anything right now.
+   *
+   * @param {Object} tool A railModel() entry or a flyout child.
+   * @return {Object[]}
+   */
+  function makeBlocksFor(tool) {
+    var made = null;
     try {
       if (tool.createBlock) {
-        return tool.createBlock();
-      }
-      if (tool.insertBlock && wp.blocks.getBlockType(tool.insertBlock)) {
-        return wp.blocks.createBlock(tool.insertBlock);
+        made = tool.createBlock();
+      } else if (tool.insertBlock && wp.blocks.getBlockType(tool.insertBlock)) {
+        made = wp.blocks.createBlock(tool.insertBlock);
       }
     } catch (e) {
       warn('tool "' + tool.id + '" failed to create its block: ' + e.message);
+      made = null;
     }
-    return null;
+    return [].concat(made || []).filter(function (b) {
+      return b && typeof b.name === 'string';
+    });
   }
 
   /**
-   * Insert the armed tool's block at the click point: clicks resolve to the
-   * nearest block, above its vertical midpoint inserts before it, below
-   * inserts after; empty canvas space appends at the end of the document.
-   * (Flow-document position — x/y freeform layout is a later phase.)
+   * Where an armed click lands, as {rootClientId, index}. (Flow-document
+   * position — x/y freeform layout is a later phase.)
+   *
+   * ON a block: above its vertical midpoint inserts before it, below
+   * inserts after — inside that block's own parent, so a click on a
+   * block nested in a Group stays in the Group.
+   *
+   * In the GAP between blocks the click reaches the block list itself
+   * (the root container, or a Group's inner list), not a block, and the
+   * old resolution fell through to "append at the end of the document":
+   * a click plainly between paragraphs two and three put the block at
+   * the bottom. It rarely showed because core's between-block "+"
+   * popover, in the EDITOR document, caught most such clicks first —
+   * once that is hidden while armed (markCanvasArmed) the fall-through
+   * is the whole experience, so the gap now resolves against the list's
+   * own children in READING order: a child is before the pointer when
+   * the pointer is below it, or level with it and past its horizontal
+   * midpoint in the list's writing direction. A stacked list reduces to
+   * the y rule; a Row, Grid or Columns gets the x rule for the row the
+   * pointer is on (a y-only count put the block at an arbitrary index
+   * in a Row, where every child shares one midpoint — review
+   * 2026-09-02, finding 3). Above-the-first (0) and below-the-last
+   * (append) fall out of the same count.
+   *
+   * Empty canvas below everything, or a click that reaches no list at
+   * all, still appends at the end of the document.
+   *
+   * @param {MouseEvent} e   The canvas click.
+   * @param {Object}     sel The core/block-editor selectors.
+   * @return {{rootClientId: string, index: number}}
    */
+  function resolveInsertionPoint(e, sel) {
+    var target = e.target && e.target.closest ? e.target : null;
+    var blockEl = target ? target.closest('[data-block]') : null;
+    var listEl = target ? target.closest('.block-editor-block-list__layout') : null;
+
+    // A block list nested INSIDE the nearest block means the pointer is
+    // in that block's inner gap, not on the block. No block at all means
+    // the root list's gap (or the empty space under it).
+    if (listEl && (!blockEl || blockEl.contains(listEl))) {
+      var rtl = false;
+      try {
+        rtl = listEl.ownerDocument.defaultView.getComputedStyle(listEl).direction === 'rtl';
+      } catch (err) {
+        rtl = false;
+      }
+      var before = 0;
+      Array.prototype.forEach.call(listEl.children, function (el) {
+        if (!el.hasAttribute || !el.hasAttribute('data-block')) {
+          return;
+        }
+        var r = el.getBoundingClientRect();
+        if (e.clientY > r.bottom) {
+          before += 1;
+          return;
+        }
+        if (e.clientY >= r.top) {
+          var midX = r.left + r.width / 2;
+          if (rtl ? e.clientX < midX : e.clientX > midX) {
+            before += 1;
+          }
+        }
+      });
+      return {
+        rootClientId: blockEl ? blockEl.getAttribute('data-block') : '',
+        index: before
+      };
+    }
+
+    if (blockEl) {
+      var clientId = blockEl.getAttribute('data-block');
+      var index = sel.getBlockIndex(clientId);
+      var rect = blockEl.getBoundingClientRect();
+      if (e.clientY > rect.top + rect.height / 2) {
+        index += 1;
+      }
+      return { rootClientId: sel.getBlockRootClientId(clientId) || '', index: index };
+    }
+
+    return { rootClientId: '', index: sel.getBlockCount('') };
+  }
+
+  /**
+   * Walk an insertion point up until a parent accepts the block, or
+   * return null when the root refuses it too.
+   *
+   * insertBlocks() silently drops a block its target parent refuses
+   * (Columns takes only Column, Buttons only Button — verified in
+   * core's action, which filters through canInsertBlockType and
+   * dispatches nothing when the list comes back empty), and the click
+   * had already disarmed the tool: "the tool did nothing", with no
+   * reason. The click meant "near here", so a point inside a refusing
+   * container becomes the slot right after that container in ITS
+   * parent — before it when the click was above the container's first
+   * child — and so on up. Review 2026-09-02, finding 2: the on-block
+   * path had the same hole, so both paths come through here.
+   *
+   * @param {Object}   sel        The core/block-editor selectors.
+   * @param {string[]} blockNames Every top-level block the tool inserts
+   *                              (a pattern may have several); a parent
+   *                              must accept all of them.
+   * @param {Object}   point      {rootClientId, index} from resolveInsertionPoint.
+   * @return {Object|null}
+   */
+  function climbToAllowedParent(sel, blockNames, point) {
+    if (typeof sel.canInsertBlockType !== 'function') {
+      return point;
+    }
+    var rootClientId = point.rootClientId;
+    var index = point.index;
+    var allowedIn = function (root) {
+      return blockNames.every(function (name) {
+        return sel.canInsertBlockType(name, root);
+      });
+    };
+    while (!allowedIn(rootClientId)) {
+      if (!rootClientId) {
+        return null;
+      }
+      var containerIndex = sel.getBlockIndex(rootClientId);
+      index = index === 0 ? containerIndex : containerIndex + 1;
+      rootClientId = sel.getBlockRootClientId(rootClientId) || '';
+    }
+    return { rootClientId: rootClientId, index: index };
+  }
+
+  /**
+   * Tell the author an armed click could not insert: a snackbar when
+   * core's notices store is reachable (it announces itself), else the
+   * live region alone.
+   *
+   * @param {string} label The block or pattern title that had no legal home.
+   * @return {void}
+   */
+  function notifyCannotInsert(label) {
+    var message = sprintf(
+      /* translators: %s: block or pattern title. */
+      __('%s cannot be inserted here.', 'toolrail'),
+      label
+    );
+    try {
+      var notices = wp.data.dispatch('core/notices');
+      if (notices && typeof notices.createInfoNotice === 'function') {
+        notices.createInfoNotice(message, { type: 'snackbar', id: 'toolrail-cannot-insert' });
+        return;
+      }
+    } catch (err) {
+      /* No notices store — the live region below still speaks. */
+    }
+    speak(message);
+  }
+
+  /** What to call the thing a tool inserts, in a message. */
+  function toolInsertLabel(tool, blocks) {
+    if (tool.pinnedPattern) {
+      return tool.shortLabel || tool.label;
+    }
+    var type = blocks[0] ? wp.blocks.getBlockType(blocks[0].name) : null;
+    if (type && type.title) {
+      return type.title;
+    }
+    return blocks[0] ? blocks[0].name : tool.label;
+  }
+
   /**
    * clientIds present at pointerdown, before core has reacted to the
    * gesture at all. handleCanvasClick uses this to tell the block core
@@ -1569,8 +2045,8 @@
       return;
     }
 
-    var block = makeBlockFor(tool);
-    if (!block) {
+    var blocks = makeBlocksFor(tool);
+    if (!blocks.length) {
       setActiveTool('select');
       return;
     }
@@ -1580,19 +2056,7 @@
 
     var sel = wp.data.select('core/block-editor');
     var dispatch = wp.data.dispatch('core/block-editor');
-    var rootClientId = '';
-    var index = sel.getBlockCount('');
-
-    var target = e.target && e.target.closest ? e.target.closest('[data-block]') : null;
-    if (target) {
-      var clientId = target.getAttribute('data-block');
-      rootClientId = sel.getBlockRootClientId(clientId) || '';
-      index = sel.getBlockIndex(clientId);
-      var rect = target.getBoundingClientRect();
-      if (e.clientY > rect.top + rect.height / 2) {
-        index += 1;
-      }
-    }
+    var point = climbToAllowedParent(sel, blocks.map(function (b) { return b.name; }), resolveInsertionPoint(e, sel));
 
     // preGestureIds is captured at POINTERDOWN, not here. Core has
     // already appended its default block by the time this click handler
@@ -1606,8 +2070,23 @@
     }());
     preGestureIds = null;
 
-    dispatch.insertBlocks(block, index, rootClientId);
-    sweepStrayDefaultBlock(knownIds, block.clientId);
+    if (!point) {
+      // No parent on the way up accepts this block. Say so and STAY
+      // armed — a silent disarm read as "the tool did nothing". Core's
+      // empty-space append is NOT swept here: with nothing of ours to
+      // take the selection, removing that paragraph (the only, selected
+      // block) hands focus back to core's appender, which inserts
+      // another one ~60ms later (measured 2026-09-02) — the sweep would
+      // only churn clientIds. So the click leaves what a Select click
+      // there leaves.
+      notifyCannotInsert(toolInsertLabel(tool, blocks));
+      return;
+    }
+
+    var insertedIds = Object.create(null);
+    blocks.forEach(function (b) { insertedIds[b.clientId] = true; });
+    dispatch.insertBlocks(blocks, point.index, point.rootClientId);
+    sweepStrayDefaultBlock(knownIds, insertedIds, blocks[0].clientId);
 
     if (!e.shiftKey) {
       setActiveTool('select');
@@ -1638,11 +2117,12 @@
    * same event or on the next React flush; the second pass is a no-op
    * whenever the first already caught it.
    *
-   * @param {Object} knownIds   clientIds present before the insert.
-   * @param {string} insertedId clientId of the tool's own block.
+   * @param {Object} knownIds    clientIds present before the insert.
+   * @param {Object} insertedIds clientIds of the tool's own block(s), as a map.
+   * @param {string} primaryId   The block to select once the stray is gone.
    * @return {void}
    */
-  function sweepStrayDefaultBlock(knownIds, insertedId) {
+  function sweepStrayDefaultBlock(knownIds, insertedIds, primaryId) {
     // Only the CURRENT gesture may sweep. Both passes below are scheduled
     // against one click's knownIds, and that snapshot goes stale the
     // moment another canvas gesture starts — at which point a delayed
@@ -1674,7 +2154,7 @@
         return;
       }
       var strays = sel.getBlocks().filter(function (b) {
-        return b.clientId !== insertedId
+        return !insertedIds[b.clientId]
           && !knownIds[b.clientId]
           && b.name === defaultName
           && wp.blocks.isUnmodifiedDefaultBlock(b);
@@ -1686,8 +2166,8 @@
       // selectPrevious=false: removing the stray must not move the caret
       // off the block the tool just inserted.
       wp.data.dispatch('core/block-editor').removeBlocks(strays, false);
-      if (sel.getBlock(insertedId)) {
-        wp.data.dispatch('core/block-editor').selectBlock(insertedId);
+      if (primaryId && sel.getBlock(primaryId)) {
+        wp.data.dispatch('core/block-editor').selectBlock(primaryId);
       }
     };
     // The t=0 pass is the one that does the work in practice (measured:
@@ -1747,10 +2227,32 @@
     markCanvasArmed();
   }
 
+  /** Whether core's between-block "+" stays hidden while a tool is armed
+      (Toolbar settings; on unless the author turned it off). */
+  function hidesCoreInserterWhileArmed() {
+    return readKey(HIDE_CORE_INSERTER_KEY) !== '0';
+  }
+
   function markCanvasArmed() {
+    var armed = activeTool !== 'select';
     var doc = boundDoc || canvasDoc();
     if (doc && doc.documentElement) {
-      doc.documentElement.classList.toggle('toolrail-armed', activeTool !== 'select');
+      doc.documentElement.classList.toggle('toolrail-armed', armed);
+    }
+    // Core's between-block inserter is a popover in the EDITOR document,
+    // not in the canvas: hovering the gap between two blocks (or the
+    // foot of a Cover) raises a "+" that sits on top of the iframe, so
+    // an armed click there lands on core's inserter instead of the
+    // rail's canvas handler — the tool never fires and core's block
+    // picker opens (observed on a fresh install, 2026-09-02). While a
+    // tool is armed the click IS the insertion, so the "+" has nothing
+    // to offer; this body class hides it (editor-rail.css) — the "+"
+    // itself, and the empty-block side "+", NOT the popover shell, which
+    // also carries the drop line a drag shows — and the click falls
+    // through to the canvas. On by default, with a Toolbar settings
+    // checkbox to turn it off (owner decision).
+    if (document.body) {
+      document.body.classList.toggle('toolrail-hides-inserter', armed && hidesCoreInserterWhileArmed());
     }
   }
 
@@ -2425,8 +2927,19 @@
    */
   var settingsStatus = '';
 
+  /**
+   * How many of these slots this site cannot render right now. A pattern
+   * slot counts only once the catalog has actually loaded: before that,
+   * "not found" means "not fetched yet", and an import or set load that
+   * ran first announced patterns as unavailable that were on their way
+   * (review 2026-09-03, finding 6).
+   */
   function missingBlockCount(blocks) {
+    var catalogReady = patternCatalogReady();
     return blocks.filter(function (name) {
+      if (isPatternSlot(name)) {
+        return catalogReady && !findPattern(name);
+      }
       return !wp.blocks.getBlockType(name);
     }).length;
   }
@@ -2457,16 +2970,17 @@
 
   /**
    * Validate + store a parsed import. Returns a result object; never
-   * throws. Invalid block-name entries are dropped (they could not be
-   * looked up or rendered anyway); a name collision gets a " (2)" suffix
-   * rather than silently overwriting the author's existing set.
+   * throws. Entries that are neither a block name nor a pattern slot are
+   * dropped (they could not be looked up or rendered anyway); a name
+   * collision gets a " (2)" suffix rather than silently overwriting the
+   * author's existing set.
    */
   function importConfigPayload(parsed) {
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.blocks)) {
       return { ok: false, error: __('Not a Toolrail set file — expected JSON with a "blocks" array.', 'toolrail') };
     }
     var valid = parsed.blocks.filter(function (n) {
-      return typeof n === 'string' && BLOCK_NAME_PATTERN.test(n);
+      return typeof n === 'string' && (BLOCK_NAME_PATTERN.test(n) || PATTERN_SLOT_PATTERN.test(n));
     });
     var dropped = parsed.blocks.length - valid.length;
     // A set file is hand-editable and hand-writable, so it can repeat a
@@ -2548,7 +3062,7 @@
     node.appendChild(head);
 
     var note = settingsRow('p', 'toolrail-settings-note');
-    note.textContent = __('Pinned blocks appear on the toolbar as quick-insert tools. They are saved to your account on this site, for you only.', 'toolrail');
+    note.textContent = __('Pinned tools appear on the toolbar as quick-insert tools: any block type, and any pattern. They are saved to your account on this site, for you only.', 'toolrail');
     node.appendChild(note);
 
     node.appendChild(buildPositionControl());
@@ -2564,7 +3078,7 @@
     // list — right above the search that added it, owner decision
     // 2026-08-27) ---
     var pinnedHead = settingsRow('h3', 'toolrail-settings-subtitle');
-    pinnedHead.textContent = __('Pinned blocks', 'toolrail');
+    pinnedHead.textContent = __('Pinned tools', 'toolrail');
     node.appendChild(pinnedHead);
 
     var pinnedList = settingsRow('ul', 'toolrail-settings-pinned');
@@ -2575,11 +3089,26 @@
       node.appendChild(empty);
     }
     slots.forEach(function (name, i) {
-      var type = wp.blocks.getBlockType(name);
+      var isPattern = isPatternSlot(name);
+      var pattern = isPattern ? findPattern(name) : null;
+      var type = isPattern ? null : wp.blocks.getBlockType(name);
       var li = settingsRow('li', 'toolrail-settings-pinnedrow');
       var label = settingsRow('span', 'toolrail-settings-pinnedname');
-      label.textContent = type ? type.title : name + ' ' + __('(inactive)', 'toolrail');
+      if (isPattern) {
+        label.textContent = pattern
+          ? pattern.title
+          : name.slice(PATTERN_SLOT_PREFIX.length) + ' ' + __('(inactive)', 'toolrail');
+      } else {
+        label.textContent = type ? type.title : name + ' ' + __('(inactive)', 'toolrail');
+      }
       li.appendChild(label);
+      if (isPattern) {
+        // The kind, visible, OUTSIDE the name span — so the arrow and
+        // Unpin names below stay "Move <title> up" / "Unpin <title>".
+        var kindTag = settingsRow('span', 'toolrail-settings-tag');
+        kindTag.textContent = __('Pattern', 'toolrail');
+        li.appendChild(kindTag);
+      }
 
       // Reaching either end disables the arrow that was just clicked, so
       // each handler offers the opposite arrow on the same row as its
@@ -2689,14 +3218,14 @@
     // --- Add a block ---
     var searchLabel = settingsRow('label', 'toolrail-settings-label');
     searchLabel.setAttribute('for', 'toolrail-settings-search');
-    searchLabel.textContent = __('Add a block', 'toolrail');
+    searchLabel.textContent = __('Add a block or pattern', 'toolrail');
     node.appendChild(searchLabel);
 
     var search = document.createElement('input');
     search.type = 'search';
     search.id = 'toolrail-settings-search';
     search.className = 'toolrail-settings-search';
-    search.placeholder = __('Search block types…', 'toolrail');
+    search.placeholder = __('Search block types and patterns…', 'toolrail');
     search.value = searchValue || '';
     node.appendChild(search);
 
@@ -2708,39 +3237,59 @@
       results.textContent = '';
       var term = search.value.trim().toLowerCase();
       var pinned = loadSlots();
-      var matches = insertableBlockTypes().filter(function (t) {
-        if (pinned.indexOf(t.name) !== -1) {
-          return false;
-        }
-        if (!term) {
-          return false;
-        }
-        return t.title.toLowerCase().indexOf(term) !== -1 || t.name.toLowerCase().indexOf(term) !== -1;
-      }).slice(0, 12);
+      var hits = function (title, name) {
+        return String(title).toLowerCase().indexOf(term) !== -1 || String(name).toLowerCase().indexOf(term) !== -1;
+      };
+      var blockMatches = term ? insertableBlockTypes().filter(function (t) {
+        return pinned.indexOf(t.name) === -1 && hits(t.title, t.name);
+      }).slice(0, 12) : [];
+      // Patterns after blocks, under the same cap: the author's own
+      // first (the catalog lists them first), then the theme's and core's.
+      var patternMatches = term ? allPatterns().filter(function (p) {
+        return pinned.indexOf(p.id) === -1 && hits(p.title, p.name);
+      }).slice(0, 12) : [];
 
       if (!term) {
         var hint = settingsRow('p', 'toolrail-settings-empty');
-        hint.textContent = __('Type to search the available block types.', 'toolrail');
+        hint.textContent = __('Type to search the available block types and patterns.', 'toolrail');
         results.appendChild(hint);
         return;
       }
-      if (!matches.length) {
+      if (!blockMatches.length && !patternMatches.length) {
         var none = settingsRow('p', 'toolrail-settings-empty');
-        none.textContent = __('No matching blocks.', 'toolrail');
+        none.textContent = __('No matching blocks or patterns.', 'toolrail');
         results.appendChild(none);
         return;
       }
-      matches.forEach(function (t) {
-        var btn = settingsButton(t.title, function () {
-          pinBlock(t.name);
+      // Visible text is the title plus a kind tag; the accessible name
+      // (aria-label) contains the title, so Label in Name holds.
+      var resultButton = function (title, kindLabel, ariaLabel, onPin) {
+        var btn = settingsButton(title, function () {
+          onPin();
           refreshSettings('#toolrail-settings-search');
         }, 'toolrail-settings-result');
-        btn.setAttribute('aria-label', sprintf(
+        btn.setAttribute('aria-label', ariaLabel);
+        var tag = settingsRow('span', 'toolrail-settings-tag');
+        tag.textContent = kindLabel;
+        btn.appendChild(tag);
+        return btn;
+      };
+      blockMatches.forEach(function (t) {
+        var btn = resultButton(t.title, __('Block', 'toolrail'), sprintf(
           /* translators: %s: block title. */
-          __('Pin %s to the toolbar', 'toolrail'),
+          __('Pin the %s block to the toolbar', 'toolrail'),
           t.title
-        ));
+        ), function () { pinBlock(t.name); });
         btn.dataset.block = t.name;
+        results.appendChild(btn);
+      });
+      patternMatches.forEach(function (p) {
+        var btn = resultButton(p.title, __('Pattern', 'toolrail'), sprintf(
+          /* translators: %s: pattern title. */
+          __('Pin the %s pattern to the toolbar', 'toolrail'),
+          p.title
+        ), function () { pinBlock(p.id); });
+        btn.dataset.pattern = p.id;
         results.appendChild(btn);
       });
     }
@@ -2897,6 +3446,32 @@
       });
     });
     node.appendChild(importInput);
+
+    // --- Inserting ---
+    node.appendChild(settingsDivider());
+    var insertHead = settingsRow('h3', 'toolrail-settings-subtitle');
+    insertHead.textContent = __('Inserting', 'toolrail');
+    node.appendChild(insertHead);
+
+    var hideInserterRow = settingsRow('label', 'toolrail-settings-positionrow');
+    var hideInserter = document.createElement('input');
+    hideInserter.type = 'checkbox';
+    hideInserter.id = 'toolrail-settings-hideinserter';
+    hideInserter.checked = hidesCoreInserterWhileArmed();
+    hideInserter.addEventListener('change', function () {
+      writeKey(HIDE_CORE_INSERTER_KEY, hideInserter.checked ? '1' : '0');
+      // Takes effect on the next arm — or now, if a tool is armed.
+      markCanvasArmed();
+    });
+    var hideInserterText = settingsRow('span', '');
+    hideInserterText.textContent = __('While a tool is armed, hide the editor\'s own "+" buttons (between blocks, and beside an empty block)', 'toolrail');
+    hideInserterRow.appendChild(hideInserter);
+    hideInserterRow.appendChild(hideInserterText);
+    node.appendChild(hideInserterRow);
+
+    var hideInserterHint = settingsRow('p', 'toolrail-settings-empty');
+    hideInserterHint.textContent = __('With this off, the "+" can take the click that was meant for the armed tool.', 'toolrail');
+    node.appendChild(hideInserterHint);
 
     // --- Help ---
     node.appendChild(settingsDivider());
@@ -3080,14 +3655,16 @@
       {
         title: __('Inserting with a tool', 'toolrail'),
         body: [
-          __('Select a tool, then click in the canvas. The tool\'s block is inserted at the click point and the toolbar returns to Select.', 'toolrail'),
-          __('Shift-click in the canvas to keep the tool armed for repeat inserts. Press Escape to return to Select at any time.', 'toolrail')
+          __('Select a tool, then click in the canvas. The tool\'s block is inserted at the click point and the toolbar returns to Select. You can also drag a tool from the toolbar into the canvas and drop it where you want it.', 'toolrail'),
+          __('Shift-click in the canvas to keep the tool armed for repeat inserts. Press Escape to return to Select at any time.', 'toolrail'),
+          __('While a tool is armed, the editor\'s own "+" buttons are hidden, so your click goes to the tool. A checkbox under "Inserting" in Toolbar settings turns this off.', 'toolrail')
         ]
       },
       {
-        title: __('Pinning blocks', 'toolrail'),
+        title: __('Pinning tools', 'toolrail'),
         body: [
-          __('Pin any block type as a quick-insert tool: search under "Add a block" in Toolbar settings, drag a block from the inserter onto the toolbar, or choose "Pin to toolbar" in a block\'s options menu.', 'toolrail'),
+          __('Pin any block type or pattern as a quick-insert tool: search under "Add a block or pattern" in Toolbar settings, drag a block or pattern from the inserter onto the toolbar, or choose "Pin to toolbar" in a block\'s options menu.', 'toolrail'),
+          __('Drop a block from the canvas onto the toolbar to pin its type, or to save it as a pattern with its settings and contents and pin that. "Save as pattern and pin to toolbar…" in the block\'s options menu does the same.', 'toolrail'),
           __('Remove a pin with Unpin in Toolbar settings, or "Unpin from toolbar" in the block\'s options menu.', 'toolrail')
         ]
       },
@@ -3133,11 +3710,12 @@
 
   /**
    * @param {HTMLElement} wrapper The region to hang the panel in.
-   * @param {Object}      opts    {takeFocus: false} for the first-run
-   *                              auto-open, which must not steal the
-   *                              author's caret. Explicit opens move
-   *                              focus into the panel so Escape and Tab
-   *                              behave like the settings dialog.
+   * @param {Object}      opts    {takeFocus: false} opens without moving
+   *                              focus (no caller since the first-run
+   *                              auto-open went in 0.1.22; kept for a
+   *                              programmatic opener). Explicit opens
+   *                              move focus into the panel so Escape and
+   *                              Tab behave like the settings dialog.
    */
   function openHelp(wrapper, opts) {
     if (helpOpen) {
@@ -3197,37 +3775,14 @@
     }
   }
 
-  /**
-   * First-run auto-open: once per account (the `toolrail-help-seen`
-   * stamp goes through the account preferences like every other key),
-   * never again unless invoked — closing IS dismissal, so there is no
-   * "don't show this again" affordance.
-   *
-   * The 400ms delay gives the preferences persistence attach a beat to
-   * resolve, so a stamp set on another browser is normally visible
-   * before this reads it. If the attach still lands later, the worst
-   * case is one extra auto-open — accepted, matching the tolerance the
-   * migration lift already lives with.
-   */
-  var helpFirstRunChecked = false;
-
-  function maybeAutoOpenHelp() {
-    if (helpFirstRunChecked) {
-      return;
-    }
-    helpFirstRunChecked = true;
-    window.setTimeout(function () {
-      if (helpOpen || settingsOpen || isHelpHidden() || readKey(HELP_SEEN_KEY) !== null) {
-        return;
-      }
-      var wrapper = document.getElementById('toolrail-region');
-      if (!wrapper) {
-        return;
-      }
-      writeKey(HELP_SEEN_KEY, '1');
-      openHelp(wrapper, { takeFocus: false });
-    }, 400);
-  }
+  // The Help panel never opens by itself. 0.1.9–0.1.21 auto-opened it
+  // once per account; on a fresh account that collided with core's own
+  // "Welcome to the editor" guide — the panel is light-dismiss, so the
+  // click that closed the guide closed the help, unread, and the
+  // one-time stamp was already spent. Owner decision 2026-09-02: two
+  // first-run surfaces is one too many. The "?" tool and Toolbar
+  // settings are the ways in; the old `toolrail-help-seen` stamp is
+  // simply never read again.
 
   // -------------------------------------------------------------------
   // Section overview (R6) — zoom the canvas out, reorder sections, and
@@ -6211,7 +6766,7 @@
     if (!region) {
       return;
     }
-    var wantsTop = settingsOpen || helpOpen || !!openFlyout || !!drag || position.dock === 'float';
+    var wantsTop = settingsOpen || helpOpen || addDialogOpen || !!openFlyout || !!drag || position.dock === 'float';
     region.classList.toggle('is-raised', wantsTop);
   }
 
@@ -6454,7 +7009,7 @@
     e.preventDefault();
 
     // Tear a docked rail off on first movement so it follows the pointer,
-    // the way a docked Photoshop palette does.
+    // the way a docked palette in a graphics editor does.
     if (!drag.torn) {
       drag.torn = true;
       var parent = skeletonBody();
@@ -6578,6 +7133,21 @@
       glyph.className = 'toolrail-flyout-glyph';
       glyph.setAttribute('aria-hidden', 'true');
       btn.appendChild(glyph);
+    }
+
+    // Pointer sugar (0.1.23): an arming tool can also be DRAGGED into
+    // the canvas, the way core's inserter items can. The payload is the
+    // one core's inserter sends, so core's drop zone owns the rest —
+    // the drop line, the target, the insert — and nothing arms. The
+    // keyboard and screen-reader path stays arm-then-click.
+    if (isArmingTool(tool)) {
+      btn.draggable = true;
+      btn.addEventListener('dragstart', function (e) {
+        onToolDragStart(e, tool);
+      });
+      btn.addEventListener('dragend', function () {
+        railDragActive = false;
+      });
     }
 
     btn.addEventListener('click', function () {
@@ -6761,7 +7331,7 @@
     // pixels and summon a horizontal scrollbar strip at the section's
     // foot (the owner's screenshot, 2026-08-27). These step buttons are
     // the visible affordance instead — each renders only while there is
-    // more to scroll in its direction, Photoshop-style. Pointer sugar
+    // more to scroll in its direction, as in a graphics editor. Pointer sugar
     // like the grip (aria-hidden, unfocusable): wheel and touch scroll
     // the section directly, and the keyboard path is the arrow keys,
     // which scroll the focused tool into view.
@@ -6961,11 +7531,20 @@
 
     wrapper.appendChild(buildRail(wrapper));
 
-    // Drop target: pin a block type dragged from the inserter (or a canvas
-    // block) onto the rail. Pointer sugar — the keyboard path is the block
-    // menu's "Pin to toolbar" item.
+    // Drop target: a block type or a pattern dragged from the inserter
+    // pins at once; a block dragged out of the canvas opens the
+    // add-to-toolbar dialog (see handleRailDrop). Pointer sugar — the
+    // keyboard paths are the block menu's "Pin to toolbar" and "Save as
+    // pattern and pin to toolbar…" items and the settings search.
+    //
+    // A drag that started on one of the rail's own tools is refused
+    // HERE, and only here: without preventDefault on dragover the browser
+    // never fires drop on the rail at all, so a drop-side guard would be
+    // dead code — and could not work anyway, since the document-level
+    // capture listener clears railDragActive before any bubble-phase
+    // handler reads it (review 2026-09-03, second round, finding 6).
     wrapper.addEventListener('dragover', function (e) {
-      if (e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types, 'wp-blocks') !== -1) {
+      if (!railDragActive && e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types, 'wp-blocks') !== -1) {
         e.preventDefault();
         wrapper.classList.add('is-drop-target');
       }
@@ -6984,22 +7563,530 @@
       }
       e.preventDefault();
       try {
-        var data = JSON.parse(raw);
-        var name = '';
-        if (data && data.type === 'inserter' && Array.isArray(data.blocks) && data.blocks[0]) {
-          name = data.blocks[0].name || '';
-        } else if (data && Array.isArray(data.srcClientIds) && data.srcClientIds[0]) {
-          name = wp.data.select('core/block-editor').getBlockName(data.srcClientIds[0]) || '';
-        }
-        if (name) {
-          pinBlock(name);
-        }
+        handleRailDrop(JSON.parse(raw), wrapper);
       } catch (err) {
         /* Unrecognized payload — ignore. */
       }
     });
 
     return wrapper;
+  }
+
+  // -------------------------------------------------------------------
+  // Drag between the rail and the canvas (0.1.23)
+  // -------------------------------------------------------------------
+
+  /**
+   * True while one of the rail's own tools is mid-drag.
+   *
+   * The button that started the drag may be gone by dragend — a rerender
+   * mid-drag (a catalog change, a tools-updated event) rebuilds every
+   * button, and a detached source's dragend never reaches the document —
+   * which left the flag stuck and the rail refusing drops for the rest
+   * of the page (review 2026-09-03, finding 7). So the flag also clears
+   * on every rerender (the worst that can follow is a no-op re-pin of a
+   * tool that is already pinned) and on any dragend or drop the editor
+   * document sees.
+   */
+  var railDragActive = false;
+
+  document.addEventListener('dragend', function () {
+    railDragActive = false;
+  }, true);
+  document.addEventListener('drop', function () {
+    railDragActive = false;
+  }, true);
+
+  function onToolDragStart(e, tool) {
+    if (!e.dataTransfer || !toolAvailable(tool)) {
+      e.preventDefault();
+      return;
+    }
+    var blocks = makeBlocksFor(tool);
+    if (!blocks.length) {
+      e.preventDefault();
+      return;
+    }
+    closeFlyout(false);
+    railDragActive = true;
+    try {
+      e.dataTransfer.setData('wp-blocks', JSON.stringify({ type: 'inserter', blocks: blocks }));
+      e.dataTransfer.effectAllowed = 'copy';
+    } catch (err) {
+      railDragActive = false;
+      e.preventDefault();
+    }
+  }
+
+  /** Whitespace-insensitive markup, for matching a dropped pattern. */
+  function normalizedMarkup(blocks) {
+    try {
+      return wp.blocks.serialize(blocks).replace(/\s+/g, ' ').trim();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  /**
+   * Each pattern's own normalized markup, parsed once and reused across
+   * drops (core memoizes this same parse in its inserter; unmemoized it
+   * re-parsed a 50–150 pattern catalog on the main thread per drop —
+   * review 2026-09-03, finding 5). Keyed by slot id plus a HASH of the
+   * content, not its length: the catalog signature deliberately never
+   * reads content, so a user pattern edited to the same byte length (an
+   * h2 made an h3) kept its stale parse, missed the match, and fell
+   * through to a type pin — the bug the match exists to prevent
+   * (review 2026-09-03, second round, finding 2). Hashing is one pass
+   * over each pattern's content per drop, and drops are rare; the
+   * per-keystroke signature stays cheap. A 32-bit collision on same id,
+   * same length, different content would serve a stale parse; that is
+   * a non-event. The whole map is dropped whenever the signature
+   * changes (watchPatternCatalog), which bounds it to the live catalog.
+   */
+  var patternMarkupCache = Object.create(null);
+
+  /** djb2 over a string, as base 36. */
+  function contentHash(text) {
+    var h = 5381;
+    for (var i = 0; i < text.length; i++) {
+      h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+    }
+    return (h >>> 0).toString(36);
+  }
+
+  function patternMarkup(p) {
+    var content = p.content || '';
+    var key = p.id + '#' + content.length + '#' + contentHash(content);
+    if (!(key in patternMarkupCache)) {
+      var own;
+      try {
+        own = normalizedMarkup(wp.blocks.parse(p.content || ''));
+      } catch (e) {
+        own = '';
+      }
+      patternMarkupCache[key] = own;
+    }
+    return patternMarkupCache[key];
+  }
+
+  /**
+   * Which pattern a set of dropped blocks came from. Core's inserter
+   * drags a pattern as its parsed blocks and nothing else — the payload
+   * carries no pattern name (verified in this WordPress: the transfer
+   * data is {type: 'inserter', blocks}) — so the only identity left is
+   * the content: serialize the drop and compare with each pattern's own
+   * round trip. Parsed by the same parser, the two agree apart from
+   * whitespace. A synced user pattern never gets here: it drags as one
+   * reference block and is recognized by its ref instead.
+   *
+   * @param {Object[]} blocks The dropped payload's blocks.
+   * @return {Object|null} A pattern descriptor, or null.
+   */
+  function matchPattern(blocks) {
+    var wanted = normalizedMarkup(blocks);
+    if (!wanted) {
+      return null;
+    }
+    var found = null;
+    allPatterns().forEach(function (p) {
+      if (found || p.synced) {
+        return;
+      }
+      var own = patternMarkup(p);
+      if (own && own === wanted) {
+        found = p;
+      }
+    });
+    return found;
+  }
+
+  /**
+   * A 'wp-blocks' payload dropped on the rail.
+   *
+   * From the inserter ({type: 'inserter', blocks}): a synced user
+   * pattern arrives as one reference block and pins by its ref. Every
+   * other drop is tried as a pattern FIRST — a pattern that is a single
+   * block with no children (a styled heading, a lone image) drags
+   * exactly like a block type and must still pin as the pattern — and
+   * only an unmatched drop pins its first block's type, at once, with
+   * nothing to ask. The cost of pattern-first: a bare block whose
+   * default markup equals some registered pattern's entire content (a
+   * lone Separator, an empty Spacer) pins that pattern instead of the
+   * type. The two payloads are byte-identical, so nothing can tell them
+   * apart; the pattern IS that one block, and unpinning is one click.
+   *
+   * From the canvas ({srcClientIds}): opens the add-to-toolbar dialog —
+   * pin the type, or save the block as a pattern (settings, contents
+   * and all) and pin that (owner decision 2026-09-02).
+   *
+   * @param {Object}      data    The parsed payload.
+   * @param {HTMLElement} wrapper The rail region.
+   * @return {void}
+   */
+  function handleRailDrop(data, wrapper) {
+    if (!data) {
+      return;
+    }
+    if (data.type === 'inserter' && Array.isArray(data.blocks) && data.blocks.length) {
+      var blocks = data.blocks;
+      var first = blocks[0] || {};
+      // A synced user pattern: pin it by its ref even before the
+      // wp_block list has landed — the slot renders when it does, like
+      // any pin whose source is not here yet — and never let a bare
+      // core/block through to the type path: a pinned "Block" type
+      // would insert a reference to nothing (review 2026-09-03,
+      // finding 3).
+      if (first.name === 'core/block') {
+        var ref = first.attributes && first.attributes.ref;
+        if (ref && /^[0-9]+$/.test(String(ref))) {
+          pinBlock(USER_PATTERN_SLOT_PREFIX + ref);
+        }
+        return;
+      }
+      // Pattern first, whatever the shape (review 2026-09-03, finding
+      // 2): the match is by content and memoized per pattern, so a plain
+      // block-type drop costs one serialize and a map of compares.
+      var pattern = matchPattern(blocks);
+      if (pattern) {
+        pinBlock(pattern.id);
+        return;
+      }
+      if (typeof first.name === 'string' && first.name) {
+        pinBlock(first.name);
+      }
+      return;
+    }
+    if (Array.isArray(data.srcClientIds) && data.srcClientIds.length) {
+      openAddToToolbar(data.srcClientIds, wrapper);
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // "Add to toolbar" dialog (0.1.23): a block dropped from the canvas
+  // onto the rail, or "Save as pattern and pin to toolbar…" in a block's
+  // options menu (the keyboard path to the same dialog).
+  //
+  // Two offers: pin the block's TYPE (a plain quick-insert, like the
+  // inserter drop), or save the block — settings, inner blocks and all —
+  // as one of the author's own UNSYNCED patterns and pin that. Core
+  // stores the pattern (a wp_block post), so it is also usable outside
+  // the rail; the pin is a snapshot, never a reference: editing an
+  // inserted copy never changes the pin.
+  //
+  // A popover like the settings dialog: no focus trap; Escape, an
+  // outside click and a Tab out all dismiss it.
+  // -------------------------------------------------------------------
+
+  var addDialogOpen = false;
+
+  function addDialogNode() {
+    return document.querySelector('.toolrail-adddialog');
+  }
+
+  /**
+   * @param {string} refocusClientId Canvas block to hand focus back to
+   *                                 (the keyboard path came from its
+   *                                 menu), or '' to leave focus alone.
+   */
+  function closeAddDialog(refocusClientId) {
+    var node = addDialogNode();
+    if (node) {
+      node.remove();
+    }
+    addDialogOpen = false;
+    syncLayer();
+    document.removeEventListener('mousedown', onAddDialogMousedown, true);
+    document.removeEventListener('keydown', onAddDialogKeydown, true);
+    document.removeEventListener('focusin', onAddDialogFocusin, true);
+    if (refocusClientId) {
+      var doc = canvasDoc();
+      var el = doc ? doc.querySelector('[data-block="' + attrValue(refocusClientId) + '"]') : null;
+      if (el && typeof el.focus === 'function') {
+        el.focus();
+      }
+    }
+  }
+
+  function onAddDialogMousedown(e) {
+    var node = addDialogNode();
+    if (node && !node.contains(e.target)) {
+      closeAddDialog('');
+    }
+  }
+
+  function onAddDialogKeydown(e) {
+    if (e.key !== 'Escape' || !addDialogOpen) {
+      return;
+    }
+    var node = addDialogNode();
+    if (node && node.contains(document.activeElement)) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeAddDialog(node.dataset.clientId || '');
+      return;
+    }
+    // Aimed elsewhere (the help panel's lesson): close quietly, claim
+    // nothing, move no focus.
+    closeAddDialog('');
+  }
+
+  function onAddDialogFocusin(e) {
+    if (!addDialogOpen) {
+      return;
+    }
+    var node = addDialogNode();
+    if (!node || node.contains(e.target)) {
+      return;
+    }
+    closeAddDialog('');
+  }
+
+  /**
+   * Can this author create patterns (wp_block posts)? true, false, or
+   * null while core's capability check is still in flight: canUser
+   * reads a cache and returns undefined until its OPTIONS request lands
+   * (verified in core's selector), and "unknown" must not read as
+   * "denied" — the dialog told authors they lacked permission before
+   * the check had run (review 2026-09-03, finding 4). Callers treat
+   * null as "go ahead"; a real refusal then surfaces as the save's own
+   * error. The entity form is WordPress 6.7+; when it has finished
+   * resolving to nothing (6.5 and 6.6), the resource-name form is the
+   * one that core knows. No store, or a selector that throws, is also
+   * "cannot tell", never "denied" (second round, finding 3): the save
+   * itself reports a store that is missing.
+   *
+   * @return {boolean|null}
+   */
+  function canCreatePatterns() {
+    var sel = coreSelect();
+    if (!sel || typeof sel.canUser !== 'function') {
+      return null;
+    }
+    try {
+      var entityArgs = ['create', { kind: 'postType', name: 'wp_block' }];
+      var can = sel.canUser.apply(null, entityArgs);
+      if (typeof can === 'boolean') {
+        return can;
+      }
+      var finished = typeof sel.hasFinishedResolution === 'function'
+        && sel.hasFinishedResolution('canUser', entityArgs);
+      if (!finished) {
+        return null;
+      }
+      can = sel.canUser('create', 'blocks');
+      return typeof can === 'boolean' ? can : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * Save blocks as one of the author's unsynced patterns. Resolves to
+   * the pattern's descriptor; rejects with an Error carrying core's
+   * message when the save fails.
+   *
+   * @param {string}   name   Pattern title.
+   * @param {Object[]} blocks The canvas blocks to snapshot.
+   * @return {Promise<Object>}
+   */
+  function savePatternFromBlocks(name, blocks) {
+    return new Promise(function (resolve, reject) {
+      var disp;
+      try {
+        disp = wp.data.dispatch('core');
+      } catch (e) {
+        disp = null;
+      }
+      if (!disp || typeof disp.saveEntityRecord !== 'function') {
+        reject(new Error(__('The editor\'s data store is not available.', 'toolrail')));
+        return;
+      }
+      var record = {
+        title: name,
+        content: wp.blocks.serialize(blocks),
+        status: 'publish',
+        meta: { wp_pattern_sync_status: 'unsynced' }
+      };
+      Promise.resolve(disp.saveEntityRecord('postType', 'wp_block', record, { throwOnError: true })).then(function (saved) {
+        if (!saved || !saved.id) {
+          reject(new Error(__('WordPress did not return the saved pattern.', 'toolrail')));
+          return;
+        }
+        // Keep OUR markup as the content: the record core returns may
+        // carry only the rendered form, and the catalog needs the raw
+        // block markup to parse.
+        var normalized = {
+          id: saved.id,
+          title: name,
+          content: record.content,
+          wp_pattern_sync_status: 'unsynced'
+        };
+        sessionUserPatterns.push(normalized);
+        resolve(userPatternDescriptor(normalized));
+      }, function (err) {
+        reject(err instanceof Error ? err : new Error(String(err && err.message ? err.message : err)));
+      });
+    });
+  }
+
+  /**
+   * @param {string[]}    clientIds The canvas block(s) to add.
+   * @param {HTMLElement} wrapper   The rail region to hang the dialog in
+   *                                (defaults to the mounted one).
+   * @return {boolean} Whether the dialog opened.
+   */
+  function openAddToToolbar(clientIds, wrapper) {
+    wrapper = wrapper || document.getElementById('toolrail-region');
+    var sel = wp.data.select('core/block-editor');
+    var ids = Array.isArray(clientIds) ? clientIds.filter(function (id) { return !!sel.getBlock(id); }) : [];
+    if (!wrapper || !ids.length) {
+      return false;
+    }
+    closeFlyout(false);
+    closeSettings(false);
+    closeHelp(false);
+    closeAddDialog('');
+
+    var blocks = sel.getBlocksByClientId(ids);
+    var single = blocks.length === 1 ? blocks[0] : null;
+    var singleType = single ? wp.blocks.getBlockType(single.name) : null;
+    var singleTitle = singleType && singleType.title ? singleType.title : (single ? single.name : '');
+
+    var node = settingsRow('div', 'toolrail-settings toolrail-adddialog');
+    node.setAttribute('role', 'dialog');
+    node.setAttribute('aria-labelledby', 'toolrail-adddialog-title');
+    node.dataset.clientId = ids[0];
+
+    var head = settingsRow('div', 'toolrail-settings-head');
+    var title = settingsRow('h2', 'toolrail-settings-title');
+    title.id = 'toolrail-adddialog-title';
+    title.textContent = __('Add to toolbar', 'toolrail');
+    head.appendChild(title);
+    var close = settingsButton('×', function () { closeAddDialog(ids[0]); }, 'toolrail-settings-close');
+    close.setAttribute('aria-label', __('Close', 'toolrail'));
+    head.appendChild(close);
+    node.appendChild(head);
+
+    var status = settingsRow('p', 'toolrail-settings-status');
+    status.id = 'toolrail-adddialog-status';
+
+    // --- The block type (one block only; several blocks are a pattern
+    // or nothing) ---
+    if (single) {
+      var typeHead = settingsRow('h3', 'toolrail-settings-subtitle');
+      typeHead.textContent = __('Block type', 'toolrail');
+      node.appendChild(typeHead);
+      var typeNote = settingsRow('p', 'toolrail-settings-empty');
+      if (isPinned(single.name)) {
+        typeNote.textContent = sprintf(
+          /* translators: %s: block title. */
+          __('The %s block type is already pinned.', 'toolrail'),
+          singleTitle
+        );
+        node.appendChild(typeNote);
+      } else {
+        typeNote.textContent = __('A plain quick-insert tool for this block type, without this block\'s settings.', 'toolrail');
+        node.appendChild(typeNote);
+        var pinRow = settingsRow('div', 'toolrail-settings-helprow');
+        pinRow.appendChild(settingsButton(
+          sprintf(
+            /* translators: %s: block title. */
+            __('Pin the %s block type', 'toolrail'),
+            singleTitle
+          ),
+          function () {
+            pinBlock(single.name);
+            speak(sprintf(
+              /* translators: %s: block title. */
+              __('%s pinned to the toolbar.', 'toolrail'),
+              singleTitle
+            ));
+            closeAddDialog(ids[0]);
+          },
+          'toolrail-adddialog-pintype'
+        ));
+        node.appendChild(pinRow);
+      }
+    }
+
+    // --- Save as a pattern and pin it ---
+    var patHead = settingsRow('h3', 'toolrail-settings-subtitle');
+    patHead.textContent = __('Pattern', 'toolrail');
+    node.appendChild(patHead);
+    var patNote = settingsRow('p', 'toolrail-settings-empty');
+    if (canCreatePatterns() === false) {
+      patNote.textContent = __('You cannot create patterns on this site, so this block cannot be saved as one.', 'toolrail');
+      node.appendChild(patNote);
+    } else {
+      patNote.textContent = single
+        ? __('Saves this block with its settings and contents as one of your patterns, and pins that pattern. The pin is a snapshot: editing an inserted copy never changes it.', 'toolrail')
+        : __('Saves these blocks with their settings and contents as one of your patterns, and pins that pattern. The pin is a snapshot: editing an inserted copy never changes it.', 'toolrail');
+      node.appendChild(patNote);
+
+      var nameLabel = settingsRow('label', 'toolrail-settings-label');
+      nameLabel.setAttribute('for', 'toolrail-adddialog-name');
+      nameLabel.textContent = __('Pattern name', 'toolrail');
+      node.appendChild(nameLabel);
+      var nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.id = 'toolrail-adddialog-name';
+      nameInput.className = 'toolrail-settings-search';
+      nameInput.value = single ? singleTitle : __('Pattern', 'toolrail');
+      nameInput.setAttribute('aria-describedby', 'toolrail-adddialog-status');
+      node.appendChild(nameInput);
+
+      var saveRow = settingsRow('div', 'toolrail-settings-helprow');
+      var saveBtn = settingsButton(__('Save pattern and pin it', 'toolrail'), function () {
+        var name = nameInput.value.trim();
+        if (!name) {
+          status.textContent = __('Give the pattern a name first.', 'toolrail');
+          speak(status.textContent);
+          nameInput.focus();
+          return;
+        }
+        saveBtn.disabled = true;
+        status.textContent = __('Saving…', 'toolrail');
+        savePatternFromBlocks(name, blocks).then(function (pattern) {
+          pinBlock(pattern.id);
+          speak(sprintf(
+            /* translators: %s: pattern name. */
+            __('Saved "%s" as a pattern and pinned it to the toolbar.', 'toolrail'),
+            pattern.title
+          ));
+          closeAddDialog(ids[0]);
+        }, function (err) {
+          saveBtn.disabled = false;
+          status.textContent = err && err.message
+            ? sprintf(
+              /* translators: %s: error message. */
+              __('The pattern could not be saved: %s', 'toolrail'),
+              err.message
+            )
+            : __('The pattern could not be saved.', 'toolrail');
+          speak(status.textContent);
+        });
+      }, 'toolrail-adddialog-savepattern');
+      saveRow.appendChild(saveBtn);
+      node.appendChild(saveRow);
+      nameInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          saveBtn.click();
+        }
+      });
+    }
+
+    node.appendChild(status);
+    wrapper.appendChild(node);
+    addDialogOpen = true;
+    syncLayer();
+    placeSurface(node, gearButton(), wrapper);
+    document.addEventListener('mousedown', onAddDialogMousedown, true);
+    document.addEventListener('keydown', onAddDialogKeydown, true);
+    document.addEventListener('focusin', onAddDialogFocusin, true);
+    var first = node.querySelector('#toolrail-adddialog-name') || node.querySelector('.toolrail-adddialog-pintype') || close;
+    first.focus();
+    return true;
   }
 
   // -------------------------------------------------------------------
@@ -7128,7 +8215,6 @@
     syncLayer();
     // Force: a re-mounted rail carries brand-new buttons.
     syncPressed(true);
-    maybeAutoOpenHelp();
     return true;
   }
 
@@ -7143,6 +8229,7 @@
     if (!wrapper) {
       return;
     }
+    railDragActive = false;
     closeFlyout(false);
     var oldRail = document.getElementById('toolrail-rail');
     var hadFocus = !!(oldRail && oldRail.contains(document.activeElement));
@@ -7340,6 +8427,8 @@
     registerTool: registerTool,
     pinBlock: pinBlock,
     unpinBlock: unpinBlock,
+    getPatterns: allPatterns,
+    openAddToToolbar: openAddToToolbar,
     isPinned: isPinned,
     moveSlot: moveSlot,
     saveConfig: saveConfig,
@@ -7375,26 +8464,50 @@
       render: function () {
         return el(wp.blockEditor.BlockSettingsMenuControls, null, function (fillProps) {
           var clientIds = (fillProps && fillProps.selectedClientIds) || [];
-          if (clientIds.length !== 1) {
+          if (!clientIds.length) {
             return null;
           }
-          var name = wp.data.select('core/block-editor').getBlockName(clientIds[0]);
-          if (!name) {
-            return null;
-          }
-          var pinned = isPinned(name);
-          return el(wp.components.MenuItem, {
-            onClick: function () {
-              if (pinned) {
-                unpinBlock(name);
-              } else {
-                pinBlock(name);
-              }
-              if (fillProps && fillProps.onClose) {
-                fillProps.onClose();
-              }
+          var close = function () {
+            if (fillProps && fillProps.onClose) {
+              fillProps.onClose();
             }
-          }, pinned ? __('Unpin from toolbar', 'toolrail') : __('Pin to toolbar', 'toolrail'));
+          };
+          var items = [];
+          var name = clientIds.length === 1
+            ? wp.data.select('core/block-editor').getBlockName(clientIds[0])
+            : '';
+          if (name) {
+            var pinned = isPinned(name);
+            items.push(el(wp.components.MenuItem, {
+              key: 'toolrail-pin',
+              onClick: function () {
+                if (pinned) {
+                  unpinBlock(name);
+                } else {
+                  pinBlock(name);
+                }
+                close();
+              }
+            }, pinned ? __('Unpin from toolbar', 'toolrail') : __('Pin to toolbar', 'toolrail')));
+          }
+          // The keyboard path to the add-to-toolbar dialog (the pointer
+          // path is dropping the block on the rail). One block or
+          // several: a multi-block selection saves as one pattern. The
+          // menu closes first so its own focus return settles before
+          // the dialog takes focus.
+          if (canCreatePatterns() !== false) {
+            var ids = clientIds.slice();
+            items.push(el(wp.components.MenuItem, {
+              key: 'toolrail-pattern',
+              onClick: function () {
+                close();
+                window.setTimeout(function () {
+                  openAddToToolbar(ids);
+                }, 0);
+              }
+            }, __('Save as pattern and pin to toolbar…', 'toolrail')));
+          }
+          return items.length ? el(wp.element.Fragment, null, items) : null;
         });
       }
     });
@@ -7418,12 +8531,21 @@
    * already-set stamp read back as unset, and WordPress dispatches it at
    * most once per page load. So rather than guess at timing, watch for
    * exactly that: a dispatch against `core/preferences` that leaves
-   * migrateSlots()'s stamp missing again means a wipe happened. Redo the
-   * migration (idempotent, and this time nothing is racing it) and
-   * repaint. Once the stamp is confirmed to have survived a dispatch,
-   * there is nothing left that could ever wipe it again this page load,
-   * so the watcher unsubscribes itself.
+   * EITHER of migrateSlots()'s stamps missing means a wipe happened —
+   * or, for an account stamped under 0.1.21, that its real Group-less
+   * state has just replaced boot()'s pre-attach writes (which had
+   * stamped Group against an empty store). A watcher keyed on the first
+   * stamp alone stood down there, and the Group lift never reached that
+   * account (review 2026-09-02, finding 1). Redo the migration
+   * (idempotent, and this time nothing is racing it) and repaint. Once
+   * both stamps are confirmed to have survived a dispatch, there is
+   * nothing left that could ever wipe them again this page load, so the
+   * watcher unsubscribes itself.
    */
+  function liftsComplete() {
+    return readKey(MIGRATED_KEY) !== null && readKey(GROUP_SEEDED_KEY) !== null;
+  }
+
   function watchPersistenceAttach() {
     if (!wp.data || typeof wp.data.subscribe !== 'function' || !prefsSelect()) {
       // Nothing to wait for — this browser is on the localStorage
@@ -7439,7 +8561,7 @@
       if (repairing) {
         return;
       }
-      if (readKey(MIGRATED_KEY) !== null) {
+      if (liftsComplete()) {
         unsubscribe();
         markPrefsReady();
         return;
@@ -7460,7 +8582,7 @@
       } finally {
         repairing = false;
       }
-      if (readKey(MIGRATED_KEY) !== null) {
+      if (liftsComplete()) {
         unsubscribe();
         markPrefsReady();
       }
@@ -7473,7 +8595,7 @@
     // Promise never settling). The subscription stays live so a later
     // attach that wipes the marker is still repaired, and that repair
     // re-fires the event for anyone listening.
-    if (readKey(MIGRATED_KEY) !== null) {
+    if (liftsComplete()) {
       markPrefsReady();
     }
   }
@@ -7497,6 +8619,7 @@
     watchPersistenceAttach();
     registerPinMenuItem();
     start();
+    watchPatternCatalog();
   }
 
   if (window._wpLoadBlockEditor && typeof window._wpLoadBlockEditor.then === 'function') {

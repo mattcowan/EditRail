@@ -1,8 +1,8 @@
 {
   "name": "toolrail",
-  "version": "0.1.21",
+  "version": "0.1.24",
   "private": true,
-  "description": "Editor Tool Rail — a Photoshop-familiar left toolbar for the WordPress block editor.",
+  "description": "Editor Tool Rail — a graphics-editor-style left toolbar for the WordPress block editor.",
   "scripts": {
     "test:php": "vendor/bin/phpunit",
     "test:e2e": "npx playwright test --config=tests/e2e/playwright.config.js",

@@ -4,11 +4,11 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.1.21
+Stable tag: 0.1.24
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-A movable, Photoshop-familiar toolbar for the block editor. Dock it to any edge or float it. Tools can insert ordinary core blocks, and a small provider API allows insertion of custom buttons from themes and plugins.
+A movable, graphics-editor-style toolbar for the block editor. Click a tool, then click the canvas to insert a core block at that point.
 
 == Description ==
 
@@ -16,15 +16,19 @@ Editor Tool Rail adds a toolbar to the post editor, docked to the left edge by d
 
 Everything the rail inserts is an ordinary core block. Deactivating this plugin changes nothing about how authored content renders or stays editable.
 
-* Built-in tools: Select, Section, and Section overview. Text, Heading and Image ship as ordinary pinned blocks, so you can reorder or remove them like anything else you pin. If you unpin the defaults, a "Restore default tools" button in Toolbar settings brings back the missing ones without touching your own pins.
+* Built-in tools: Select and Section overview. Group, Text, Heading and Image ship as ordinary pinned blocks, so you can reorder or remove them like anything else you pin. If you unpin the defaults, a "Restore default tools" button in Toolbar settings brings back the missing ones without touching your own pins.
+* While a tool is armed, the editor's own "+" buttons (between blocks, and beside an empty block) are hidden, so your click goes to the armed tool. The drop line you see while you drag a block is not affected. A checkbox under "Inserting" in Toolbar settings turns this off.
+* Drag a tool from the toolbar into the canvas to place its block where you drop it. Clicking a tool still arms it.
+* Pin patterns too. Search under "Add a block or pattern" in Toolbar settings for your own patterns and the theme's and core's, or drag a pattern from the inserter onto the toolbar. An armed pattern inserts a fresh copy at the click point; a synced pattern inserts a reference, the same as the inserter does.
+* Drop a block from the canvas onto the toolbar and choose: pin its block type, or save the block with its settings and contents as one of your patterns and pin that pattern. The same dialog opens from "Save as pattern and pin to toolbar…" in the block's options menu.
 * Section overview: one tool zooms the canvas out and draws an outline around every top-level block, with a small name tag in the corner. Drag an outline to reorder it, or click it to reveal reorder controls inside the lines — arrows to move it, and a "Reorder inside" button to step into a section and reorder its blocks the same way, with a breadcrumb back out. Select several outlines at once — Shift+click for a range, Ctrl+click (Cmd on Mac) to add or remove one, or a rectangle dragged from empty space — and the arrows or a drag then move the whole group; locked blocks show a padlock and stay where they are. Zoom with the +/− buttons and pan long documents with the mouse wheel. Every move works by keyboard and is announced to screen readers — dragging is a shortcut, never the only way — and closing centers and selects the block you last picked, moved or stepped into (if you touched nothing, it returns you to where you were scrolled). Reordering is an ordinary editing action — the saved post is exactly what the List View would have written.
 * Pin any block type as a quick-insert tool: search for it in Toolbar settings, drag it from the inserter onto the rail, or use "Pin to toolbar" in the block's options menu. Pins, the toolbar position and saved sets are saved to your user account on the site — set the toolbar up once and it follows you across browsers and devices.
 * Save pinned arrangements as named sets, and move them between sites as small JSON files (Export/Import in Toolbar settings). A set may name blocks a site doesn't have — those stay in the set and appear when their plugin or theme is active.
-* Move the toolbar where you want it: it starts on the left edge, and can dock to the right edge (past the settings side panel), to a full-width bar across the top or the bottom, or float free as a Photoshop-style palette. Drag it by the grip and release near an edge to snap it there, or pick a position in Toolbar settings. Flyouts and panels open away from the docked edge — a top toolbar opens downward, a bottom one upward.
+* Move the toolbar where you want it: it starts on the left edge, and can dock to the right edge (past the settings side panel), to a full-width bar across the top or the bottom, or float free as a tool palette. Drag it by the grip and release near an edge to snap it there, or pick a position in Toolbar settings. Flyouts and panels open away from the docked edge — a top toolbar opens downward, a bottom one upward.
 * Full keyboard operability: one tab stop, arrow keys, Home/End, Escape disarms. Toolbar settings and the tool flyouts close on Escape and when you tab past them, so they never sit open behind you. Arrow keys follow the toolbar's orientation — Up/Down along a vertical rail with ArrowRight opening a tool's flyout, Left/Right along a horizontal one with ArrowDown opening the flyout. Repositioning has a keyboard path of its own in Toolbar settings, so it never depends on dragging.
 * Show tool names beside the icons: a "Tool names" checkbox in Toolbar settings widens a vertical or floating toolbar into icon + name rows. Icon-only toolbars ask you to learn the icons; this is the way around that. If you switch often, a second checkbox adds an expand/contract button to the toolbar itself.
 * Pick the toolbar's colors: Dark (default), Light and Gray presets, or your own background + text pair. Every preset meets the WCAG contrast minimums, and with custom colors the focus ring and pressed markers are adjusted automatically so they stay visible.
-* A Help panel ("?" next to the gear) explains inserting, pinning, moving the toolbar, the keyboard model, saved sets, and what a highlighted tool means. It opens once on your first visit; after that, only when you ask. You can hide the "?" from the toolbar — the panel stays available from Toolbar settings.
+* A Help panel ("?" next to the gear) explains inserting, pinning, moving the toolbar, the keyboard model, saved sets, and what a highlighted tool means. It never opens by itself; open it from the "?" or from Toolbar settings. You can hide the "?" from the toolbar — the panel stays available from Toolbar settings.
 * Tools that need a canvas click are dimmed while the Section overview is open, with the reason in their tooltip. They stay in the keyboard order and keep their names for screen readers. Tools that open a panel stay available.
 * Provider API for themes and plugins: PHP filter `toolrail_tool_providers` + JS `window.toolrail.registerTool()`. A tool can declare `supports: { canvas: true }` when its action needs a canvas click, so the toolbar dims it in any mode that captures the canvas.
 
@@ -39,6 +43,27 @@ Against your user account on this site, the same as pinned blocks and saved sets
 Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a position under "Toolbar position".
 
 == Changelog ==
+
+= 0.1.24 =
+* Fix: the "Add to toolbar" dialog could open behind the editor's own panels (the Document Overview, the settings sidebar) with focus inside it. It now rises above them like the other toolbar surfaces.
+* Fix: a pattern that is a single block with no children (a styled heading, a lone image) dragged from the inserter pinned the block type instead of the pattern. Every dropped pattern now pins the pattern. A block whose plain markup is identical to some pattern's whole content pins that pattern; the two cannot be told apart.
+* Fix: a synced pattern dragged from the inserter before the site's pattern list had loaded pinned a broken reference. It now pins the pattern, which shows once the list loads.
+* Fix: the dialog could say you cannot create patterns while the permission check was still running. It now waits for the answer, and a real refusal shows as the save's own error.
+* Fix: a set file loaded or imported before the pattern list arrived reported its pattern pins as unavailable. They are counted only once the list has loaded.
+* Fix: a toolbar rebuild during a drag from the toolbar could leave the toolbar refusing drops for the rest of the session.
+* The "Block" tag on a search result is now part of the button's accessible name ("Pin the Quote block to the toolbar").
+
+= 0.1.23 =
+* Drag a tool from the toolbar into the canvas to place its block where you drop it, the way the editor's own inserter works. The drop line, the target and the insert are the editor's own. Clicking a tool still arms it, and the keyboard path is unchanged.
+* Pin patterns as well as block types. The settings section is now "Pinned tools", and the search under "Add a block or pattern" lists your own patterns and the theme's and core's, each result tagged Block or Pattern. A pattern dragged from the inserter onto the toolbar pins that pattern. An armed pattern inserts a fresh copy at the click point; a synced pattern inserts a reference. Pattern pins travel in saved sets and stay hidden on a site that does not have the pattern.
+* Drop a block from the canvas onto the toolbar to open a small "Add to toolbar" dialog: pin the block type, or give the block a name and save it, with its settings and contents, as one of your unsynced patterns, pinned to the toolbar. The same dialog opens from "Save as pattern and pin to toolbar…" in the block's options menu, for one block or several. The pin is a snapshot: editing an inserted copy never changes it.
+
+= 0.1.22 =
+* The Section tool is now the Group block, pinned by default at the head of the pinned blocks. Unpin it, move it, or put it in a saved set like any other pin. It inserts the Group block the same way the inserter does, so you pick a layout (Group, Row, Stack or Grid) after it lands. An account that already had the toolbar gets Group added once, ahead of its own pins; a toolbar you emptied stays empty. "Restore default tools" now restores Group too. A plugin that nests a tool under `section` now nests it under the pinned Group; if you unpin Group, that tool shows at the top level of the toolbar.
+* Fix: with a tool armed, the editor's own "+" button between blocks (and at the foot of a Cover) took the click and opened the block picker instead of inserting the armed block. The "+" buttons are now hidden while a tool is armed; the drop line shown while you drag a block stays. A new checkbox under "Inserting" in Toolbar settings turns this off.
+* Fix: an armed click in the gap between two blocks put the new block at the end of the document. It now goes between the two blocks, inside the same parent. In a Row, Grid or Columns layout the gap is read left to right (right to left in RTL), not top to bottom only.
+* Fix: an armed click inside a block that does not accept the armed block (a Heading between two Columns, for example) inserted nothing and returned the toolbar to Select without a word. The block now lands right after that container, in the nearest parent that accepts it. If no parent accepts it, a message says so and the tool stays armed.
+* The Help panel no longer opens by itself on your first visit. On a fresh account it opened under the editor's own "Welcome to the editor" guide, and the click that closed the guide closed the Help panel too. Open it from the "?" or from Toolbar settings.
 
 = 0.1.21 =
 * Two hooks for extension plugins: `window.toolrail.prefs` reads and writes per-user preferences under a `toolrail-ext:` key prefix, and `window.toolrail.getCanvasGeometry()` reports where the canvas is on screen, with its scale and pan. The first plugin that uses them is Toolrail Guides (rulers, guides and snap). A tool inside a flyout that turns something on and off now shows its state to screen readers as a checked menu item. Nothing else changes for authors.
