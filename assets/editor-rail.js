@@ -104,7 +104,6 @@
   var CONFIGS_KEY = 'toolrail-slot-configs';
   var POSITION_KEY = 'toolrail-position';
   var MIGRATED_KEY = 'toolrail-slots-migrated';
-  var HELP_SEEN_KEY = 'toolrail-help-seen';
   var HELP_HIDDEN_KEY = 'toolrail-help-hidden';
   var GROUP_SEEDED_KEY = 'toolrail-group-seeded';
   var HIDE_CORE_INSERTER_KEY = 'toolrail-hide-core-inserter';
@@ -1028,29 +1027,17 @@
    * The out-of-the-box quick slots. Group, Text, Heading and Image are
    * ORDINARY pinned blocks (owner decisions 2026-08-26 and 2026-09-02) —
    * reorderable, removable, and saved-set–able like anything the author
-   * pins. Group leads, where the built-in Section tool used to sit.
+   * pins. Group leads, where the built-in Section tool used to sit, and
+   * inserts exactly what the inserter would — core's bare Group, which
+   * lands as the layout picker. A pin never carries settings of its own
+   * (owner decision 2026-09-02; a configured-block pin is a separate
+   * idea, see private/issue-drafts).
    *
    * These seed exactly once, from migrateSlots(), and never again: an
    * author who removes all four stays at an empty rail rather than
    * having them resurrected on the next load.
    */
   var DEFAULT_SLOTS = ['core/group', 'core/paragraph', 'core/heading', 'core/image'];
-
-  /**
-   * Pinned blocks that insert something more useful than a bare
-   * createBlock(name). Group was the built-in Section tool until 0.1.22:
-   * a bare Group lands as core's layout picker (Group / Row / Stack /
-   * Grid) and needs a second click before the author can type, so the
-   * pinned Group keeps inserting what Section did — a constrained group
-   * holding one paragraph, ready for text. Every other pinned block
-   * inserts exactly what the inserter would.
-   */
-  var SLOT_BLOCK_FACTORIES = {
-    'core/group': function () {
-      return wp.blocks.createBlock('core/group', { layout: { type: 'constrained' } },
-        [wp.blocks.createBlock('core/paragraph')]);
-    }
-  };
 
   /**
    * The single gate for what may sit in the slot list: strings only, no
@@ -1334,10 +1321,6 @@
         icon: '',
         blockIcon: type.icon,
         insertBlock: name,
-        // makeBlockFor prefers a factory over the bare insertBlock.
-        createBlock: Object.prototype.hasOwnProperty.call(SLOT_BLOCK_FACTORIES, name)
-          ? SLOT_BLOCK_FACTORIES[name]
-          : null,
         pinnedBlock: name,
         children: []
       };
@@ -1589,9 +1572,14 @@
    * popover, in the EDITOR document, caught most such clicks first —
    * once that is hidden while armed (markCanvasArmed) the fall-through
    * is the whole experience, so the gap now resolves against the list's
-   * own children: the index is the number of them whose midpoint sits
-   * above the pointer, which covers above-the-first (0) and
-   * below-the-last (append) in the same rule.
+   * own children in READING order: a child is before the pointer when
+   * the pointer is below it, or level with it and past its horizontal
+   * midpoint in the list's writing direction. A stacked list reduces to
+   * the y rule; a Row, Grid or Columns gets the x rule for the row the
+   * pointer is on (a y-only count put the block at an arbitrary index
+   * in a Row, where every child shares one midpoint — review
+   * 2026-09-02, finding 3). Above-the-first (0) and below-the-last
+   * (append) fall out of the same count.
    *
    * Empty canvas below everything, or a click that reaches no list at
    * all, still appends at the end of the document.
@@ -1609,14 +1597,27 @@
     // in that block's inner gap, not on the block. No block at all means
     // the root list's gap (or the empty space under it).
     if (listEl && (!blockEl || blockEl.contains(listEl))) {
+      var rtl = false;
+      try {
+        rtl = listEl.ownerDocument.defaultView.getComputedStyle(listEl).direction === 'rtl';
+      } catch (err) {
+        rtl = false;
+      }
       var before = 0;
       Array.prototype.forEach.call(listEl.children, function (el) {
         if (!el.hasAttribute || !el.hasAttribute('data-block')) {
           return;
         }
         var r = el.getBoundingClientRect();
-        if (e.clientY > r.top + r.height / 2) {
+        if (e.clientY > r.bottom) {
           before += 1;
+          return;
+        }
+        if (e.clientY >= r.top) {
+          var midX = r.left + r.width / 2;
+          if (rtl ? e.clientX < midX : e.clientX > midX) {
+            before += 1;
+          }
         }
       });
       return {
@@ -1636,6 +1637,70 @@
     }
 
     return { rootClientId: '', index: sel.getBlockCount('') };
+  }
+
+  /**
+   * Walk an insertion point up until a parent accepts the block, or
+   * return null when the root refuses it too.
+   *
+   * insertBlocks() silently drops a block its target parent refuses
+   * (Columns takes only Column, Buttons only Button — verified in
+   * core's action, which filters through canInsertBlockType and
+   * dispatches nothing when the list comes back empty), and the click
+   * had already disarmed the tool: "the tool did nothing", with no
+   * reason. The click meant "near here", so a point inside a refusing
+   * container becomes the slot right after that container in ITS
+   * parent — before it when the click was above the container's first
+   * child — and so on up. Review 2026-09-02, finding 2: the on-block
+   * path had the same hole, so both paths come through here.
+   *
+   * @param {Object} sel       The core/block-editor selectors.
+   * @param {string} blockName The armed block type.
+   * @param {Object} point     {rootClientId, index} from resolveInsertionPoint.
+   * @return {Object|null}
+   */
+  function climbToAllowedParent(sel, blockName, point) {
+    if (typeof sel.canInsertBlockType !== 'function') {
+      return point;
+    }
+    var rootClientId = point.rootClientId;
+    var index = point.index;
+    while (!sel.canInsertBlockType(blockName, rootClientId)) {
+      if (!rootClientId) {
+        return null;
+      }
+      var containerIndex = sel.getBlockIndex(rootClientId);
+      index = index === 0 ? containerIndex : containerIndex + 1;
+      rootClientId = sel.getBlockRootClientId(rootClientId) || '';
+    }
+    return { rootClientId: rootClientId, index: index };
+  }
+
+  /**
+   * Tell the author an armed click could not insert: a snackbar when
+   * core's notices store is reachable (it announces itself), else the
+   * live region alone.
+   *
+   * @param {string} blockName The block that had no legal home.
+   * @return {void}
+   */
+  function notifyCannotInsert(blockName) {
+    var type = wp.blocks.getBlockType(blockName);
+    var message = sprintf(
+      /* translators: %s: block title. */
+      __('%s cannot be inserted here.', 'toolrail'),
+      type && type.title ? type.title : blockName
+    );
+    try {
+      var notices = wp.data.dispatch('core/notices');
+      if (notices && typeof notices.createInfoNotice === 'function') {
+        notices.createInfoNotice(message, { type: 'snackbar', id: 'toolrail-cannot-insert' });
+        return;
+      }
+    } catch (err) {
+      /* No notices store — the live region below still speaks. */
+    }
+    speak(message);
   }
 
   /**
@@ -1694,9 +1759,7 @@
 
     var sel = wp.data.select('core/block-editor');
     var dispatch = wp.data.dispatch('core/block-editor');
-    var point = resolveInsertionPoint(e, sel);
-    var rootClientId = point.rootClientId;
-    var index = point.index;
+    var point = climbToAllowedParent(sel, block.name, resolveInsertionPoint(e, sel));
 
     // preGestureIds is captured at POINTERDOWN, not here. Core has
     // already appended its default block by the time this click handler
@@ -1710,7 +1773,16 @@
     }());
     preGestureIds = null;
 
-    dispatch.insertBlocks(block, index, rootClientId);
+    if (!point) {
+      // No parent on the way up accepts this block. Say so and STAY
+      // armed — a silent disarm read as "the tool did nothing" — and
+      // still sweep, because core's empty-space append fires either way.
+      sweepStrayDefaultBlock(knownIds, null);
+      notifyCannotInsert(block.name);
+      return;
+    }
+
+    dispatch.insertBlocks(block, point.index, point.rootClientId);
     sweepStrayDefaultBlock(knownIds, block.clientId);
 
     if (!e.shiftKey) {
@@ -1869,10 +1941,12 @@
     // an armed click there lands on core's inserter instead of the
     // rail's canvas handler — the tool never fires and core's block
     // picker opens (observed on a fresh install, 2026-09-02). While a
-    // tool is armed the click IS the insertion, so the popover has
-    // nothing to offer; this body class hides it (editor-rail.css) and
-    // the click falls through to the canvas. On by default, with a
-    // Toolbar settings checkbox to turn it off (owner decision).
+    // tool is armed the click IS the insertion, so the "+" has nothing
+    // to offer; this body class hides it (editor-rail.css) — the "+"
+    // itself, and the empty-block side "+", NOT the popover shell, which
+    // also carries the drop line a drag shows — and the click falls
+    // through to the canvas. On by default, with a Toolbar settings
+    // checkbox to turn it off (owner decision).
     if (document.body) {
       document.body.classList.toggle('toolrail-hides-inserter', armed && hidesCoreInserterWhileArmed());
     }
@@ -3039,7 +3113,7 @@
       markCanvasArmed();
     });
     var hideInserterText = settingsRow('span', '');
-    hideInserterText.textContent = __('While a tool is armed, hide the editor\'s own "+" button between blocks', 'toolrail');
+    hideInserterText.textContent = __('While a tool is armed, hide the editor\'s own "+" buttons (between blocks, and beside an empty block)', 'toolrail');
     hideInserterRow.appendChild(hideInserter);
     hideInserterRow.appendChild(hideInserterText);
     node.appendChild(hideInserterRow);
@@ -3232,7 +3306,7 @@
         body: [
           __('Select a tool, then click in the canvas. The tool\'s block is inserted at the click point and the toolbar returns to Select.', 'toolrail'),
           __('Shift-click in the canvas to keep the tool armed for repeat inserts. Press Escape to return to Select at any time.', 'toolrail'),
-          __('While a tool is armed, the editor\'s own "+" button between blocks is hidden, so your click goes to the tool. A checkbox under "Inserting" in Toolbar settings turns this off.', 'toolrail')
+          __('While a tool is armed, the editor\'s own "+" buttons are hidden, so your click goes to the tool. A checkbox under "Inserting" in Toolbar settings turns this off.', 'toolrail')
         ]
       },
       {
@@ -3284,11 +3358,12 @@
 
   /**
    * @param {HTMLElement} wrapper The region to hang the panel in.
-   * @param {Object}      opts    {takeFocus: false} for the first-run
-   *                              auto-open, which must not steal the
-   *                              author's caret. Explicit opens move
-   *                              focus into the panel so Escape and Tab
-   *                              behave like the settings dialog.
+   * @param {Object}      opts    {takeFocus: false} opens without moving
+   *                              focus (no caller since the first-run
+   *                              auto-open went in 0.1.22; kept for a
+   *                              programmatic opener). Explicit opens
+   *                              move focus into the panel so Escape and
+   *                              Tab behave like the settings dialog.
    */
   function openHelp(wrapper, opts) {
     if (helpOpen) {
@@ -3348,114 +3423,14 @@
     }
   }
 
-  /**
-   * First-run auto-open: once per account (the `toolrail-help-seen`
-   * stamp goes through the account preferences like every other key),
-   * never again unless invoked — closing IS dismissal, so there is no
-   * "don't show this again" affordance.
-   *
-   * The 400ms delay gives the preferences persistence attach a beat to
-   * resolve, so a stamp set on another browser is normally visible
-   * before this reads it. If the attach still lands later, the worst
-   * case is one extra auto-open — accepted, matching the tolerance the
-   * migration lift already lives with.
-   */
-  var helpFirstRunChecked = false;
-
-  /**
-   * Is core's own first-run "Welcome to the editor" guide up? Its modal
-   * carries this class in the post editor (the site editor's guide never
-   * shares a screen with the rail).
-   */
-  function welcomeGuideShowing() {
-    return !!document.querySelector('.edit-post-welcome-guide');
-  }
-
-  function maybeAutoOpenHelp() {
-    if (helpFirstRunChecked) {
-      return;
-    }
-    helpFirstRunChecked = true;
-    window.setTimeout(function () {
-      if (helpOpen || settingsOpen || isHelpHidden() || readKey(HELP_SEEN_KEY) !== null) {
-        return;
-      }
-      if (welcomeGuideShowing()) {
-        deferAutoOpenPastWelcomeGuide();
-        return;
-      }
-      autoOpenHelp();
-    }, 400);
-  }
-
-  /** The first-run open itself: stamp, then open without taking focus. */
-  function autoOpenHelp() {
-    if (helpOpen || settingsOpen || isHelpHidden() || readKey(HELP_SEEN_KEY) !== null) {
-      return;
-    }
-    var wrapper = document.getElementById('toolrail-region');
-    if (!wrapper) {
-      return;
-    }
-    writeKey(HELP_SEEN_KEY, '1');
-    openHelp(wrapper, { takeFocus: false });
-  }
-
-  /**
-   * A fresh account meets TWO first-run surfaces at once: core's
-   * "Welcome to the editor" guide and this panel. Opening under the
-   * guide was worse than noisy — the panel is light-dismiss (any
-   * mousedown outside it closes it), so the click that dismissed the
-   * guide dismissed the help with it, and the seen stamp was already
-   * written: the author never read it and never gets it again
-   * (observed on a fresh install, 2026-09-02). So the auto-open waits
-   * until the guide is gone, and only then stamps.
-   *
-   * Every way out of the guide (Get started, the ×, Escape) flips the
-   * core/edit-post welcomeGuide preference, so a preferences-store
-   * subscription is the wake-up; the DOM is re-checked after a beat
-   * because React unmounts the modal on a later flush than the store
-   * change. A slow interval backs that up for an editor without the
-   * store. The panel still opens focus-free, as it always did.
-   */
-  function deferAutoOpenPastWelcomeGuide() {
-    var settled = false;
-    var unsubscribe = null;
-    var interval = null;
-
-    var finish = function () {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (unsubscribe) {
-        unsubscribe();
-      }
-      if (interval) {
-        window.clearInterval(interval);
-      }
-      autoOpenHelp();
-    };
-    var check = function () {
-      if (settled) {
-        return;
-      }
-      window.setTimeout(function () {
-        if (!settled && !welcomeGuideShowing()) {
-          finish();
-        }
-      }, 400);
-    };
-
-    if (wp.data && typeof wp.data.subscribe === 'function') {
-      try {
-        unsubscribe = wp.data.subscribe(check, 'core/preferences');
-      } catch (e) {
-        unsubscribe = null;
-      }
-    }
-    interval = window.setInterval(check, 1500);
-  }
+  // The Help panel never opens by itself. 0.1.9–0.1.21 auto-opened it
+  // once per account; on a fresh account that collided with core's own
+  // "Welcome to the editor" guide — the panel is light-dismiss, so the
+  // click that closed the guide closed the help, unread, and the
+  // one-time stamp was already spent. Owner decision 2026-09-02: two
+  // first-run surfaces is one too many. The "?" tool and Toolbar
+  // settings are the ways in; the old `toolrail-help-seen` stamp is
+  // simply never read again.
 
   // -------------------------------------------------------------------
   // Section overview (R6) — zoom the canvas out, reorder sections, and
@@ -7356,7 +7331,6 @@
     syncLayer();
     // Force: a re-mounted rail carries brand-new buttons.
     syncPressed(true);
-    maybeAutoOpenHelp();
     return true;
   }
 
@@ -7646,12 +7620,21 @@
    * already-set stamp read back as unset, and WordPress dispatches it at
    * most once per page load. So rather than guess at timing, watch for
    * exactly that: a dispatch against `core/preferences` that leaves
-   * migrateSlots()'s stamp missing again means a wipe happened. Redo the
-   * migration (idempotent, and this time nothing is racing it) and
-   * repaint. Once the stamp is confirmed to have survived a dispatch,
-   * there is nothing left that could ever wipe it again this page load,
-   * so the watcher unsubscribes itself.
+   * EITHER of migrateSlots()'s stamps missing means a wipe happened —
+   * or, for an account stamped under 0.1.21, that its real Group-less
+   * state has just replaced boot()'s pre-attach writes (which had
+   * stamped Group against an empty store). A watcher keyed on the first
+   * stamp alone stood down there, and the Group lift never reached that
+   * account (review 2026-09-02, finding 1). Redo the migration
+   * (idempotent, and this time nothing is racing it) and repaint. Once
+   * both stamps are confirmed to have survived a dispatch, there is
+   * nothing left that could ever wipe them again this page load, so the
+   * watcher unsubscribes itself.
    */
+  function liftsComplete() {
+    return readKey(MIGRATED_KEY) !== null && readKey(GROUP_SEEDED_KEY) !== null;
+  }
+
   function watchPersistenceAttach() {
     if (!wp.data || typeof wp.data.subscribe !== 'function' || !prefsSelect()) {
       // Nothing to wait for — this browser is on the localStorage
@@ -7667,7 +7650,7 @@
       if (repairing) {
         return;
       }
-      if (readKey(MIGRATED_KEY) !== null) {
+      if (liftsComplete()) {
         unsubscribe();
         markPrefsReady();
         return;
@@ -7688,7 +7671,7 @@
       } finally {
         repairing = false;
       }
-      if (readKey(MIGRATED_KEY) !== null) {
+      if (liftsComplete()) {
         unsubscribe();
         markPrefsReady();
       }
@@ -7701,7 +7684,7 @@
     // Promise never settling). The subscription stays live so a later
     // attach that wipes the marker is still repaired, and that repair
     // re-fires the event for anyone listening.
-    if (readKey(MIGRATED_KEY) !== null) {
+    if (liftsComplete()) {
       markPrefsReady();
     }
   }

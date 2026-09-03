@@ -1662,13 +1662,20 @@ body.toolrail-ov-dragging * {
     }
 }
 
-/* Core's between-block "+" is a popover in the EDITOR document, drawn on
-   top of the canvas iframe. While a tool is armed the next canvas click
-   IS the insertion, so that popover can only steal the click (it opened
-   core's block picker instead of firing the tool — 2026-09-02).
-   editor-rail.js sets the body class while a tool is armed and the
-   "hide the editor's + button" setting is on; display:none also drops
-   the popover from hit-testing, so the click reaches the canvas. */
-body.toolrail-hides-inserter .components-popover.block-editor-block-popover__inbetween {
+/* Core's "+" inserters are popovers in the EDITOR document, drawn on top
+   of the canvas iframe: the between-block one (raised by hovering a
+   gap), and the side one beside a selected empty block. While a tool is
+   armed the next canvas click IS the insertion, so they can only steal
+   it (the between-block "+" opened core's block picker instead of
+   firing the tool — 2026-09-02). editor-rail.js sets the body class
+   while a tool is armed and the "hide the editor's + buttons" setting
+   is on; display:none also drops them from hit-testing, so the click
+   reaches the canvas.
+
+   Only the "+" goes, never the popover shell: the SAME
+   block-popover__inbetween shell carries the drop line a drag shows,
+   which has no is-with-inserter (review 2026-09-02, finding 4). */
+body.toolrail-hides-inserter .block-editor-block-popover__inbetween .block-editor-block-list__insertion-point.is-with-inserter,
+body.toolrail-hides-inserter .block-editor-block-list__block-side-inserter-popover {
     display: none !important;
 }

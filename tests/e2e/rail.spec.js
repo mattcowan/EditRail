@@ -18,11 +18,11 @@ test.use({ storageState: AUTH });
 /**
  * Every rail preference this suite is allowed to write, in both stores.
  *
- * Deliberately NOT including `toolrail-help-seen`: clearing that one
- * auto-opens the help panel over whatever runs next, so resetRailPrefs
- * SETS it instead of clearing it.
+ * `toolrail-help-seen` is the retired first-run stamp (the auto-open
+ * went in 0.1.22); clearing it tidies an account that still carries it.
  */
 const RAIL_PREF_KEYS = [
+  'toolrail-help-seen',
   'toolrail-position',
   'toolrail-quick-slots',
   'toolrail-slot-configs',
@@ -73,16 +73,6 @@ function resetRailPrefs(page) {
           disp.set('toolrail', k, undefined);
         }
       });
-      // The help-seen stamp is the ONE key that must be SET, not
-      // cleared: clearing it would auto-open the help panel over every
-      // later spec. (The first-ever pageload on a fresh account stamps
-      // it itself by auto-opening — the reload below then starts that
-      // spec from the stamped state.) The dedicated first-run test
-      // clears it deliberately.
-      if (sel.get('toolrail', 'toolrail-help-seen') !== '1') {
-        had = true;
-        disp.set('toolrail', 'toolrail-help-seen', '1');
-      }
     } catch (e) {
       /* Store not ready — nothing stored there either, then. */
     }
@@ -149,7 +139,6 @@ test.afterAll(async ({ browser }) => {
       );
       disp.set('toolrail', 'toolrail-slots-migrated', '1');
       disp.set('toolrail', 'toolrail-group-seeded', '1');
-      disp.set('toolrail', 'toolrail-help-seen', '1');
     }, RAIL_PREF_KEYS);
     // Give the preferences store's debounced REST write time to land —
     // closing the context first would drop it and leave the account dirty.
@@ -1883,66 +1872,21 @@ test.describe('account persistence', () => {
 });
 
 test.describe('help panel', () => {
-  test('first-run auto-open happens once, without stealing focus, then never again', async ({ page }) => {
+  test('never opens by itself, even on an account with no first-run stamp', async ({ page }) => {
     await openNewPost(page);
 
-    // Simulate a first run: clear the seen stamp and reload. (openNewPost
-    // deliberately SETS the stamp for every other spec.)
+    // 0.1.9–0.1.21 auto-opened once per account, keyed on this stamp.
+    // Owner decision 2026-09-02: never — on a fresh account it opened
+    // under core's welcome guide and was dismissed with it, unread.
     await page.evaluate(() => {
       window.wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-help-seen', undefined);
       window.localStorage.removeItem('toolrail-help-seen');
     });
     await page.reload();
     await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
-
-    // Auto-opens (after its 400ms breather) and stamps the account.
-    await expect(page.locator('.toolrail-help')).toBeVisible({ timeout: 5000 });
-    await expect.poll(async () => await getPref(page, 'toolrail-help-seen')).toBe('1');
-
-    // The auto-open must not steal the author's caret.
-    const focusInPanel = await page.evaluate(() => {
-      const panel = document.querySelector('.toolrail-help');
-      return panel.contains(document.activeElement);
-    });
-    expect(focusInPanel).toBe(false);
-
-    // Closing is dismissal — the next load (stamp set) stays closed.
-    await page.reload();
-    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
-    await page.waitForTimeout(900); // outlive the auto-open delay
+    await page.waitForTimeout(1200); // outlive the delay the old auto-open used
     await expect(page.locator('.toolrail-help')).toHaveCount(0);
-  });
-
-  test('an Escape aimed elsewhere closes the auto-opened panel quietly, without stealing focus', async ({ page }) => {
-    await openNewPost(page);
-
-    // Recreate the auto-open state: panel open, focus never inside it.
-    await page.evaluate(() => {
-      window.wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-help-seen', undefined);
-      window.localStorage.removeItem('toolrail-help-seen');
-    });
-    await page.reload();
-    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
-    await expect(page.locator('.toolrail-help')).toBeVisible({ timeout: 5000 });
-
-    // The author is working elsewhere — a header control has focus.
-    await page.evaluate(() => {
-      document.querySelector('.interface-interface-skeleton__header button').focus();
-    });
-    await page.keyboard.press('Escape');
-
-    // The panel goes away, but QUIETLY: the event is not claimed and
-    // focus stays where the author put it. Before the fix the panel's
-    // capture-phase handler stopPropagation()ed the press (so whatever
-    // the author meant to close stayed open) and closeHelp(true)
-    // teleported focus to the rail (review 2026-08-26).
-    await expect(page.locator('.toolrail-help')).toHaveCount(0);
-    const after = await page.evaluate(() => ({
-      tool: document.activeElement.dataset ? document.activeElement.dataset.tool : null,
-      inHeader: !!document.activeElement.closest('.interface-interface-skeleton__header'),
-    }));
-    expect(after.tool).not.toBe('help');
-    expect(after.inHeader).toBe(true);
+    expect(await getPref(page, 'toolrail-help-seen')).toBeNull();
   });
 
   test('opens from the "?" tool; Escape closes and returns focus to it', async ({ page }) => {
@@ -4875,15 +4819,15 @@ test.describe('Group as a pinned default (0.1.22)', () => {
     await expect(group).toHaveAttribute('aria-pressed', 'true');
     await clickBelowContent(page);
 
-    // Exactly what the Section tool inserted: a constrained Group holding
-    // one paragraph — not core's bare Group, which lands as a layout
-    // picker and needs a second click before the author can type.
+    // Core's bare Group, exactly as the inserter adds it — no layout, no
+    // inner blocks, so it lands as the layout picker (owner decision
+    // 2026-09-02: a pin carries no settings of its own).
     await expect.poll(async () => await blockNames(page)).toEqual(['core/group']);
     const inserted = await page.evaluate(() => {
       const b = window.wp.data.select('core/block-editor').getBlocks()[0];
-      return { layout: b.attributes.layout, inner: b.innerBlocks.map((i) => i.name) };
+      return { layout: b.attributes.layout || null, inner: b.innerBlocks.map((i) => i.name) };
     });
-    expect(inserted).toEqual({ layout: { type: 'constrained' }, inner: ['core/paragraph'] });
+    expect(inserted).toEqual({ layout: null, inner: [] });
     await expect(page.locator('#toolrail-rail [data-tool="select"]')).toHaveAttribute('aria-pressed', 'true');
 
     // An ordinary pin: it unpins, and the account list says so.
@@ -4934,41 +4878,6 @@ test.describe('Group as a pinned default (0.1.22)', () => {
   });
 });
 
-test.describe('help panel and the editor welcome guide', () => {
-  test('first-run auto-open waits until the welcome guide is closed, then opens and stamps', async ({ page }) => {
-    await openNewPost(page);
-
-    // A fresh account: core's guide is due AND the help stamp is unset.
-    await page.evaluate(() => {
-      window.wp.data.dispatch('core/preferences').set('core/edit-post', 'welcomeGuide', true);
-      window.wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-help-seen', undefined);
-      window.localStorage.removeItem('toolrail-help-seen');
-    });
-    await page.reload();
-    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
-    const guide = page.locator('.edit-post-welcome-guide');
-    await expect(guide).toBeVisible({ timeout: 10000 });
-
-    // Outlive the 400ms breather: nothing opens under the guide and the
-    // stamp is NOT written. Before the fix the panel opened under the
-    // modal, the click that closed the guide light-dismissed the panel
-    // too, and the stamp meant the author never got it again.
-    await page.waitForTimeout(1200);
-    await expect(page.locator('.toolrail-help')).toHaveCount(0);
-    expect(await getPref(page, 'toolrail-help-seen')).toBeNull();
-
-    await guide.locator('.components-modal__header button[aria-label="Close"]').click();
-    await expect(guide).toHaveCount(0);
-
-    await expect(page.locator('.toolrail-help')).toBeVisible({ timeout: 5000 });
-    await expect.poll(async () => await getPref(page, 'toolrail-help-seen')).toBe('1');
-    const focusInPanel = await page.evaluate(() =>
-      document.querySelector('.toolrail-help').contains(document.activeElement)
-    );
-    expect(focusInPanel).toBe(false);
-  });
-});
-
 test.describe('core inserter while a tool is armed', () => {
   async function seedTwoParagraphs(page) {
     await page.evaluate(() => {
@@ -5006,15 +4915,24 @@ test.describe('core inserter while a tool is armed', () => {
     await openNewPost(page);
     await seedTwoParagraphs(page);
 
-    const popover = page.locator('.components-popover.block-editor-block-popover__inbetween');
+    const plus = page.locator('.block-editor-block-popover__inbetween .block-editor-block-list__insertion-point.is-with-inserter');
     // Control: with nothing armed, hovering the gap raises core's "+".
     await hoverGap(page);
-    await expect(popover).toBeVisible({ timeout: 5000 });
+    await expect(plus).toBeVisible({ timeout: 5000 });
 
     await page.locator('#toolrail-rail [data-tool="pin:core/heading"]').click();
     await expect(page.locator('body')).toHaveClass(/toolrail-hides-inserter/);
     await hoverGap(page);
-    await expect(popover).toBeHidden();
+    await expect(plus).toBeHidden();
+
+    // Only the "+" goes. The same popover shell carries the drop line a
+    // drag shows — an insertion point WITHOUT the inserter option, which
+    // is exactly what core's drop zone dispatches — and that must
+    // survive arming (review 2026-09-02, finding 4).
+    await page.evaluate(() => window.wp.data.dispatch('core/block-editor').showInsertionPoint('', 1));
+    const line = page.locator('.block-editor-block-popover__inbetween .block-editor-block-list__insertion-point:not(.is-with-inserter)');
+    await expect(line).toBeVisible({ timeout: 5000 });
+    await page.evaluate(() => window.wp.data.dispatch('core/block-editor').hideInsertionPoint());
 
     await canvas(page).locator('body').press('Escape');
     await expect(page.locator('body')).not.toHaveClass(/toolrail-hides-inserter/);
@@ -5066,5 +4984,142 @@ test.describe('core inserter while a tool is armed', () => {
     await expect.poll(async () => await blockNames(page)).toEqual([
       'core/paragraph', 'core/heading', 'core/paragraph',
     ]);
+  });
+});
+
+test.describe('attach watcher and the Group lift (review 2026-09-02, finding 1)', () => {
+  test('a late attach that brings a 0.1.21-stamped, Group-less account still gets the Group lift', async ({ page }) => {
+    await openNewPost(page);
+    await expect(page.locator('#toolrail-rail [data-tool^="pin:"]')).toHaveCount(4);
+
+    // The real attach landing AFTER boot, carrying an account stamped
+    // under 0.1.21: first stamp present, Group stamp absent, Group-less
+    // pins. Boot had already stamped Group against the empty pre-attach
+    // store, so a watcher keyed on the first stamp alone stood down here
+    // and the lift never reached this account. A no-op set() keeps the
+    // synthetic layer from touching the real account.
+    await page.evaluate(() => window.wp.data.dispatch('core/preferences').setPersistenceLayer({
+      get: () => Promise.resolve({
+        toolrail: {
+          'toolrail-quick-slots': JSON.stringify(['core/paragraph', 'core/heading', 'core/image']),
+          'toolrail-slots-migrated': '1',
+        },
+      }),
+      set: () => {},
+    }));
+
+    await expect(page.locator('#toolrail-rail [data-tool^="pin:"]')).toHaveCount(4, { timeout: 5000 });
+    expect(JSON.parse(await getPref(page, 'toolrail-quick-slots'))).toEqual([
+      'core/group', 'core/paragraph', 'core/heading', 'core/image',
+    ]);
+    expect(await getPref(page, 'toolrail-group-seeded')).toBe('1');
+  });
+});
+
+test.describe('armed insertion into containers (review 2026-09-02, findings 2 and 3)', () => {
+  /** Click the canvas at a point measured in canvas-viewport coordinates. */
+  async function clickCanvasAt(page, point) {
+    const bodyTop = await canvas(page).locator('body').evaluate((b) => b.getBoundingClientRect().top);
+    await canvas(page).locator('body').click({
+      position: { x: Math.round(point.x), y: Math.round(point.y - bodyTop) },
+    });
+  }
+
+  /** data-type of the block under a canvas-viewport point, or null. */
+  async function blockTypeAt(page, point) {
+    return canvas(page).locator('body').evaluate((body, g) => {
+      const el = body.ownerDocument.elementFromPoint(g.x, g.y);
+      const block = el && el.closest('[data-block]');
+      return block ? block.getAttribute('data-type') : null;
+    }, point);
+  }
+
+  test('a gap inside a container that refuses the block climbs to the nearest parent that accepts it', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks([
+        createBlock('core/columns', {}, [
+          createBlock('core/column', {}, [createBlock('core/paragraph', { content: 'LEFT' })]),
+          createBlock('core/column', {}, [createBlock('core/paragraph', { content: 'RIGHT' })]),
+        ]),
+      ]);
+    });
+    await expect.poll(async () => await blockNames(page)).toEqual(['core/columns']);
+
+    await page.locator('#toolrail-rail [data-tool="pin:core/heading"]').click();
+    // The gutter between the two columns: on the Columns block's own
+    // list, on neither column.
+    const gap = await canvas(page).locator('body').evaluate(() => {
+      const cols = document.querySelectorAll('[data-type="core/column"]');
+      const a = cols[0].getBoundingClientRect();
+      const b = cols[1].getBoundingClientRect();
+      return { x: (a.right + b.left) / 2, y: (a.top + a.bottom) / 2 };
+    });
+    expect(await blockTypeAt(page, gap)).toBe('core/columns');
+
+    await clickCanvasAt(page, gap);
+    // Columns refuses a Heading (core's insertBlocks would have dropped
+    // it without a word); the click meant "here", so the heading lands
+    // right after the Columns block at the root, and the tool returns
+    // to Select as after any insert.
+    await expect.poll(async () => await blockNames(page)).toEqual(['core/columns', 'core/heading']);
+    await expect(page.locator('#toolrail-rail [data-tool="select"]')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('a gap between blocks laid out in a Row resolves by x, not by y alone', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks([
+        createBlock('core/group', { layout: { type: 'flex', flexWrap: 'nowrap' } }, [
+          createBlock('core/paragraph', { content: 'ROW-A' }),
+          createBlock('core/paragraph', { content: 'ROW-B' }),
+        ]),
+      ]);
+    });
+    await expect.poll(async () => await blockNames(page)).toEqual(['core/group']);
+
+    await page.locator('#toolrail-rail [data-tool="pin:core/heading"]').click();
+    const gap = await canvas(page).locator('body').evaluate(() => {
+      const ps = document.querySelectorAll('[data-type="core/group"] [data-type="core/paragraph"]');
+      const a = ps[0].getBoundingClientRect();
+      const b = ps[1].getBoundingClientRect();
+      return {
+        x: (a.right + b.left) / 2,
+        y: (a.top + a.bottom) / 2,
+        sideBySide: b.left >= a.right,
+        levelWithinPx: Math.abs(a.top - b.top),
+      };
+    });
+    // Guard the guard: the two really share a row, with a gap between.
+    expect(gap.sideBySide).toBe(true);
+    expect(gap.levelWithinPx).toBeLessThan(4);
+    expect(await blockTypeAt(page, gap)).toBe('core/group');
+
+    await clickCanvasAt(page, gap);
+    // Between A and B inside the Row. A y-only count saw both midpoints
+    // level with the pointer and put the heading first.
+    await expect.poll(async () => page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlocks()[0].innerBlocks.map((b) => b.name)
+    )).toEqual(['core/paragraph', 'core/heading', 'core/paragraph']);
+  });
+
+  test('a block no parent on the path accepts is refused with a message, and the tool stays armed', async ({ page }) => {
+    await openNewPost(page);
+    // core/column may only live inside Columns: at the root it has no
+    // legal home anywhere on the way up.
+    await page.evaluate(() => window.toolrail.pinBlock('core/column'));
+    const tool = page.locator('#toolrail-rail [data-tool="pin:core/column"]');
+    await tool.click();
+    await clickBelowContent(page);
+
+    await expect(page.locator('.components-snackbar')).toContainText('Column cannot be inserted here.');
+    // Nothing inserted — and core's own empty-space paragraph was still
+    // swept, so the document is exactly as it was.
+    await expect.poll(async () => await blockNames(page)).toEqual([]);
+    await expect(tool).toHaveAttribute('aria-pressed', 'true');
+
+    await page.evaluate(() => window.toolrail.unpinBlock('core/column'));
   });
 });
