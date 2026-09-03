@@ -5418,20 +5418,24 @@ test.describe('review 2026-09-03 follow-ups (patterns and drag)', () => {
   test('a single-block pattern dropped from the inserter pins the pattern, not the block type (finding 2)', async ({ page }) => {
     await openNewPost(page);
     // A registered pattern that is exactly one top-level block with no
-    // children — the shape that drags like a plain block type.
-    const pattern = await page.evaluate(async () => {
-      const all = await window.wp.data.resolveSelect('core').getBlockPatterns();
-      const { parse, getBlockType } = window.wp.blocks;
-      for (const p of all) {
-        if (p.inserter === false || typeof p.content !== 'string') continue;
-        const blocks = parse(p.content).filter((b) => b.name);
-        if (blocks.length !== 1 || blocks[0].innerBlocks.length) continue;
-        if (!getBlockType(blocks[0].name)) continue;
-        return { name: p.name, content: p.content, type: blocks[0].name };
-      }
-      return null;
-    });
-    test.skip(!pattern, 'this site registers no single-block pattern');
+    // children — the shape that drags like a plain block type. SEEDED,
+    // not hunted: most core and theme patterns are Group or Columns
+    // wrappers, and a catalog hunt let this test skip itself green
+    // (review 2026-09-03, second round, finding 4). select('core') hands
+    // out one memoized selectors object, so the rail's catalog read sees
+    // the fixture appended to the real list.
+    const pattern = {
+      name: 'e2e/styled-heading',
+      type: 'core/heading',
+      content: '<!-- wp:heading {"level":3,"style":{"typography":{"letterSpacing":"3px"}}} --><h3 class="wp-block-heading" style="letter-spacing:3px">E2E STYLED</h3><!-- /wp:heading -->',
+    };
+    await page.evaluate(async (fx) => {
+      const real = await window.wp.data.resolveSelect('core').getBlockPatterns();
+      const sel = window.wp.data.select('core');
+      window.__realGetBlockPatterns = sel.getBlockPatterns;
+      const list = real.concat([{ name: fx.name, title: 'E2E styled heading', content: fx.content, inserter: true }]);
+      sel.getBlockPatterns = () => list;
+    }, pattern);
 
     const typeWasPinned = await page.evaluate((t) => window.toolrail.isPinned(t), pattern.type);
     await page.evaluate((content) => {
@@ -5444,6 +5448,44 @@ test.describe('review 2026-09-03 follow-ups (patterns and drag)', () => {
     // The block type was NOT pinned by the drop (unless it already was).
     expect(await page.evaluate((t) => window.toolrail.isPinned(t), pattern.type)).toBe(typeWasPinned);
     await page.evaluate((s) => window.toolrail.unpinBlock(s), 'pattern:' + pattern.name);
+    await page.evaluate(() => { window.wp.data.select('core').getBlockPatterns = window.__realGetBlockPatterns; });
+  });
+
+  test('a user pattern edited to the same byte length is matched by its new content, not a stale parse (second round, finding 2)', async ({ page }) => {
+    await openNewPost(page);
+    // Two contents of identical length: an h2 and an h3.
+    const v1 = '<!-- wp:heading --><h2 class="wp-block-heading">SAME LEN</h2><!-- /wp:heading -->';
+    const v2 = '<!-- wp:heading {"level":3} --><h3 class="wp-block-heading">SAME LEN</h3><!-- /wp:heading -->';
+    const seed = (page2, content) => page2.evaluate((c) => {
+      const sel = window.wp.data.select('core');
+      if (!window.__realGetEntityRecords) {
+        window.__realGetEntityRecords = sel.getEntityRecords;
+      }
+      const record = { id: 777001, title: { raw: 'Same length' }, content: { raw: c }, wp_pattern_sync_status: 'unsynced' };
+      sel.getEntityRecords = (kind, name, query) => (
+        kind === 'postType' && name === 'wp_block' ? [record] : window.__realGetEntityRecords(kind, name, query)
+      );
+    }, content);
+    const dropParsed = (page2, content) => page2.evaluate((c) => {
+      const dt = new DataTransfer();
+      dt.setData('wp-blocks', JSON.stringify({ type: 'inserter', blocks: window.wp.blocks.parse(c) }));
+      document.getElementById('toolrail-region').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    }, content);
+
+    await seed(page, v1);
+    await dropParsed(page, v1);
+    await expect(page.locator('#toolrail-rail [data-tool="pin:pattern:user:777001"]')).toBeVisible();
+    await page.evaluate(() => window.toolrail.unpinBlock('pattern:user:777001'));
+
+    // Same id, same length, new content: a length-keyed cache served
+    // the h2 parse here, the match missed, and the drop pinned Heading.
+    await seed(page, v2);
+    await dropParsed(page, v2);
+    await expect(page.locator('#toolrail-rail [data-tool="pin:pattern:user:777001"]')).toBeVisible();
+    await page.evaluate(() => {
+      window.toolrail.unpinBlock('pattern:user:777001');
+      window.wp.data.select('core').getEntityRecords = window.__realGetEntityRecords;
+    });
   });
 
   test('a synced pattern reference pins by its ref before the list lands; a ref-less core/block pins nothing (finding 3)', async ({ page }) => {

@@ -7536,6 +7536,13 @@
     // add-to-toolbar dialog (see handleRailDrop). Pointer sugar — the
     // keyboard paths are the block menu's "Pin to toolbar" and "Save as
     // pattern and pin to toolbar…" items and the settings search.
+    //
+    // A drag that started on one of the rail's own tools is refused
+    // HERE, and only here: without preventDefault on dragover the browser
+    // never fires drop on the rail at all, so a drop-side guard would be
+    // dead code — and could not work anyway, since the document-level
+    // capture listener clears railDragActive before any bubble-phase
+    // handler reads it (review 2026-09-03, second round, finding 6).
     wrapper.addEventListener('dragover', function (e) {
       if (!railDragActive && e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types, 'wp-blocks') !== -1) {
         e.preventDefault();
@@ -7552,11 +7559,6 @@
       }
       var raw = e.dataTransfer.getData('wp-blocks');
       if (!raw) {
-        return;
-      }
-      if (railDragActive) {
-        // One of the rail's own tools dragged back over the rail:
-        // nothing to pin, and not a drop for core either.
         return;
       }
       e.preventDefault();
@@ -7629,15 +7631,32 @@
    * Each pattern's own normalized markup, parsed once and reused across
    * drops (core memoizes this same parse in its inserter; unmemoized it
    * re-parsed a 50–150 pattern catalog on the main thread per drop —
-   * review 2026-09-03, finding 5). Keyed by slot id plus content length,
-   * so an edited user pattern is parsed again; the whole map is dropped
-   * whenever the catalog signature changes (watchPatternCatalog), which
-   * also bounds it to the live catalog.
+   * review 2026-09-03, finding 5). Keyed by slot id plus a HASH of the
+   * content, not its length: the catalog signature deliberately never
+   * reads content, so a user pattern edited to the same byte length (an
+   * h2 made an h3) kept its stale parse, missed the match, and fell
+   * through to a type pin — the bug the match exists to prevent
+   * (review 2026-09-03, second round, finding 2). Hashing is one pass
+   * over each pattern's content per drop, and drops are rare; the
+   * per-keystroke signature stays cheap. A 32-bit collision on same id,
+   * same length, different content would serve a stale parse; that is
+   * a non-event. The whole map is dropped whenever the signature
+   * changes (watchPatternCatalog), which bounds it to the live catalog.
    */
   var patternMarkupCache = Object.create(null);
 
+  /** djb2 over a string, as base 36. */
+  function contentHash(text) {
+    var h = 5381;
+    for (var i = 0; i < text.length; i++) {
+      h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+    }
+    return (h >>> 0).toString(36);
+  }
+
   function patternMarkup(p) {
-    var key = p.id + '#' + (p.content ? p.content.length : 0);
+    var content = p.content || '';
+    var key = p.id + '#' + content.length + '#' + contentHash(content);
     if (!(key in patternMarkupCache)) {
       var own;
       try {
@@ -7690,7 +7709,11 @@
    * block with no children (a styled heading, a lone image) drags
    * exactly like a block type and must still pin as the pattern — and
    * only an unmatched drop pins its first block's type, at once, with
-   * nothing to ask.
+   * nothing to ask. The cost of pattern-first: a bare block whose
+   * default markup equals some registered pattern's entire content (a
+   * lone Separator, an empty Spacer) pins that pattern instead of the
+   * type. The two payloads are byte-identical, so nothing can tell them
+   * apart; the pattern IS that one block, and unpinning is one click.
    *
    * From the canvas ({srcClientIds}): opens the add-to-toolbar dialog —
    * pin the type, or save the block as a pattern (settings, contents
@@ -7828,12 +7851,16 @@
    * null as "go ahead"; a real refusal then surfaces as the save's own
    * error. The entity form is WordPress 6.7+; when it has finished
    * resolving to nothing (6.5 and 6.6), the resource-name form is the
-   * one that core knows.
+   * one that core knows. No store, or a selector that throws, is also
+   * "cannot tell", never "denied" (second round, finding 3): the save
+   * itself reports a store that is missing.
+   *
+   * @return {boolean|null}
    */
   function canCreatePatterns() {
     var sel = coreSelect();
     if (!sel || typeof sel.canUser !== 'function') {
-      return false;
+      return null;
     }
     try {
       var entityArgs = ['create', { kind: 'postType', name: 'wp_block' }];
@@ -7849,7 +7876,7 @@
       can = sel.canUser('create', 'blocks');
       return typeof can === 'boolean' ? can : null;
     } catch (e) {
-      return false;
+      return null;
     }
   }
 

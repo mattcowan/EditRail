@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.1.23
+Stable tag: 0.1.24
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -43,6 +43,15 @@ Against your user account on this site, the same as pinned blocks and saved sets
 Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a position under "Toolbar position".
 
 == Changelog ==
+
+= 0.1.24 =
+* Fix: the "Add to toolbar" dialog could open behind the editor's own panels (the Document Overview, the settings sidebar) with focus inside it. It now rises above them like the other toolbar surfaces.
+* Fix: a pattern that is a single block with no children (a styled heading, a lone image) dragged from the inserter pinned the block type instead of the pattern. Every dropped pattern now pins the pattern. A block whose plain markup is identical to some pattern's whole content pins that pattern; the two cannot be told apart.
+* Fix: a synced pattern dragged from the inserter before the site's pattern list had loaded pinned a broken reference. It now pins the pattern, which shows once the list loads.
+* Fix: the dialog could say you cannot create patterns while the permission check was still running. It now waits for the answer, and a real refusal shows as the save's own error.
+* Fix: a set file loaded or imported before the pattern list arrived reported its pattern pins as unavailable. They are counted only once the list has loaded.
+* Fix: a toolbar rebuild during a drag from the toolbar could leave the toolbar refusing drops for the rest of the session.
+* The "Block" tag on a search result is now part of the button's accessible name ("Pin the Quote block to the toolbar").
 
 = 0.1.23 =
 * Drag a tool from the toolbar into the canvas to place its block where you drop it, the way the editor's own inserter works. The drop line, the target and the insert are the editor's own. Clicking a tool still arms it, and the keyboard path is unchanged.
