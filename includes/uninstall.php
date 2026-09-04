@@ -15,13 +15,20 @@
  * `_modified` is bumped on every stripped row. Core's persistence layer
  * (wp-includes/js/dist/preferences-persistence.js) keeps a localStorage
  * copy of the same array and, on the next editor load, uses the server copy
- * only when server._modified >= local._modified. Bumping the stamp makes
- * the server copy win outright, so a reinstall in the same browser does not
- * resurrect the pins from core's browser cache. The plugin's own `toolrail-*`
- * localStorage fallback keys are out of PHP's reach; a reinstall in the same
- * browser migrates those back into the account (see migrateLocalToPrefs in
- * assets/editor-rail.js). Accepted, owner decision 2026-09-04: a browser-local
- * mirror is not site data, and the row is clean for every other browser.
+ * only when server._modified >= local._modified. The local stamp is the
+ * BROWSER's clock at its last write and this one is the SERVER's, so the
+ * bump carries a one-hour forward margin: a browser running a few minutes
+ * ahead of the server still loses the comparison, and the margin is
+ * harmless because the browser's next write replaces the stamp with its
+ * own. The plugin's own `toolrail-*` localStorage fallback keys are out of
+ * PHP's reach. Only four of them are ever lifted back into the account
+ * (position, pins, saved sets, migration stamp — migrateLocalToPrefs in
+ * assets/editor-rail.js; colors and the help/inserter toggles stay gone),
+ * and since 0.1.25 the rail deletes a browser's copy of those four the
+ * first time it boots against an account that already holds them, so a
+ * browser in regular use has nothing left to lift after a delete +
+ * reinstall. What remains is a browser that had a fallback-session write
+ * (Storage threw) and has not booted since: that copy comes back once.
  *
  * Kept apart from the root uninstall.php so the helpers load in the
  * standalone PHPUnit bootstrap, which never defines WP_UNINSTALL_PLUGIN.
@@ -94,8 +101,10 @@ function toolrail_uninstall_scrub_site($meta_key, $now) {
 function toolrail_uninstall() {
     global $wpdb;
 
-    // Same shape core writes from JS: new Date().toISOString().
-    $now      = gmdate('Y-m-d\TH:i:s') . '.000Z';
+    // Same shape core writes from JS: new Date().toISOString(). One hour
+    // ahead, so a browser whose clock runs ahead of the server's still sees
+    // the stripped server copy as the newer one (see the file docblock).
+    $now      = gmdate('Y-m-d\TH:i:s', time() + 3600) . '.000Z';
     $site_ids = is_multisite() ? get_sites(['fields' => 'ids', 'number' => 0]) : [null];
     $total    = 0;
     foreach ((array) $site_ids as $site_id) {

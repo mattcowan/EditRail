@@ -26,6 +26,7 @@ class Test_Uninstall extends WP_UnitTestCase {
         $GLOBALS['toolrail_test_multisite']       = false;
         $GLOBALS['toolrail_test_site_ids']        = [1];
         $GLOBALS['toolrail_test_last_user_query'] = null;
+        $GLOBALS['toolrail_test_last_site_query'] = null;
     }
 
     /** A row shaped like the real one on mnc4: core scopes plus ours. */
@@ -126,6 +127,30 @@ class Test_Uninstall extends WP_UnitTestCase {
         // persistence layer's Date.parse() comparison sees a real date.
         $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/', $row['_modified']);
         $this->assertGreaterThan('2026-08-30T10:00:00.000Z', $row['_modified']);
+        // And it sits one hour AHEAD of the server clock: the browser's
+        // own stamp comes from the browser's clock, and core keeps the
+        // local copy whenever it is newer than the server's.
+        $stamp = strtotime($row['_modified']);
+        $this->assertGreaterThanOrEqual(time() + 3600 - 5, $stamp);
+        $this->assertLessThanOrEqual(time() + 3600 + 5, $stamp);
+    }
+
+    public function test_uninstall_multisite_asks_for_every_site_not_the_first_hundred() {
+        $GLOBALS['toolrail_test_multisite'] = true;
+        $GLOBALS['toolrail_test_site_ids']  = [1];
+
+        toolrail_uninstall();
+
+        // WP_Site_Query defaults `number` to 100 and only emits a LIMIT
+        // when it is truthy; 0 is the documented "all sites".
+        $query = $GLOBALS['toolrail_test_last_site_query'];
+        $this->assertSame('ids', $query['fields']);
+        $this->assertSame(0, $query['number']);
+    }
+
+    public function test_uninstall_single_site_never_queries_the_network() {
+        toolrail_uninstall();
+        $this->assertNull($GLOBALS['toolrail_test_last_site_query']);
     }
 
     public function test_uninstall_multisite_visits_every_site_key() {

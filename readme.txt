@@ -44,12 +44,13 @@ Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a 
 
 = What does deleting the plugin remove? =
 
-Its own preferences, and nothing else. The plugin stores no options and writes nothing into posts. Deleting it from the Plugins screen removes the pinned tools, toolbar position, saved sets and colors from every user account on the site. Deactivating it keeps them, so the toolbar comes back as you left it when you activate the plugin again. A browser can keep a local copy of the preferences from before the deletion; if you install the plugin again in the same browser, that copy comes back. To start clean in that browser, use "Restore default tools" in Toolbar settings.
+Its own preferences, and nothing else. The plugin stores no options and writes nothing into posts. Deleting it from the Plugins screen removes the pinned tools, toolbar position, saved sets and colors from every user account on the site. Deactivating it keeps them, so the toolbar comes back as you left it when you activate the plugin again. In rare cases a browser holds an older local copy of the pins, the toolbar position or the saved sets (from a session where the browser's storage failed, or from a version before 0.1.6). If you install the plugin again in that browser, that copy comes back one time. Unpin what you do not want; it does not return again.
 
 == Changelog ==
 
 = 0.1.25 =
 * Deleting the plugin from the Plugins screen now removes its per-user preferences (pinned tools, toolbar position, saved sets, colors and the help and inserter toggles) from every user account on the site, and on every site of a network. Deactivating keeps them. Before this, a reinstall found the old pins still in place.
+* Fix: a browser kept its own old copy of the pins, toolbar position and saved sets forever, and could bring it back after the plugin was deleted and installed again. The copy is now removed the first time the toolbar loads against an account that already has those settings.
 
 = 0.1.24 =
 * Fix: the "Add to toolbar" dialog could open behind the editor's own panels (the Document Overview, the settings sidebar) with focus inside it. It now rises above them like the other toolbar surfaces.

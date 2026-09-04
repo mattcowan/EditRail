@@ -104,6 +104,7 @@ if (!function_exists('is_multisite')) {
 
 if (!function_exists('get_sites')) {
     function get_sites($args = []) {
+        $GLOBALS['toolrail_test_last_site_query'] = $args;
         return $GLOBALS['toolrail_test_site_ids'];
     }
 }
