@@ -40,6 +40,8 @@ const requiredFiles = [
   'readme.txt',
   'includes/providers.php',
   'includes/rail.php',
+  'uninstall.php',
+  'includes/uninstall.php',
   'assets/editor-rail.js',
   'assets/editor-rail.css',
 ];

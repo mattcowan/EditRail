@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.1.24
+Stable tag: 0.1.25
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -42,7 +42,14 @@ Against your user account on this site, the same as pinned blocks and saved sets
 
 Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a position under "Toolbar position".
 
+= What does deleting the plugin remove? =
+
+Its own preferences, and nothing else. The plugin stores no options and writes nothing into posts. Deleting it from the Plugins screen removes the pinned tools, toolbar position, saved sets and colors from every user account on the site. Deactivating it keeps them, so the toolbar comes back as you left it when you activate the plugin again. A browser can keep a local copy of the preferences from before the deletion; if you install the plugin again in the same browser, that copy comes back. To start clean in that browser, use "Restore default tools" in Toolbar settings.
+
 == Changelog ==
+
+= 0.1.25 =
+* Deleting the plugin from the Plugins screen now removes its per-user preferences (pinned tools, toolbar position, saved sets, colors and the help and inserter toggles) from every user account on the site, and on every site of a network. Deactivating keeps them. Before this, a reinstall found the old pins still in place.
 
 = 0.1.24 =
 * Fix: the "Add to toolbar" dialog could open behind the editor's own panels (the Document Overview, the settings sidebar) with focus inside it. It now rises above them like the other toolbar surfaces.

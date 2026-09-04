@@ -3,7 +3,7 @@
  * Plugin Name:       Editor Tool Rail
  * Plugin URI:        https://mnc4.com/
  * Description:       A movable, graphics-editor-style toolbar for the block editor. Click a tool, then click the canvas to insert a core block at that point.
- * Version:           0.1.24
+ * Version:           0.1.25
  * Requires at least: 6.5
  * Requires PHP:      7.4
  * Author:            Matthew Cowan
@@ -19,7 +19,7 @@ defined('ABSPATH') || exit;
 
 // Guarded so the standalone PHPUnit bootstrap can pre-define them.
 if (!defined('TOOLRAIL_VERSION')) {
-    define('TOOLRAIL_VERSION', '0.1.24');
+    define('TOOLRAIL_VERSION', '0.1.25');
 }
 if (!defined('TOOLRAIL_PLUGIN_DIR')) {
     define('TOOLRAIL_PLUGIN_DIR', plugin_dir_path(__FILE__));

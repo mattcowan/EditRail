@@ -88,5 +88,68 @@ if (!class_exists('WP_UnitTestCase')) {
     class WP_UnitTestCase extends \PHPUnit\Framework\TestCase {}
 }
 
+// --- Uninstall stubs: a fake usermeta store keyed [user_id][meta_key], a
+// single-site default, and just enough of $wpdb for get_blog_prefix(). The
+// uninstall runner is a loop over these calls and nothing else, so faking
+// them here makes the whole runner testable, not only its pure helper.
+$GLOBALS['toolrail_test_user_meta'] = [];
+$GLOBALS['toolrail_test_multisite'] = false;
+$GLOBALS['toolrail_test_site_ids']  = [1];
+
+if (!function_exists('is_multisite')) {
+    function is_multisite() {
+        return !empty($GLOBALS['toolrail_test_multisite']);
+    }
+}
+
+if (!function_exists('get_sites')) {
+    function get_sites($args = []) {
+        return $GLOBALS['toolrail_test_site_ids'];
+    }
+}
+
+if (!function_exists('get_users')) {
+    function get_users($args = []) {
+        $GLOBALS['toolrail_test_last_user_query'] = $args;
+        $ids = [];
+        foreach ($GLOBALS['toolrail_test_user_meta'] as $user_id => $meta) {
+            if (isset($args['meta_key']) && !array_key_exists($args['meta_key'], $meta)) {
+                continue;
+            }
+            $ids[] = $user_id;
+        }
+        return $ids;
+    }
+}
+
+if (!function_exists('get_user_meta')) {
+    function get_user_meta($user_id, $key = '', $single = false) {
+        $meta = $GLOBALS['toolrail_test_user_meta'][$user_id] ?? [];
+        if (!array_key_exists($key, $meta)) {
+            return $single ? '' : [];
+        }
+        return $single ? $meta[$key] : [$meta[$key]];
+    }
+}
+
+if (!function_exists('update_user_meta')) {
+    function update_user_meta($user_id, $key, $value) {
+        $GLOBALS['toolrail_test_user_meta'][$user_id][$key] = $value;
+        return true;
+    }
+}
+
+if (!class_exists('Toolrail_Test_WPDB')) {
+    class Toolrail_Test_WPDB {
+        public function get_blog_prefix($blog_id = null) {
+            return ($blog_id === null || (int) $blog_id === 1) ? 'wp_' : 'wp_' . (int) $blog_id . '_';
+        }
+    }
+}
+if (!isset($GLOBALS['wpdb'])) {
+    $GLOBALS['wpdb'] = new Toolrail_Test_WPDB();
+}
+
 require_once TOOLRAIL_PLUGIN_DIR . 'includes/providers.php';
 require_once TOOLRAIL_PLUGIN_DIR . 'includes/rail.php';
+require_once TOOLRAIL_PLUGIN_DIR . 'includes/uninstall.php';
