@@ -45,9 +45,9 @@ defined('ABSPATH') || exit;
  * there is nothing to do, so a user who never opened the rail (no `toolrail`
  * key) is left alone and does not get a `_modified` bump for nothing.
  *
- * @param mixed  $prefs The stored meta value: an array, or '' / anything else
- *                      when the user has no row (get_user_meta's single-value
- *                      miss is '').
+ * @param mixed  $prefs One stored meta value: normally an array; anything
+ *                      else (a corrupt row, '' from a single-value miss) is
+ *                      left alone.
  * @param string $now   ISO-8601 UTC stamp to store as `_modified`.
  * @return array|null   The stripped array, or null when nothing changes.
  */
@@ -58,6 +58,60 @@ function toolrail_uninstall_strip_preferences($prefs, $now) {
     unset($prefs['toolrail']);
     $prefs['_modified'] = (string) $now;
     return $prefs;
+}
+
+/**
+ * Strip the scope from one user's row(s) without clobbering a concurrent write.
+ *
+ * An editor tab still open during the uninstall can land its debounced REST
+ * write between this function's read and its write. A plain update_user_meta()
+ * would then overwrite that newer row with a stripped copy of the OLD one and
+ * lose whatever core preference the tab had just changed. So every write is
+ * conditional: update_metadata() with a $prev_value adds `meta_value = <the
+ * serialized value that was read>` to its WHERE and returns false when no row
+ * matched — i.e. someone else wrote first. On false, drop the cached copy,
+ * re-read and go again, a bounded number of times (the writer is debounced at
+ * 2.5s; three collisions in a row do not happen).
+ *
+ * Reading every value (not `$single`) also covers a duplicate-row key. Core
+ * registers this meta as single and writes it through update_metadata(), so
+ * duplicates are not expected — but with $prev_value each distinct value is
+ * stripped on its own, where an unconditional update would have stamped one
+ * row's stripped copy over all of them. Two duplicates with the SAME value are
+ * updated by one call (that is how update_metadata() works); the loop's second
+ * attempt at that value then matches nothing, which reads as a collision and
+ * costs one harmless re-read.
+ *
+ * @param int    $user_id  The user.
+ * @param string $meta_key The site's persisted-preferences meta key.
+ * @param string $now      ISO-8601 UTC stamp to store as `_modified`.
+ * @return int             Number of conditional updates that landed.
+ */
+function toolrail_uninstall_scrub_user($user_id, $meta_key, $now) {
+    $count = 0;
+    for ($attempt = 0; $attempt < 3; $attempt++) {
+        // update_metadata() only clears this cache on a SUCCESSFUL write, so a
+        // re-read after a refused one would otherwise see the stale copy.
+        wp_cache_delete($user_id, 'user_meta');
+        $collided = false;
+        $pending  = false;
+        foreach ((array) get_user_meta($user_id, $meta_key, false) as $value) {
+            $stripped = toolrail_uninstall_strip_preferences($value, $now);
+            if ($stripped === null) {
+                continue;
+            }
+            $pending = true;
+            if (update_user_meta($user_id, $meta_key, $stripped, $value)) {
+                $count++;
+            } else {
+                $collided = true;
+            }
+        }
+        if (!$pending || !$collided) {
+            break;
+        }
+    }
+    return $count;
 }
 
 /**
@@ -79,12 +133,7 @@ function toolrail_uninstall_scrub_site($meta_key, $now) {
         'blog_id'  => 0,
     ]);
     foreach ((array) $user_ids as $user_id) {
-        $stripped = toolrail_uninstall_strip_preferences(get_user_meta($user_id, $meta_key, true), $now);
-        if ($stripped === null) {
-            continue;
-        }
-        update_user_meta($user_id, $meta_key, $stripped);
-        $count++;
+        $count += toolrail_uninstall_scrub_user($user_id, $meta_key, $now);
     }
     return $count;
 }

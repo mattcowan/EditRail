@@ -1,6 +1,6 @@
 {
   "name": "toolrail",
-  "version": "0.1.25",
+  "version": "1.0.0",
   "private": true,
   "description": "Editor Tool Rail — a graphics-editor-style left toolbar for the WordPress block editor.",
   "scripts": {

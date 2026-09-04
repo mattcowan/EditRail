@@ -88,13 +88,25 @@ if (!class_exists('WP_UnitTestCase')) {
     class WP_UnitTestCase extends \PHPUnit\Framework\TestCase {}
 }
 
-// --- Uninstall stubs: a fake usermeta store keyed [user_id][meta_key], a
-// single-site default, and just enough of $wpdb for get_blog_prefix(). The
-// uninstall runner is a loop over these calls and nothing else, so faking
-// them here makes the whole runner testable, not only its pure helper.
-$GLOBALS['toolrail_test_user_meta'] = [];
-$GLOBALS['toolrail_test_multisite'] = false;
-$GLOBALS['toolrail_test_site_ids']  = [1];
+// --- Uninstall stubs: a fake usermeta store keyed [user_id][meta_key] =>
+// LIST of row values (usermeta allows several rows per key), a single-site
+// default, and just enough of $wpdb for get_blog_prefix(). The uninstall
+// runner is a loop over these calls and nothing else, so faking them here
+// makes the whole runner testable, not only its pure helper. The update
+// stub honors $prev_value the way update_metadata() does — every row whose
+// value matches is rewritten, and no match returns false — and
+// `toolrail_test_before_update` is a hook a test can use to slip a
+// concurrent write in between the runner's read and its write.
+$GLOBALS['toolrail_test_user_meta']     = [];
+$GLOBALS['toolrail_test_multisite']     = false;
+$GLOBALS['toolrail_test_site_ids']      = [1];
+$GLOBALS['toolrail_test_before_update'] = null;
+
+if (!function_exists('wp_cache_delete')) {
+    function wp_cache_delete($key, $group = '') {
+        return true;
+    }
+}
 
 if (!function_exists('is_multisite')) {
     function is_multisite() {
@@ -126,16 +138,35 @@ if (!function_exists('get_users')) {
 if (!function_exists('get_user_meta')) {
     function get_user_meta($user_id, $key = '', $single = false) {
         $meta = $GLOBALS['toolrail_test_user_meta'][$user_id] ?? [];
-        if (!array_key_exists($key, $meta)) {
+        if (empty($meta[$key])) {
             return $single ? '' : [];
         }
-        return $single ? $meta[$key] : [$meta[$key]];
+        return $single ? $meta[$key][0] : $meta[$key];
     }
 }
 
 if (!function_exists('update_user_meta')) {
-    function update_user_meta($user_id, $key, $value) {
-        $GLOBALS['toolrail_test_user_meta'][$user_id][$key] = $value;
+    function update_user_meta($user_id, $key, $value, $prev_value = '') {
+        if (is_callable($GLOBALS['toolrail_test_before_update'])) {
+            call_user_func($GLOBALS['toolrail_test_before_update'], $user_id, $key);
+        }
+        $rows = $GLOBALS['toolrail_test_user_meta'][$user_id][$key] ?? [];
+        if ($rows === []) {
+            $GLOBALS['toolrail_test_user_meta'][$user_id][$key] = [$value];
+            return true;
+        }
+        $matched = 0;
+        foreach ($rows as $i => $row) {
+            if ($prev_value !== '' && $row !== $prev_value) {
+                continue;
+            }
+            $rows[$i] = $value;
+            $matched++;
+        }
+        if ($matched === 0) {
+            return false;
+        }
+        $GLOBALS['toolrail_test_user_meta'][$user_id][$key] = $rows;
         return true;
     }
 }
