@@ -34,6 +34,7 @@ const RAIL_PREF_KEYS = [
   'toolrail-group-seeded',
   'toolrail-hide-core-inserter',
   'toolrail-pin-meta',
+  'toolrail-set-meta',
 ];
 
 /**
@@ -5815,6 +5816,12 @@ test.describe('pin metadata (1.0.1)', () => {
     await page.locator(`${paragraphRow} .toolrail-settings-edit`).click();
     await page.locator('#toolrail-editform-title').fill('Draft name');
     await page.locator('#toolrail-editform-description').fill('Draft description');
+    // Put the caret mid-word, so a restore to the END would show.
+    await page.evaluate(() => {
+      const d = document.getElementById('toolrail-editform-description');
+      d.focus();
+      d.setSelectionRange(5, 5);
+    });
 
     // Pinning from outside the dialog rebuilds its content.
     await page.evaluate(() => window.toolrail.pinBlock('core/quote'));
@@ -5822,6 +5829,45 @@ test.describe('pin metadata (1.0.1)', () => {
     await expect(page.locator('#toolrail-editform')).toBeVisible();
     await expect(page.locator('#toolrail-editform-title')).toHaveValue('Draft name');
     await expect(page.locator('#toolrail-editform-description')).toHaveValue('Draft description');
+    // The text AND the author's place in it survive: focus is still in
+    // the description with the caret where it was, not in block search.
+    await expect(page.locator('#toolrail-editform-description')).toBeFocused();
+    expect(await page.evaluate(() => {
+      const d = document.getElementById('toolrail-editform-description');
+      return [d.selectionStart, d.selectionEnd];
+    })).toEqual([5, 5]);
+    await page.keyboard.type('X');
+    await expect(page.locator('#toolrail-editform-description')).toHaveValue('DraftX description');
+    await expect(page.locator('#toolrail-settings-search')).toHaveValue('');
+
+    // A refused icon stays refused across the same kind of rebuild.
+    await page.locator('#toolrail-editform-icon').fill('toolong');
+    await page.locator('.toolrail-settings-editsave').click();
+    await expect(page.locator('#toolrail-editform-icon')).toHaveAttribute('aria-invalid', 'true');
+    await page.evaluate(() => window.toolrail.pinBlock('core/list'));
+    await expect(page.locator('#toolrail-editform-icon')).toHaveAttribute('aria-invalid', 'true');
+    await expect(page.locator('#toolrail-editform-status')).toContainText('up to 3 characters');
+    await expect(page.locator('#toolrail-editform-icon')).toHaveValue('toolong');
+
+    await page.evaluate(() => {
+      window.toolrail.unpinBlock('core/quote');
+      window.toolrail.unpinBlock('core/list');
+    });
+  });
+
+  test('a family emoji counts as one character; four plain letters do not fit', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => window.toolrail.pinBlock('core/quote'));
+    const family = '\u{1F468}‍\u{1F469}‍\u{1F467}‍\u{1F466}';
+    expect(await page.evaluate((f) => {
+      window.toolrail.setPinMeta('core/quote', { icon: f });
+      return window.toolrail.getPinMeta('core/quote').icon === f;
+    }, family)).toBe(true);
+    // Control: the limit still bites on ordinary text.
+    expect(await page.evaluate(() => {
+      window.toolrail.setPinMeta('core/quote', { icon: 'abcd' });
+      return window.toolrail.getPinMeta('core/quote');
+    })).toBeNull();
     await page.evaluate(() => window.toolrail.unpinBlock('core/quote'));
   });
 
@@ -5841,14 +5887,31 @@ test.describe('pin metadata (1.0.1)', () => {
     expect(result.ok).toBe(true);
     expect(result.labels).toBe(1);
 
+    // Imported, not loaded: nothing on the pins changes yet. Pinning
+    // Quote by hand now gives the block's own name, not the file's.
+    expect(await getPref(page, 'toolrail-pin-meta')).toBeNull();
+    await page.evaluate(() => window.toolrail.pinBlock('core/quote'));
+    await expect(page.locator(quoteBtn)).toHaveAttribute('aria-label', 'Quote (pinned block)');
+    await page.evaluate(() => window.toolrail.unpinBlock('core/quote'));
+
+    // Loading the set applies its labels to its pins.
     await page.evaluate(() => window.toolrail.loadConfig('labeled'));
     await expect(page.locator(quoteBtn)).toHaveAttribute('aria-label', 'Testimonial (pinned block)');
     await expect(page.locator(`${quoteBtn} .toolrail-tool-glyph`)).toHaveText('“');
     // A label for a block the file did not list is ignored.
     expect(await page.evaluate(() => window.toolrail.getPinMeta('core/list'))).toBeNull();
+
+    // Saving a set snapshots its pins' labels, so a round trip keeps them
+    // and deleting the set drops its snapshot.
+    await page.evaluate(() => {
+      window.toolrail.setPinMeta('core/quote', { title: 'Renamed' });
+      window.toolrail.saveConfig('labeled');
+    });
+    expect(await getPref(page, 'toolrail-set-meta')).toContain('Renamed');
     await page.evaluate(() => {
       window.toolrail.deleteConfig('labeled');
       window.toolrail.unpinBlock('core/quote');
     });
+    expect(await getPref(page, 'toolrail-set-meta')).not.toContain('labeled');
   });
 });

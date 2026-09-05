@@ -117,6 +117,7 @@
   var WIDE_TOGGLE_KEY = 'toolrail-wide-toggle';
   var APPEARANCE_KEY = 'toolrail-appearance';
   var PIN_META_KEY = 'toolrail-pin-meta';
+  var SET_META_KEY = 'toolrail-set-meta';
   var PREFS_SCOPE = 'toolrail';
   var SHAPE_FILL = '#b9b9b9';
 
@@ -1303,10 +1304,18 @@
   // prototype-less map under PIN_META_KEY:
   //   { '<slot name>': { title?, description?, icon? } }
   // Every field is optional, and an empty field means "the block's own".
-  // The map is independent of saved sets on purpose: a set names WHICH
-  // slots are pinned, the metadata says how THIS author labels them, so
-  // loading another set never renames a tool. A set FILE carries the
-  // labels of its blocks along (exportConfig / importConfigPayload).
+  // The map holds entries for PINNED slots only: setPinMeta refuses an
+  // unpinned name and unpinBlock clears the entry, so nothing an author
+  // cannot see from the Pinned tools list is ever stored here.
+  //
+  // Saved sets get their own map, SET_META_KEY: { '<set>': { '<slot>':
+  // entry } } — a SNAPSHOT of the labels of the set's pins, taken by
+  // saveConfig, written by importConfigPayload, read by exportConfig,
+  // deleted with the set, and applied to the pin map by loadConfig. So a
+  // set carries its labels (a file moved to another site keeps them),
+  // while a set that is imported and never loaded labels nothing — the
+  // pin map is never written behind the author's back (PR review
+  // 2026-09-04, finding 1).
   //
   // Text only, rendered through textContent everywhere: a title or a
   // description is never markup. An icon is either a Dashicon slug
@@ -1324,12 +1333,34 @@
   }
 
   /**
+   * Characters as a reader counts them: grapheme clusters, so a flag, a
+   * skin-toned hand or a family emoji (seven code points joined by ZWJ)
+   * is ONE character, which is what the form's "up to 3 characters"
+   * promises. Intl.Segmenter is on every browser the editor supports;
+   * the code-point count is the fallback for anything older.
+   */
+  function countCharacters(value) {
+    if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
+      try {
+        var n = 0;
+        var it = new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value)[Symbol.iterator]();
+        while (!it.next().done) {
+          n++;
+        }
+        return n;
+      } catch (e) {
+        /* Fall through to the code-point count. */
+      }
+    }
+    return Array.from(value).length;
+  }
+
+  /**
    * Whether a string is an acceptable custom icon: a Dashicon slug, or
-   * text of at most PIN_META_LIMITS.icon code points (Array.from counts
-   * code points, so one emoji outside the BMP is one character, not two).
+   * text of at most PIN_META_LIMITS.icon characters (see countCharacters).
    */
   function isValidPinIcon(value) {
-    return isDashiconName(value) || Array.from(value).length <= PIN_META_LIMITS.icon;
+    return isDashiconName(value) || countCharacters(value) <= PIN_META_LIMITS.icon;
   }
 
   /**
@@ -1439,6 +1470,73 @@
     }
   }
 
+  /**
+   * The saved sets' label snapshots, {setName: {slot: entry}}, every
+   * entry through normalizePinMeta. Prototype-less like the configs map
+   * (a set named '__proto__' is an ordinary key).
+   */
+  function loadConfigMeta() {
+    var out = Object.create(null);
+    try {
+      var raw = readKey(SET_META_KEY);
+      var parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        Object.keys(parsed).forEach(function (setName) {
+          var entries = normalizeSetMeta(parsed[setName]);
+          if (entries) {
+            out[setName] = entries;
+          }
+        });
+      }
+    } catch (e) {
+      /* Unparseable or unavailable storage — an empty map is correct. */
+    }
+    return out;
+  }
+
+  /**
+   * One set's label map, cleaned: only string keys with a valid entry.
+   * `slots`, when given, restricts it to those slot names — a set file
+   * cannot label a pin it does not list.
+   *
+   * @param {*}        raw   Candidate {slot: entry} map.
+   * @param {string[]} slots Optional allow-list of slot names.
+   * @return {Object|null} Prototype-less map, or null when empty.
+   */
+  function normalizeSetMeta(raw, slots) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return null;
+    }
+    var out = Object.create(null);
+    Object.keys(raw).forEach(function (slot) {
+      if (slots && slots.indexOf(slot) === -1) {
+        return;
+      }
+      var entry = normalizePinMeta(raw[slot]);
+      if (entry) {
+        out[slot] = entry;
+      }
+    });
+    return Object.keys(out).length ? out : null;
+  }
+
+  function persistConfigMeta(map) {
+    writeKey(SET_META_KEY, JSON.stringify(map));
+  }
+
+  /** Store (or, with null, drop) one set's label snapshot. */
+  function setConfigMeta(setName, entries) {
+    var map = loadConfigMeta();
+    if (entries) {
+      map[setName] = entries;
+    } else if (map[setName]) {
+      delete map[setName];
+    } else {
+      return;
+    }
+    persistConfigMeta(map);
+  }
+
   // Named quick-slot configurations — a per-user account preference like
   // the slots themselves ({name: [blockNames]}).
   //
@@ -1473,8 +1571,11 @@
       return false;
     }
     var map = loadConfigs();
-    map[name.trim()] = loadSlots();
+    var slots = loadSlots();
+    map[name.trim()] = slots;
     persistConfigs(map);
+    // The set carries the labels its pins have right now (Pin metadata).
+    setConfigMeta(name.trim(), normalizeSetMeta(loadPinMeta(), slots));
     return true;
   }
 
@@ -1486,6 +1587,20 @@
     // saveSlots normalizes: a set stored by an older build, hand-edited,
     // or imported from a file can carry duplicates and non-strings.
     saveSlots(map[name]);
+    // The set's label snapshot lands on its pins — now that they ARE
+    // pinned. Slots the snapshot does not name keep whatever label the
+    // author gave them; a snapshot entry replaces one.
+    var labels = loadConfigMeta()[name];
+    if (labels) {
+      var pinMeta = loadPinMeta();
+      var pinned = loadSlots();
+      Object.keys(labels).forEach(function (slot) {
+        if (pinned.indexOf(slot) !== -1) {
+          pinMeta[slot] = labels[slot];
+        }
+      });
+      persistPinMeta(pinMeta);
+    }
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
     rerender();
     return true;
@@ -1498,6 +1613,7 @@
     }
     delete map[name];
     persistConfigs(map);
+    setConfigMeta(name, null);
     return true;
   }
 
@@ -1802,8 +1918,9 @@
         hint: blockMeta && blockMeta.description
           ? blockMeta.description
           : __('click in the canvas to insert; manage pinned tools in Toolbar settings', 'toolrail'),
-        // An author-written description is exposed to assistive tech
-        // too (buildToolButton); the boilerplate hint above never is.
+        // An author-written description is set as the button's
+        // aria-description (buildToolButton); the hint above only rides
+        // the tooltip.
         description: blockMeta && blockMeta.description ? blockMeta.description : '',
         icon: '',
         customIcon: blockMeta && blockMeta.icon ? blockMeta.icon : '',
@@ -2693,6 +2810,12 @@
   // rail while the form is open) re-renders the form instead of
   // discarding it — refreshSettings preserves the typed values too.
   var editingSlot = '';
+  // The open Edit form's refused-icon message ('' = none). Module state
+  // for the same reason: a rebuild re-renders the form, and a field that
+  // was just refused must come back still marked, with its message — not
+  // looking accepted with the same bad value in it (PR review 2026-09-04,
+  // finding 5). Cleared when the author edits the field or the form closes.
+  var editFormError = '';
 
   function insertableBlockTypes() {
     return wp.blocks.getBlockTypes().filter(function (t) {
@@ -2727,6 +2850,7 @@
     }
     settingsOpen = false;
     editingSlot = '';
+    editFormError = '';
     syncLayer();
     // Drop any message that never got rendered — closing the dialog
     // before an in-flight file read resolves used to strand it here, and
@@ -2789,6 +2913,7 @@
   function closeEditForm() {
     var name = editingSlot;
     editingSlot = '';
+    editFormError = '';
     refreshSettings(pinnedRowSelector(name) + '.toolrail-settings-edit');
   }
 
@@ -2876,6 +3001,19 @@
       }
     });
 
+    // Where the author IS: a rebuild caused by something else (a drag
+    // onto the rail while they type a description) must hand focus back
+    // to the same control, caret included — not to the search box, which
+    // is where the next keystrokes used to land (PR review 2026-09-04,
+    // finding 2). Only an explicit focus target from the dialog's own
+    // buttons outranks it.
+    var active = document.activeElement;
+    var activeSelector = active && node.contains(active) && active.id ? '#' + active.id : null;
+    var caret = null;
+    if (activeSelector && typeof active.selectionStart === 'number') {
+      caret = { start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection };
+    }
+
     refreshingSettings = true;
     node.textContent = '';
     buildSettingsContent(node, preserved['#toolrail-settings-search'] || '');
@@ -2888,6 +3026,9 @@
     });
 
     var candidates = Array.isArray(focusSelectors) ? focusSelectors.slice() : [focusSelectors];
+    if (activeSelector) {
+      candidates.push(activeSelector);
+    }
     candidates.push('#toolrail-settings-search');
     var target = null;
     candidates.some(function (sel) {
@@ -2896,6 +3037,13 @@
     });
     if (target) {
       target.focus();
+      if (caret && activeSelector && target === node.querySelector(activeSelector) && typeof target.setSelectionRange === 'function') {
+        try {
+          target.setSelectionRange(caret.start, caret.end, caret.direction || 'none');
+        } catch (e) {
+          /* Not a text-selection control after all — focus alone is right. */
+        }
+      }
     }
     refreshingSettings = false;
   }
@@ -3211,18 +3359,16 @@
       name: name,
       blocks: map[name]
     };
-    // The author's own name/description/icon for the set's pins ride
+    // The set's label snapshot (saveConfig / importConfigPayload) rides
     // along, keyed by slot name, so a set moved to another site keeps
-    // its labels. The key is absent when no pin in the set has any, so
-    // a plain set file is byte-for-byte what it was before 1.0.1.
-    var metaMap = loadPinMeta();
-    var meta = {};
-    map[name].forEach(function (slot) {
-      if (metaMap[slot]) {
-        meta[slot] = metaMap[slot];
-      }
-    });
-    if (Object.keys(meta).length) {
+    // its labels. The key is absent when the set has none, so a plain
+    // set file is byte-for-byte what it was before 1.0.1.
+    var labels = loadConfigMeta()[name];
+    if (labels) {
+      var meta = {};
+      Object.keys(labels).forEach(function (slot) {
+        meta[slot] = labels[slot];
+      });
       payload.meta = meta;
     }
     var slug = name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'set';
@@ -3275,28 +3421,11 @@
     persistConfigs(map);
 
     // Labels for the set's OWN blocks only (a file cannot label a pin it
-    // does not list), each through the same gate stored entries pass.
-    // They land in the account map at once — the map is per pin, not per
-    // set — so an existing label for the same pin is replaced, and the
-    // status line says how many the file set.
-    var labels = 0;
-    if (parsed.meta && typeof parsed.meta === 'object' && !Array.isArray(parsed.meta)) {
-      var metaMap = loadPinMeta();
-      blocks.forEach(function (slot) {
-        var entry = Object.prototype.hasOwnProperty.call(parsed.meta, slot)
-          ? normalizePinMeta(parsed.meta[slot])
-          : null;
-        if (entry) {
-          metaMap[slot] = entry;
-          labels++;
-        }
-      });
-      if (labels) {
-        persistPinMeta(metaMap);
-        window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-        rerender();
-      }
-    }
+    // does not list), each through the same gate stored entries pass —
+    // stored WITH THE SET, not on the pins: nothing the author sees
+    // changes until they load the set (loadConfig applies them then).
+    var setLabels = normalizeSetMeta(parsed.meta, blocks);
+    setConfigMeta(name, setLabels);
 
     return {
       ok: true,
@@ -3305,7 +3434,7 @@
       missing: missingBlockCount(blocks),
       dropped: dropped,
       duplicates: duplicates,
-      labels: labels
+      labels: setLabels ? Object.keys(setLabels).length : 0
     };
   }
 
@@ -3346,8 +3475,8 @@
       msg += ' ' + sprintf(
         /* translators: %d: count of pins whose custom name, description or icon came with the file. */
         _n(
-          'The file also set your own name, description or icon for %d pin.',
-          'The file also set your own name, description or icon for %d pins.',
+          'The set carries a custom name, description or icon for %d pin, applied when you load it.',
+          'The set carries a custom name, description or icon for %d pins, applied when you load it.',
           result.labels,
           'toolrail'
         ),
@@ -3439,6 +3568,7 @@
     );
     fieldset.appendChild(iconHelp);
     iconInput.addEventListener('input', function () {
+      editFormError = '';
       iconInput.removeAttribute('aria-invalid');
       status.textContent = '';
     });
@@ -3446,8 +3576,13 @@
     // The form's own outcome line, for a refused icon. Visible text under
     // the field it describes; speak() announces it. Saved outcomes go to
     // the section's pinnedStatus instead, because saving closes the form.
+    // Rendered from editFormError so a rebuild keeps the refusal visible.
     var status = settingsRow('p', 'toolrail-settings-status');
     status.id = 'toolrail-editform-status';
+    status.textContent = editFormError;
+    if (editFormError) {
+      iconInput.setAttribute('aria-invalid', 'true');
+    }
     fieldset.appendChild(status);
 
     var actions = settingsRow('div', 'toolrail-settings-helprow');
@@ -3479,11 +3614,12 @@
       e.preventDefault();
       var iconValue = iconInput.value.trim();
       if (iconValue !== '' && !isValidPinIcon(iconValue)) {
-        status.textContent = sprintf(
+        editFormError = sprintf(
           /* translators: %d: maximum number of characters. */
           __('The icon must be up to %d characters, or a Dashicon name such as dashicons-star-filled.', 'toolrail'),
           PIN_META_LIMITS.icon
         );
+        status.textContent = editFormError;
         iconInput.setAttribute('aria-invalid', 'true');
         speak(status.textContent);
         iconInput.focus();
@@ -3606,11 +3742,6 @@
       down.disabled = i === slots.length - 1;
       li.appendChild(down);
 
-      // Visible text is "Unpin", not "Remove", so that it is contained in
-      // the accessible name "Unpin <block>" (WCAG 2.5.3 Label in Name).
-      // With "Remove" on screen and "Unpin Paragraph" as the name, a
-      // speech-input user saying "click Remove" matched nothing. It also
-      // matches the wording of the block menu's own Unpin item.
       // Edit opens the inline form for this pin's own name, description
       // and icon (Pin metadata). A disclosure, not a dialog: aria-expanded
       // says whether the form below the row is open, and the button's
@@ -3631,6 +3762,11 @@
       }
       li.appendChild(edit);
 
+      // Visible text is "Unpin", not "Remove", so that it is contained in
+      // the accessible name "Unpin <block>" (WCAG 2.5.3 Label in Name).
+      // With "Remove" on screen and "Unpin Paragraph" as the name, a
+      // speech-input user saying "click Remove" matched nothing. It also
+      // matches the wording of the block menu's own Unpin item.
       var remove = settingsButton(__('Unpin', 'toolrail'), function () {
         unpinBlock(name);
         refreshSettings('#toolrail-settings-search');
@@ -7593,8 +7729,10 @@
     // help panel (private/roadmap.md), not in each button's name.
     btn.setAttribute('aria-label', tool.label);
     // A description the AUTHOR wrote for a pinned tool (Edit in Toolbar
-    // settings) is specific to that tool, unlike the repeated how-to
-    // hint, so it is the accessible description as well as the tooltip.
+    // settings) is set as the accessible description explicitly. The
+    // how-to hint rides only the title attribute below, which assistive
+    // tech MAY read as a fallback description; the author's text should
+    // not depend on that fallback.
     if (tool.description) {
       btn.setAttribute('aria-description', tool.description);
     }

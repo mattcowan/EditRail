@@ -150,7 +150,7 @@ A set file is JSON with this shape:
 
 `blocks` lists slot ids. A block type is its block name. A pattern is `pattern:<name>`, or `pattern:user:<post id>` for one of the author's own patterns. A set may name a block or a pattern that a site does not have. The import keeps it, and it appears when its plugin or theme is active.
 
-A set file can also carry the author's own name, description and icon for its blocks, in an optional `meta` object keyed by slot id: `"meta": { "core/quote": { "title": "Testimonial", "icon": "“" } }`. The import stores these for the listed blocks and ignores the rest.
+A set file can also carry the author's own name, description and icon for its blocks, in an optional `meta` object keyed by slot id: `"meta": { "core/quote": { "title": "Testimonial", "icon": "“" } }`. The import keeps these with the set and ignores entries for blocks the set does not list. Loading the set applies them to its pins. Saving a set records the labels its pins have at that time.
 
 ### Extensions that use this contract
 

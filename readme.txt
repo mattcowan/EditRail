@@ -17,7 +17,7 @@ Editor Tool Rail adds a toolbar to the post editor, docked to the left edge by d
 Everything the rail inserts is an ordinary core block. Deactivating this plugin changes nothing about how authored content renders or stays editable.
 
 * Pin any block type as a quick-insert tool: search for it in Toolbar settings, drag it from the inserter onto the rail, or use "Pin to toolbar" in the block's options menu. Pins, the toolbar position and saved sets are saved to your user account on the site — set the toolbar up once and it follows you across browsers and devices.
-* Give a pinned tool your own name, description or icon: use Edit beside the tool under "Pinned tools" in Toolbar settings. Empty fields use the block's own. This helps when you pin several patterns, or when a site sets up a tool for you. The icon is up to three characters, or a Dashicon name. Set files carry these along.
+* Give a pinned tool your own name, description or icon: use Edit beside the tool under "Pinned tools" in Toolbar settings. Empty fields use the block's own. This helps when you pin several patterns, or when a site sets up a tool for you. The icon is up to three characters, or a Dashicon name. Saved sets keep them, and set files carry them along.
 * Built-in tools: Select and Section overview. Group, Text, Heading and Image are ordinary pinned blocks, so you can reorder or remove them like anything else you pin. If you unpin the defaults, a "Restore default tools" button in Toolbar settings brings back the missing ones without touching your own pins.
 * While a tool is armed, the editor's own "+" buttons (between blocks, and beside an empty block) are hidden, so your click goes to the armed tool. The drop line you see while you drag a block is not affected. A checkbox under "Inserting" in Toolbar settings turns this off.
 * Drag a tool from the toolbar into the canvas to place its block where you drop it. Clicking a tool still arms it.
@@ -50,7 +50,7 @@ Its own preferences, and nothing else. The plugin stores no options and writes n
 == Changelog ==
 
 = 1.0.1 =
-* Edit a pinned tool's name, description and icon from Toolbar settings. Set files carry these along.
+* Edit a pinned tool's name, description and icon from Toolbar settings. Saved sets keep them, and set files carry them along.
 
 = 1.0.0 =
 * First public release.

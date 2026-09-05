@@ -5,9 +5,13 @@
  * This file is the SOURCE of the blueprint's `runPHP` step. `node
  * scripts/playground.js build` embeds it, verbatim, into
  * .wordpress-org/blueprints/blueprint.json, so it is a real PHP file
- * that a linter can read, not a JSON string. It also runs on its own:
- * `wp eval-file scripts/playground/demo-content.php` against any site
- * that has both plugins active (the wp-load guard below).
+ * that a linter can read, not a JSON string. The wp-load guard below
+ * also lets `wp eval-file` run it on a development site that has both
+ * plugins active — for a look at the demo post. It is written for a
+ * FRESH site: it edits user 1's editor preferences (merging, see
+ * toolrail_demo_seed_preferences) and refuses to run when post ID
+ * TOOLRAIL_DEMO_POST_ID belongs to another post. Do not run it on a
+ * site whose admin has a toolbar arrangement worth keeping.
  *
  * What it does, once, on a fresh Playground site:
  *   1. Seeds the admin's editor preferences so the editor opens clean:
@@ -20,7 +24,9 @@
  *      in Vollkorn (Twenty Twenty-Five ships the font files; the
  *      companion mu-plugin declares the @font-face), then a dozen core
  *      blocks that explain the toolbar and give the Section overview
- *      something to outline.
+ *      something to outline. If the post cannot be created, the script
+ *      FAILS (an uncaught exception), so the blueprint step fails
+ *      instead of landing on "Invalid post ID".
  *
  * Every OpenType claim in the copy was checked against the font's GSUB
  * table (scripts/playground/README.md): "Editor Tool Rail" contains no
@@ -287,6 +293,12 @@ function toolrail_demo_content() {
  * the array (Playground tabs are fresh, but the rule is the rule) loses
  * the comparison core's persistence layer makes.
  *
+ * MERGES, never replaces: on a fresh site the result is the four
+ * defaults plus the Typography Stylist pin; on a site with an existing
+ * arrangement the pin is appended, its label added, and every other
+ * key in the scope (dock, saved sets, colors, the sibling plugins'
+ * `toolrail-ext:*` keys) is left as it was.
+ *
  * @param int $user_id The admin.
  * @return void
  */
@@ -301,19 +313,31 @@ function toolrail_demo_seed_preferences($user_id) {
     $prefs['core']['welcomeGuide'] = false;
     $prefs['core/edit-post']['welcomeGuide'] = false;
 
-    $slots = array('core/group', 'core/paragraph', 'core/heading', 'core/image', 'typost/block');
-    $meta = array(
-        'typost/block' => array(
-            'title'       => 'Typography Stylist (added by this demo)',
-            'description' => 'This demo pinned the Typography Stylist block for you and gave it this name. Click it, then click in the canvas. Change or remove it under Pinned tools in Toolbar settings.',
-        ),
+    $scope = isset($prefs['toolrail']) && is_array($prefs['toolrail']) ? $prefs['toolrail'] : array();
+
+    $slots = isset($scope['toolrail-quick-slots']) ? json_decode($scope['toolrail-quick-slots'], true) : null;
+    if (!is_array($slots)) {
+        $slots = array('core/group', 'core/paragraph', 'core/heading', 'core/image');
+    }
+    if (!in_array('typost/block', $slots, true)) {
+        $slots[] = 'typost/block';
+    }
+
+    $meta = isset($scope['toolrail-pin-meta']) ? json_decode($scope['toolrail-pin-meta'], true) : null;
+    if (!is_array($meta)) {
+        $meta = array();
+    }
+    $meta['typost/block'] = array(
+        'title'       => 'Typography Stylist (added by this demo)',
+        'description' => 'This demo pinned the Typography Stylist block for you and gave it this name. Click it, then click in the canvas. Change or remove it under Pinned tools in Toolbar settings.',
     );
-    $prefs['toolrail'] = array(
-        'toolrail-quick-slots'    => wp_json_encode($slots, JSON_UNESCAPED_SLASHES),
-        'toolrail-slots-migrated' => '1',
-        'toolrail-group-seeded'   => '1',
-        'toolrail-pin-meta'       => wp_json_encode($meta, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
-    );
+
+    $scope['toolrail-quick-slots']    = wp_json_encode(array_values($slots), JSON_UNESCAPED_SLASHES);
+    $scope['toolrail-slots-migrated'] = '1';
+    $scope['toolrail-group-seeded']   = '1';
+    $scope['toolrail-pin-meta']       = wp_json_encode($meta, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+    $prefs['toolrail']  = $scope;
     $prefs['_modified'] = gmdate('Y-m-d\TH:i:s') . '.000Z';
     update_user_meta($user_id, $meta_key, $prefs);
 }
@@ -326,12 +350,27 @@ function toolrail_demo_seed_preferences($user_id) {
  * Typography Stylist block's font-feature-settings (not on kses's safe
  * CSS list) and invalidate the block in the editor.
  *
+ * Idempotent: the demo post already at that ID is left alone. Any other
+ * outcome that leaves landingPage pointing at nothing — the ID taken by
+ * another post, or wp_insert_post() refusing — THROWS, so the blueprint
+ * step fails with the reason instead of the preview opening on
+ * "Invalid post ID" (PR review 2026-09-04, finding 4).
+ *
  * @param int $user_id The admin.
- * @return int The post ID, or 0 when the ID was taken or the insert failed.
+ * @return int The post ID.
+ * @throws RuntimeException When the post cannot be created at TOOLRAIL_DEMO_POST_ID.
  */
 function toolrail_demo_create_post($user_id) {
-    if (get_post(TOOLRAIL_DEMO_POST_ID)) {
-        return 0;
+    $existing = get_post(TOOLRAIL_DEMO_POST_ID);
+    if ($existing) {
+        if ('editor-tool-rail-demo' === $existing->post_name) {
+            return (int) $existing->ID;
+        }
+        throw new RuntimeException(sprintf(
+            'Editor Tool Rail demo: post ID %d is already used by "%s"; the blueprint landing page needs it.',
+            TOOLRAIL_DEMO_POST_ID,
+            $existing->post_title
+        ));
     }
     wp_set_current_user($user_id);
     kses_remove_filters();
@@ -347,7 +386,17 @@ function toolrail_demo_create_post($user_id) {
         'ping_status'    => 'closed',
     )), true);
     kses_init_filters();
-    return is_wp_error($id) ? 0 : (int) $id;
+    if (is_wp_error($id)) {
+        throw new RuntimeException('Editor Tool Rail demo: the demo post could not be created: ' . $id->get_error_message());
+    }
+    if ((int) $id !== TOOLRAIL_DEMO_POST_ID) {
+        throw new RuntimeException(sprintf(
+            'Editor Tool Rail demo: the demo post landed at ID %d, not %d; the blueprint landing page would miss it.',
+            $id,
+            TOOLRAIL_DEMO_POST_ID
+        ));
+    }
+    return (int) $id;
 }
 
 toolrail_demo_seed_preferences(1);
