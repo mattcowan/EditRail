@@ -1741,8 +1741,12 @@ body.toolrail-hides-inserter .block-editor-block-list__block-side-inserter-popov
 }
 
 /* An invalid icon value: the field's border joins the text explanation
-   under it (never color alone — see the status line the form renders). */
-.toolrail-settings-editfields [aria-invalid="true"] {
+   under it (never color alone — see the status line the form renders).
+   Specificity (0,3,1) on purpose: it must outrank the scoped text-field
+   rule further down, which is (0,2,1) and once silently took this border
+   away (PR review 2026-09-05, finding 1). */
+.toolrail-settings .toolrail-settings-editfields input.toolrail-settings-search[aria-invalid="true"],
+.toolrail-settings .toolrail-settings-editfields textarea.toolrail-settings-search[aria-invalid="true"] {
     border-color: var(--toolrail-status);
 }
 

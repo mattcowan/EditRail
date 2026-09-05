@@ -6142,3 +6142,115 @@ test.describe('extension data on a pin (setPinData / getPinData / pin-meta-chang
     await page.evaluate(() => window.toolrail.unpinBlock('core/quote'));
   });
 });
+
+test.describe('review 2026-09-05 follow-ups (pin data, icon browser)', () => {
+  const paragraphRow = '.toolrail-settings-pinnedrow[data-block="core/paragraph"]';
+
+  test('a refused icon changes the field border, not only the text (finding 1)', async ({ page }) => {
+    await openNewPost(page);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator(`${paragraphRow} .toolrail-settings-edit`).click();
+    const before = await page.locator('#toolrail-editform-icon').evaluate((el) => getComputedStyle(el).borderTopColor);
+    await page.locator('#toolrail-editform-icon').fill('toolong');
+    await page.locator('.toolrail-settings-editsave').click();
+    await expect(page.locator('#toolrail-editform-icon')).toHaveAttribute('aria-invalid', 'true');
+    const after = await page.locator('#toolrail-editform-icon').evaluate((el) => getComputedStyle(el).borderTopColor);
+    expect(after).not.toBe(before);
+    // Same on the Description textarea, which shares the rule.
+    const textareaNormal = await page.locator('#toolrail-editform-description').evaluate((el) => getComputedStyle(el).borderTopColor);
+    expect(textareaNormal).toBe(before);
+  });
+
+  test('loading a set that omits a pin clears that pin’s entry and says so; a later re-pin starts clean (finding 2)', async ({ page }) => {
+    await openNewPost(page);
+    const result = await page.evaluate(() => {
+      const t = window.toolrail;
+      const seen = [];
+      window.addEventListener('toolrail:pin-meta-changed', (e) => seen.push(e.detail.slot));
+      t.saveConfig('defaults only');
+      t.pinBlock('core/quote');
+      t.setPinMeta('core/quote', { title: 'Testimonial' });
+      t.setPinData('core/quote', 'presets', { n: 1 });
+      seen.length = 0;
+      t.loadConfig('defaults only'); // no core/quote in it
+      const afterLoad = { pinned: t.isPinned('core/quote'), stored: window.wp.data.select('core/preferences').get('toolrail', 'toolrail-pin-meta') || '' };
+      t.pinBlock('core/quote');
+      const afterRepin = { meta: t.getPinMeta('core/quote'), data: t.getPinData('core/quote', 'presets') };
+      t.unpinBlock('core/quote');
+      t.deleteConfig('defaults only');
+      return { seen, afterLoad, afterRepin };
+    });
+    expect(result.afterLoad.pinned).toBe(false);
+    expect(result.afterLoad.stored).not.toContain('core/quote');
+    expect(result.seen).toContain('core/quote');
+    expect(result.afterRepin).toEqual({ meta: null, data: null });
+  });
+
+  test('loading a set merges extension data per namespace instead of replacing it (finding 6)', async ({ page }) => {
+    await openNewPost(page);
+    const result = await page.evaluate(() => {
+      const t = window.toolrail;
+      t.pinBlock('core/quote');
+      t.setPinData('core/quote', 'presets', { n: 1 });
+      t.saveConfig('with presets'); // snapshot: presets only
+      // An extension installed since then writes its own namespace, and
+      // the presets change locally.
+      t.setPinData('core/quote', 'guides', { snap: true });
+      t.setPinData('core/quote', 'presets', { n: 2 });
+      t.loadConfig('with presets');
+      const after = { presets: t.getPinData('core/quote', 'presets'), guides: t.getPinData('core/quote', 'guides') };
+      t.deleteConfig('with presets');
+      t.unpinBlock('core/quote');
+      return after;
+    });
+    // The snapshot's namespace wins; the namespace it never saw is kept.
+    expect(result).toEqual({ presets: { n: 1 }, guides: { snap: true } });
+  });
+
+  test('the icon search accepts the field’s own value, prefix and all (finding 3)', async ({ page }) => {
+    await openNewPost(page);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator(`${paragraphRow} .toolrail-settings-edit`).click();
+    await page.locator('.toolrail-settings-iconbrowse').click();
+    await page.locator('#toolrail-iconbrowser-search').fill('dashicons-star-filled');
+    await expect(page.locator('#toolrail-iconbrowser-count')).toHaveText('1 icon.');
+    await expect(page.locator('.toolrail-settings-iconresult')).toHaveText('star-filled');
+  });
+
+  test('Escape with the browser open closes the browser first, even from the Browse button (finding 8)', async ({ page }) => {
+    await openNewPost(page);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator(`${paragraphRow} .toolrail-settings-edit`).click();
+    const browse = page.locator('.toolrail-settings-iconbrowse');
+    await browse.click();
+    await expect(page.locator('#toolrail-iconbrowser')).toBeVisible();
+    // Move focus back onto the opener, outside the panel, then Escape.
+    await browse.focus();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#toolrail-iconbrowser')).toHaveCount(0);
+    await expect(page.locator('#toolrail-editform')).toBeVisible();
+    await expect(browse).toBeFocused();
+  });
+
+  test('the import count reports author-visible labels only; getPinData is gated like setPinData (findings 5, 2)', async ({ page }) => {
+    await openNewPost(page);
+    const result = await page.evaluate(() => {
+      const t = window.toolrail;
+      const imported = t.importConfig({
+        format: 'toolrail-set', version: 1, name: 'ext only', blocks: ['core/quote', 'core/list'],
+        meta: { 'core/quote': { ext: { presets: { n: 1 } } }, 'core/list': { title: 'Steps' } },
+      });
+      const unpinnedRead = t.getPinData('core/quote', 'presets');
+      t.loadConfig('ext only');
+      const loaded = { quote: t.getPinData('core/quote', 'presets'), list: t.getPinMeta('core/list') };
+      t.deleteConfig('ext only');
+      t.unpinBlock('core/quote');
+      t.unpinBlock('core/list');
+      return { labels: imported.labels, unpinnedRead, loaded };
+    });
+    expect(result.labels).toBe(1);
+    expect(result.unpinnedRead).toBeNull();
+    expect(result.loaded.quote).toEqual({ n: 1 });
+    expect(result.loaded.list.title).toBe('Steps');
+  });
+});

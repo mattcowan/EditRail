@@ -50,7 +50,8 @@ Its own preferences, and nothing else. The plugin stores no options and writes n
 == Changelog ==
 
 = 1.0.1 =
-* Edit a pinned tool's name, description and icon from Toolbar settings. Saved sets keep them, and set files carry them along.
+* Edit a pinned tool's name, description and icon from Toolbar settings. Pick the icon from a searchable list of Dashicons, or type up to three characters. Saved sets keep these, and set files carry them along.
+* Plugins can keep their own settings on a pinned tool. The settings go with the tool when it is unpinned, and travel in saved sets.
 
 = 1.0.0 =
 * First public release.

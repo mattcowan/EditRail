@@ -1338,7 +1338,9 @@
   // window.toolrail.setPinData(slot, namespace, data) / getPinData()
   // read and write ONE namespace; the author's three fields are never
   // touched by them, and setPinMeta never touches `ext`. Data is plain
-  // JSON (a JSON round trip is the normalizer), capped per namespace,
+  // JSON (a JSON round trip is the normalizer), capped per namespace at
+  // PIN_DATA_MAX_LENGTH characters of serialized JSON (String.length,
+  // so UTF-16 code units, not bytes),
   // and opaque to the rail: it changes nothing about how the pin
   // renders or inserts — a provider that registers tools under the pin
   // (parent: 'pin:<slot>') is what gives it meaning. Because it lives in
@@ -1570,8 +1572,11 @@ var DASHICON_NAMES = [
    * tag and Reset button key off it). A copy: editing it changes nothing.
    */
   function getPinMeta(blockName) {
+    if (!isPinned(blockName)) {
+      return null;
+    }
     var map = loadPinMeta();
-    var entry = typeof blockName === 'string' ? map[blockName] : undefined;
+    var entry = map[blockName];
     return hasAuthorFields(entry)
       ? { title: entry.title || '', description: entry.description || '', icon: entry.icon || '' }
       : null;
@@ -1616,19 +1621,20 @@ var DASHICON_NAMES = [
   }
 
   /**
-   * One extension's data on a pinned slot, as a fresh copy — or null when
-   * there is none. `namespace` is the extension's own short name.
+   * One extension's data on a PINNED slot, as a fresh copy — or null when
+   * there is none, or the slot is not pinned (the same gate setPinData
+   * has). `namespace` is the extension's own short name.
    *
    * @param {string} blockName Slot name.
-   * @param {string} namespace [a-z0-9-], up to 40 characters.
+   * @param {string} namespace A letter or digit, then [a-z0-9-], up to 40 in all.
    * @return {*} The stored JSON value, or null.
    */
   function getPinData(blockName, namespace) {
-    if (typeof namespace !== 'string' || !PIN_DATA_NAMESPACE.test(namespace)) {
+    if (typeof namespace !== 'string' || !PIN_DATA_NAMESPACE.test(namespace) || !isPinned(blockName)) {
       return null;
     }
     var map = loadPinMeta();
-    var entry = typeof blockName === 'string' ? map[blockName] : undefined;
+    var entry = map[blockName];
     if (!entry || !entry.ext || !Object.prototype.hasOwnProperty.call(entry.ext, namespace)) {
       return null;
     }
@@ -1637,17 +1643,23 @@ var DASHICON_NAMES = [
 
   /**
    * Store — or, with null, remove — one extension's data on a PINNED
-   * slot. Refused (false) for an unpinned slot, a namespace outside
-   * [a-z0-9-], or data that is not plain JSON within PIN_DATA_MAX_LENGTH
-   * once serialized. The author's fields and other namespaces are
-   * untouched. Fires 'toolrail:pin-meta-changed'; does NOT rebuild the
-   * rail, because the data means nothing to the rail itself — the
-   * extension redraws what it owns.
+   * slot. Refused (false) for an unpinned slot, a namespace that does
+   * not match PIN_DATA_NAMESPACE, or data that is not plain JSON within
+   * PIN_DATA_MAX_LENGTH characters once serialized. The author's fields
+   * and other namespaces are untouched. Fires 'toolrail:pin-meta-changed';
+   * does NOT rebuild the rail, because the data means nothing to the
+   * rail itself — the extension redraws what it owns.
+   *
+   * `true` means the value passed every check and was handed to
+   * writeKey, which stores it in the account's preferences or, when
+   * that store is missing or has failed this session, in the browser's
+   * local fallback (see the Storage block). It is not a receipt for the
+   * server write, which core debounces; nothing in this file has one.
    *
    * @param {string} blockName Slot name.
-   * @param {string} namespace [a-z0-9-], up to 40 characters.
+   * @param {string} namespace A letter or digit, then [a-z0-9-], up to 40 in all.
    * @param {*}      data      Plain JSON value, or null to remove.
-   * @return {boolean} Whether the change was stored.
+   * @return {boolean} Whether the change was accepted and written.
    */
   function setPinData(blockName, namespace, data) {
     if (!isPinned(blockName) || typeof namespace !== 'string' || !PIN_DATA_NAMESPACE.test(namespace)) {
@@ -1811,24 +1823,55 @@ var DASHICON_NAMES = [
     // saveSlots normalizes: a set stored by an older build, hand-edited,
     // or imported from a file can carry duplicates and non-strings.
     saveSlots(map[name]);
-    // The set's label snapshot lands on its pins — now that they ARE
-    // pinned. Slots the snapshot does not name keep whatever label the
-    // author gave them; a snapshot entry replaces one.
+    var pinned = loadSlots();
+    var pinMeta = loadPinMeta();
+    var changed = [];
+    // Loading a set UNPINS every slot it does not name, and an unpinned
+    // slot keeps no entry — the same rule unpinBlock applies — or a
+    // re-pin months later would come up with stale labels and stale
+    // extension data (PR review 2026-09-05, finding 2).
+    Object.keys(pinMeta).forEach(function (slot) {
+      if (pinned.indexOf(slot) === -1) {
+        delete pinMeta[slot];
+        changed.push(slot);
+      }
+    });
+    // The set's snapshot lands on its pins, now that they ARE pinned:
+    // the author's three fields come from the snapshot whole; extension
+    // data merges per namespace, so a namespace the snapshot never saw
+    // (an extension installed since the set was saved) is kept rather
+    // than dropped. Slots the snapshot does not name keep what they have.
     var labels = loadConfigMeta()[name];
     if (labels) {
-      var pinMeta = loadPinMeta();
-      var pinned = loadSlots();
-      var changed = [];
       Object.keys(labels).forEach(function (slot) {
-        if (pinned.indexOf(slot) !== -1) {
-          pinMeta[slot] = labels[slot];
+        if (pinned.indexOf(slot) === -1) {
+          return;
+        }
+        var next = {};
+        ['title', 'description', 'icon'].forEach(function (field) {
+          if (labels[slot][field]) {
+            next[field] = labels[slot][field];
+          }
+        });
+        var current = pinMeta[slot];
+        if ((current && current.ext) || labels[slot].ext) {
+          next.ext = {};
+          Object.keys((current && current.ext) || {}).forEach(function (ns) {
+            next.ext[ns] = current.ext[ns];
+          });
+          Object.keys(labels[slot].ext || {}).forEach(function (ns) {
+            next.ext[ns] = labels[slot].ext[ns];
+          });
+        }
+        pinMeta[slot] = next;
+        if (changed.indexOf(slot) === -1) {
           changed.push(slot);
         }
       });
-      if (changed.length) {
-        persistPinMeta(pinMeta);
-        changed.forEach(announcePinMetaChange);
-      }
+    }
+    if (changed.length) {
+      persistPinMeta(pinMeta);
+      changed.forEach(announcePinMetaChange);
     }
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
     rerender();
@@ -3050,7 +3093,7 @@ var DASHICON_NAMES = [
   // browser with the same query instead of dropping it.
   var iconBrowserOpen = false;
   var iconBrowserQuery = '';
-  // How many chips the browser draws at once. All 350 icons as buttons
+  // How many chips the browser draws at once. All 349 icons as buttons
   // are cheap to build but not to read; past this the count line asks
   // the author to narrow the search.
   var ICON_BROWSER_LIMIT = 72;
@@ -3141,13 +3184,15 @@ var DASHICON_NAMES = [
     // expected to: focus inside the Icon field's browser closes the
     // browser (focus back on Browse icons); inside the Edit form, closes
     // the form (focus back on Edit); anywhere else, closes the dialog.
-    var browser = iconBrowserOpen ? document.getElementById('toolrail-iconbrowser') : null;
-    if (browser && browser.contains(e.target)) {
-      closeIconBrowser();
-      return;
-    }
     var form = editingSlot ? document.getElementById('toolrail-editform') : null;
     if (form && form.contains(e.target)) {
+      // The browser is the innermost open disclosure of the form, so it
+      // goes first wherever in the form focus is — on the Browse icons
+      // button that opened it included (PR review 2026-09-05, finding 8).
+      if (iconBrowserOpen) {
+        closeIconBrowser();
+        return;
+      }
       closeEditForm();
       return;
     }
@@ -3686,8 +3731,14 @@ var DASHICON_NAMES = [
     // does not list), each through the same gate stored entries pass —
     // stored WITH THE SET, not on the pins: nothing the author sees
     // changes until they load the set (loadConfig applies them then).
+    // The count reported is of pins with an author-visible label; an
+    // entry that carries only extension data is not "a name, description
+    // or icon" (PR review 2026-09-05, finding 5).
     var setLabels = normalizeSetMeta(parsed.meta, blocks);
     setConfigMeta(name, setLabels);
+    var labeled = setLabels
+      ? Object.keys(setLabels).filter(function (slot) { return hasAuthorFields(setLabels[slot]); }).length
+      : 0;
 
     return {
       ok: true,
@@ -3696,7 +3747,7 @@ var DASHICON_NAMES = [
       missing: missingBlockCount(blocks),
       dropped: dropped,
       duplicates: duplicates,
-      labels: setLabels ? Object.keys(setLabels).length : 0
+      labels: labeled
     };
   }
 
@@ -3999,8 +4050,10 @@ var DASHICON_NAMES = [
     search.value = iconBrowserQuery;
     panel.appendChild(search);
 
-    // Result count as text, referenced by the search field, so a
-    // screen-reader user hears how many icons a query left.
+    // Result count as text. aria-describedby on the search field reads it
+    // on focus; the typing case is announced through speak() from the
+    // input handler below — a described-by relation is not a live
+    // region (WCAG 4.1.3; PR review 2026-09-05, finding 4).
     var count = settingsRow('p', 'toolrail-settings-empty');
     count.id = 'toolrail-iconbrowser-count';
     panel.appendChild(count);
@@ -4008,7 +4061,10 @@ var DASHICON_NAMES = [
     panel.appendChild(grid);
 
     function matches(query) {
-      var q = query.trim().toLowerCase().replace(/\s+/g, ' ');
+      // The field shows 'dashicons-star-filled'; pasting that back into
+      // the search must find star-filled, so the prefix is not part of
+      // the query (PR review 2026-09-05, finding 3).
+      var q = query.trim().toLowerCase().replace(/^dashicons-/, '').replace(/\s+/g, ' ');
       if (q === '') {
         return DASHICON_NAMES;
       }
@@ -4069,9 +4125,18 @@ var DASHICON_NAMES = [
       });
     }
 
+    // Announce the count once typing pauses, not per keystroke: speak()
+    // replaces the live region's text, so a burst would still read only
+    // the last count, but a screen reader mid-sentence would be cut off
+    // on every key.
+    var announceTimer = null;
     search.addEventListener('input', function () {
       iconBrowserQuery = search.value;
       render();
+      window.clearTimeout(announceTimer);
+      announceTimer = window.setTimeout(function () {
+        speak(count.textContent);
+      }, 400);
     });
     render();
     return panel;
