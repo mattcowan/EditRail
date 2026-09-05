@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.0.0
+Stable tag: 1.0.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -17,6 +17,7 @@ Editor Tool Rail adds a toolbar to the post editor, docked to the left edge by d
 Everything the rail inserts is an ordinary core block. Deactivating this plugin changes nothing about how authored content renders or stays editable.
 
 * Pin any block type as a quick-insert tool: search for it in Toolbar settings, drag it from the inserter onto the rail, or use "Pin to toolbar" in the block's options menu. Pins, the toolbar position and saved sets are saved to your user account on the site — set the toolbar up once and it follows you across browsers and devices.
+* Give a pinned tool your own name, description or icon: use Edit beside the tool under "Pinned tools" in Toolbar settings. Empty fields use the block's own. This helps when you pin several patterns, or when a site sets up a tool for you. The icon is up to three characters, or a Dashicon name. Set files carry these along.
 * Built-in tools: Select and Section overview. Group, Text, Heading and Image are ordinary pinned blocks, so you can reorder or remove them like anything else you pin. If you unpin the defaults, a "Restore default tools" button in Toolbar settings brings back the missing ones without touching your own pins.
 * While a tool is armed, the editor's own "+" buttons (between blocks, and beside an empty block) are hidden, so your click goes to the armed tool. The drop line you see while you drag a block is not affected. A checkbox under "Inserting" in Toolbar settings turns this off.
 * Drag a tool from the toolbar into the canvas to place its block where you drop it. Clicking a tool still arms it.
@@ -47,6 +48,9 @@ Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a 
 Its own preferences, and nothing else. The plugin stores no options and writes nothing into posts. Deleting it from the Plugins screen removes the pinned tools, toolbar position, saved sets and colors from every user account on the site. Deactivating it keeps them, so the toolbar comes back as you left it when you activate the plugin again. In rare cases a browser holds an older local copy of the pins, the toolbar position or the saved sets (from a session where the browser's storage failed, or from a version before 0.1.6). If you install the plugin again in that browser, that copy comes back one time. Unpin what you do not want; it does not return again.
 
 == Changelog ==
+
+= 1.0.1 =
+* Edit a pinned tool's name, description and icon from Toolbar settings. Set files carry these along.
 
 = 1.0.0 =
 * First public release.

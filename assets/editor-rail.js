@@ -37,6 +37,12 @@
  * Descriptors, not React nodes — the rail owns the roving tabindex.
  * Registry changes fire the 'toolrail:tools-updated' window event.
  *
+ * PIN METADATA (1.0.1): window.toolrail.getPinMeta(slot) /
+ * setPinMeta(slot, {title, description, icon}) read and write the
+ * author's own name, description and icon for a pinned slot — the same
+ * values the Edit form in Toolbar settings edits. See the "Pin metadata"
+ * block for the rules (text only; icon = Dashicon slug or ≤3 characters).
+ *
  * AVAILABILITY (roadmap R9): a tool declares what it needs, never where
  * it is hidden. `supports.canvas: true` means "activation is completed
  * by a click in the canvas" — the default for insertBlock/createBlock
@@ -110,6 +116,7 @@
   var WIDE_KEY = 'toolrail-wide';
   var WIDE_TOGGLE_KEY = 'toolrail-wide-toggle';
   var APPEARANCE_KEY = 'toolrail-appearance';
+  var PIN_META_KEY = 'toolrail-pin-meta';
   var PREFS_SCOPE = 'toolrail';
   var SHAPE_FILL = '#b9b9b9';
 
@@ -529,6 +536,24 @@
       }
     }
     span.innerHTML = ICONS.pin;
+  }
+
+  /**
+   * Paint an author-chosen pin icon (see the Pin metadata block): a
+   * Dashicon slug takes the same path a string block icon does; anything
+   * else is a short text glyph, set through textContent so it can never
+   * be markup. The span is aria-hidden by its caller either way — the
+   * button's name is the label.
+   */
+  function renderCustomIcon(span, value) {
+    if (isDashiconName(value)) {
+      span.className += ' dashicons ' + value;
+      return;
+    }
+    var glyph = document.createElement('span');
+    glyph.className = 'toolrail-tool-glyph';
+    glyph.textContent = value;
+    span.appendChild(glyph);
   }
 
   // -------------------------------------------------------------------
@@ -1246,6 +1271,10 @@
     }
     slots.splice(idx, 1);
     saveSlots(slots);
+    // The author's name/description/icon for this pin go with it: a
+    // later re-pin is a fresh tool, and the map only ever describes
+    // tools the author has.
+    clearPinMeta(blockName);
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
     rerender();
     return true;
@@ -1265,6 +1294,149 @@
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
     rerender();
     return true;
+  }
+
+  // -------------------------------------------------------------------
+  // Pin metadata (1.0.1). A pinned slot can carry the author's OWN name,
+  // description and icon — to tell two pinned patterns apart, or to mark
+  // a tool a site set up for the author. Per user, per pin name, in one
+  // prototype-less map under PIN_META_KEY:
+  //   { '<slot name>': { title?, description?, icon? } }
+  // Every field is optional, and an empty field means "the block's own".
+  // The map is independent of saved sets on purpose: a set names WHICH
+  // slots are pinned, the metadata says how THIS author labels them, so
+  // loading another set never renames a tool. A set FILE carries the
+  // labels of its blocks along (exportConfig / importConfigPayload).
+  //
+  // Text only, rendered through textContent everywhere: a title or a
+  // description is never markup. An icon is either a Dashicon slug
+  // ('dashicons-star-filled' — the admin stylesheet is loaded on every
+  // editor screen, and string block icons already render that way in
+  // renderBlockIcon) or up to three characters of text ('Aa', '¶', one
+  // emoji).
+  // -------------------------------------------------------------------
+
+  var PIN_META_LIMITS = { title: 80, description: 240, icon: 3 };
+  var DASHICON_PATTERN = /^dashicons-[a-z0-9-]+$/;
+
+  function isDashiconName(value) {
+    return DASHICON_PATTERN.test(value);
+  }
+
+  /**
+   * Whether a string is an acceptable custom icon: a Dashicon slug, or
+   * text of at most PIN_META_LIMITS.icon code points (Array.from counts
+   * code points, so one emoji outside the BMP is one character, not two).
+   */
+  function isValidPinIcon(value) {
+    return isDashiconName(value) || Array.from(value).length <= PIN_META_LIMITS.icon;
+  }
+
+  /**
+   * The single gate for one metadata entry: trimmed strings only, each
+   * within its limit, nothing else survives. Returns null when nothing is
+   * left, and the caller then DELETES the entry rather than storing an
+   * empty object. Whitespace runs collapse so a title can never carry a
+   * line break into an aria-label.
+   *
+   * @param {*} raw A candidate entry, from the UI, storage or a set file.
+   * @return {Object|null} {title?, description?, icon?} or null.
+   */
+  function normalizePinMeta(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return null;
+    }
+    var out = {};
+    ['title', 'description'].forEach(function (field) {
+      if (typeof raw[field] === 'string') {
+        var text = raw[field].replace(/\s+/g, ' ').trim();
+        if (text !== '') {
+          out[field] = Array.from(text).slice(0, PIN_META_LIMITS[field]).join('');
+        }
+      }
+    });
+    if (typeof raw.icon === 'string') {
+      var icon = raw.icon.trim();
+      if (icon !== '' && isValidPinIcon(icon)) {
+        out.icon = icon;
+      }
+    }
+    return Object.keys(out).length ? out : null;
+  }
+
+  function loadPinMeta() {
+    var out = Object.create(null);
+    try {
+      var raw = readKey(PIN_META_KEY);
+      var parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        Object.keys(parsed).forEach(function (name) {
+          var entry = normalizePinMeta(parsed[name]);
+          if (entry) {
+            out[name] = entry;
+          }
+        });
+      }
+    } catch (e) {
+      /* Unparseable or unavailable storage — an empty map is correct. */
+    }
+    return out;
+  }
+
+  function persistPinMeta(map) {
+    writeKey(PIN_META_KEY, JSON.stringify(map));
+  }
+
+  /**
+   * The author's metadata for one pinned slot, as a complete
+   * {title, description, icon} with '' for an unset field — or null when
+   * the slot has none. A copy: editing it changes nothing.
+   */
+  function getPinMeta(blockName) {
+    var map = loadPinMeta();
+    var entry = typeof blockName === 'string' ? map[blockName] : undefined;
+    return entry
+      ? { title: entry.title || '', description: entry.description || '', icon: entry.icon || '' }
+      : null;
+  }
+
+  /**
+   * Set — or clear, with null or all-empty fields — the metadata of a
+   * PINNED slot. The whole entry is replaced, so pass every field to
+   * keep. An unpinned name is refused, so the map only ever holds
+   * entries for tools the author has (unpinBlock clears its entry). An
+   * icon that is not valid (see isValidPinIcon) is dropped; the settings
+   * form checks it first and says why.
+   *
+   * @param {string}      blockName Slot name ('core/quote', 'pattern:…').
+   * @param {Object|null} meta      {title?, description?, icon?}.
+   * @return {boolean} Whether the slot is pinned and the change was made.
+   */
+  function setPinMeta(blockName, meta) {
+    if (!isPinned(blockName)) {
+      return false;
+    }
+    var map = loadPinMeta();
+    var entry = normalizePinMeta(meta);
+    if (entry) {
+      map[blockName] = entry;
+    } else if (map[blockName]) {
+      delete map[blockName];
+    } else {
+      return true;
+    }
+    persistPinMeta(map);
+    window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
+    rerender();
+    return true;
+  }
+
+  function clearPinMeta(blockName) {
+    var map = loadPinMeta();
+    if (map[blockName]) {
+      delete map[blockName];
+      persistPinMeta(map);
+    }
   }
 
   // Named quick-slot configurations — a per-user account preference like
@@ -1574,22 +1746,33 @@
    * restores them.
    */
   function slotTools() {
+    // One parse of the metadata map per rebuild, not one per slot: the
+    // rail rebuilds on every slot change and on every settings click.
+    var metaMap = loadPinMeta();
     return loadSlots().map(function (name) {
       if (isPatternSlot(name)) {
         var pattern = findPattern(name);
         if (!pattern) {
           return null;
         }
+        // The author's own name/description/icon for this pin, when set
+        // (see the Pin metadata block), stand in for the pattern's.
+        var patternMeta = metaMap[name] || null;
+        var patternTitle = patternMeta && patternMeta.title ? patternMeta.title : pattern.title;
         return {
           id: 'pin:' + name,
           label: sprintf(
             /* translators: %s: pattern title. */
             __('%s (pinned pattern)', 'toolrail'),
-            pattern.title
+            patternTitle
           ),
-          shortLabel: pattern.title,
-          hint: __('click in the canvas to insert this pattern; manage pinned tools in Toolbar settings', 'toolrail'),
+          shortLabel: patternTitle,
+          hint: patternMeta && patternMeta.description
+            ? patternMeta.description
+            : __('click in the canvas to insert this pattern; manage pinned tools in Toolbar settings', 'toolrail'),
+          description: patternMeta && patternMeta.description ? patternMeta.description : '',
           icon: ICONS.pattern,
+          customIcon: patternMeta && patternMeta.icon ? patternMeta.icon : '',
           blockIcon: null,
           insertBlock: '',
           createBlock: function () { return patternBlocks(pattern); },
@@ -1602,20 +1785,28 @@
       if (!type) {
         return null;
       }
+      var blockMeta = metaMap[name] || null;
+      var blockTitle = blockMeta && blockMeta.title ? blockMeta.title : (type.title || name);
       return {
         id: 'pin:' + name,
         label: sprintf(
           /* translators: %s: block title. */
           __('%s (pinned block)', 'toolrail'),
-          type.title || name
+          blockTitle
         ),
         // Wide mode's visible row text: the block title alone — the
         // "(pinned block)" suffix reads noisy repeated down a rail, and
         // the accessible name (which keeps it) still contains the
         // visible text, so WCAG 2.5.3 Label in Name holds.
-        shortLabel: type.title || name,
-        hint: __('click in the canvas to insert; manage pinned tools in Toolbar settings', 'toolrail'),
+        shortLabel: blockTitle,
+        hint: blockMeta && blockMeta.description
+          ? blockMeta.description
+          : __('click in the canvas to insert; manage pinned tools in Toolbar settings', 'toolrail'),
+        // An author-written description is exposed to assistive tech
+        // too (buildToolButton); the boilerplate hint above never is.
+        description: blockMeta && blockMeta.description ? blockMeta.description : '',
         icon: '',
+        customIcon: blockMeta && blockMeta.icon ? blockMeta.icon : '',
         blockIcon: type.icon,
         insertBlock: name,
         pinnedBlock: name,
@@ -2497,6 +2688,11 @@
   // -------------------------------------------------------------------
 
   var settingsOpen = false;
+  // The pinned slot whose inline Edit form is open ('' = none). Module
+  // state, not DOM state, so a rebuild from elsewhere (a drag onto the
+  // rail while the form is open) re-renders the form instead of
+  // discarding it — refreshSettings preserves the typed values too.
+  var editingSlot = '';
 
   function insertableBlockTypes() {
     return wp.blocks.getBlockTypes().filter(function (t) {
@@ -2530,6 +2726,7 @@
       node.remove();
     }
     settingsOpen = false;
+    editingSlot = '';
     syncLayer();
     // Drop any message that never got rendered — closing the dialog
     // before an in-flight file read resolves used to strand it here, and
@@ -2576,7 +2773,27 @@
     }
     e.preventDefault();
     e.stopPropagation();
+    // Escape with focus inside an open Edit form closes the FORM and
+    // hands focus back to the Edit button that opened it; the dialog
+    // stays. A second Escape closes the dialog as before — one level per
+    // press, the way nested disclosures are expected to unwind.
+    var form = editingSlot ? document.getElementById('toolrail-editform') : null;
+    if (form && form.contains(e.target)) {
+      closeEditForm();
+      return;
+    }
     closeSettings(true);
+  }
+
+  /** Close the inline Edit form and return focus to the row's Edit button. */
+  function closeEditForm() {
+    var name = editingSlot;
+    editingSlot = '';
+    refreshSettings(pinnedRowSelector(name) + '.toolrail-settings-edit');
+  }
+
+  function pinnedRowSelector(name) {
+    return '.toolrail-settings-pinnedrow[data-block="' + attrValue(name) + '"] ';
   }
 
   function onSettingsFocusin(e) {
@@ -2640,11 +2857,19 @@
       return;
     }
 
-    // Both fields carry unsaved typing: an update triggered elsewhere
-    // (pinning from the search results, a drag onto the rail) must not
-    // discard a half-typed set name.
+    // Every text field carries unsaved typing: an update triggered
+    // elsewhere (pinning from the search results, a drag onto the rail)
+    // must not discard a half-typed set name — or a half-edited pin
+    // name, description or icon in the open Edit form.
     var preserved = {};
-    ['#toolrail-settings-search', '#toolrail-settings-setname'].forEach(function (sel) {
+    var textFields = [
+      '#toolrail-settings-search',
+      '#toolrail-settings-setname',
+      '#toolrail-editform-title',
+      '#toolrail-editform-description',
+      '#toolrail-editform-icon'
+    ];
+    textFields.forEach(function (sel) {
       var field = node.querySelector(sel);
       if (field) {
         preserved[sel] = field.value;
@@ -2655,10 +2880,12 @@
     node.textContent = '';
     buildSettingsContent(node, preserved['#toolrail-settings-search'] || '');
 
-    var setName = node.querySelector('#toolrail-settings-setname');
-    if (setName && preserved['#toolrail-settings-setname']) {
-      setName.value = preserved['#toolrail-settings-setname'];
-    }
+    textFields.slice(1).forEach(function (sel) {
+      var field = node.querySelector(sel);
+      if (field && preserved[sel] !== undefined) {
+        field.value = preserved[sel];
+      }
+    });
 
     var candidates = Array.isArray(focusSelectors) ? focusSelectors.slice() : [focusSelectors];
     candidates.push('#toolrail-settings-search');
@@ -2984,6 +3211,20 @@
       name: name,
       blocks: map[name]
     };
+    // The author's own name/description/icon for the set's pins ride
+    // along, keyed by slot name, so a set moved to another site keeps
+    // its labels. The key is absent when no pin in the set has any, so
+    // a plain set file is byte-for-byte what it was before 1.0.1.
+    var metaMap = loadPinMeta();
+    var meta = {};
+    map[name].forEach(function (slot) {
+      if (metaMap[slot]) {
+        meta[slot] = metaMap[slot];
+      }
+    });
+    if (Object.keys(meta).length) {
+      payload.meta = meta;
+    }
     var slug = name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'set';
     var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     var url = URL.createObjectURL(blob);
@@ -3033,13 +3274,38 @@
     map[name] = blocks;
     persistConfigs(map);
 
+    // Labels for the set's OWN blocks only (a file cannot label a pin it
+    // does not list), each through the same gate stored entries pass.
+    // They land in the account map at once — the map is per pin, not per
+    // set — so an existing label for the same pin is replaced, and the
+    // status line says how many the file set.
+    var labels = 0;
+    if (parsed.meta && typeof parsed.meta === 'object' && !Array.isArray(parsed.meta)) {
+      var metaMap = loadPinMeta();
+      blocks.forEach(function (slot) {
+        var entry = Object.prototype.hasOwnProperty.call(parsed.meta, slot)
+          ? normalizePinMeta(parsed.meta[slot])
+          : null;
+        if (entry) {
+          metaMap[slot] = entry;
+          labels++;
+        }
+      });
+      if (labels) {
+        persistPinMeta(metaMap);
+        window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
+        rerender();
+      }
+    }
+
     return {
       ok: true,
       name: name,
       total: blocks.length,
       missing: missingBlockCount(blocks),
       dropped: dropped,
-      duplicates: duplicates
+      duplicates: duplicates,
+      labels: labels
     };
   }
 
@@ -3076,7 +3342,175 @@
         result.dropped
       );
     }
+    if (result.labels > 0) {
+      msg += ' ' + sprintf(
+        /* translators: %d: count of pins whose custom name, description or icon came with the file. */
+        _n(
+          'The file also set your own name, description or icon for %d pin.',
+          'The file also set your own name, description or icon for %d pins.',
+          result.labels,
+          'toolrail'
+        ),
+        result.labels
+      );
+    }
     return msg;
+  }
+
+  /**
+   * The inline Edit form for one pinned tool: the author's own name,
+   * description and icon (see the Pin metadata block). Rendered INSIDE
+   * the row's list item, under the buttons, as a fieldset — not as a
+   * nested dialog. The settings dialog is a popover with no focus trap,
+   * and a modal inside it would need one of its own; a fieldset in the
+   * same dialog keeps one Escape/Tab model. Escape with focus in the
+   * form closes the form and returns focus to Edit (onSettingsKeydown);
+   * Save, Reset and Cancel do the same through closeEditForm.
+   *
+   * Every field has a visible label. Empty fields mean "the block's
+   * own", and the help line says so, so the author never has to guess
+   * what clearing a field does. An invalid icon is refused with the rule
+   * spelled out in text, aria-invalid on the field, and focus kept
+   * there (WCAG 3.3.1, 3.3.3).
+   *
+   * @param {string}      name      The slot name.
+   * @param {string}      baseTitle The block's or pattern's own title.
+   * @param {Object|null} meta      The stored entry, if any.
+   * @return {HTMLElement}
+   */
+  function buildPinEditForm(name, baseTitle, meta) {
+    var current = meta || { title: '', description: '', icon: '' };
+    var form = document.createElement('form');
+    form.className = 'toolrail-settings-editform';
+    form.id = 'toolrail-editform';
+    form.noValidate = true;
+
+    var fieldset = document.createElement('fieldset');
+    fieldset.className = 'toolrail-settings-editfields';
+    var legend = document.createElement('legend');
+    legend.className = 'toolrail-settings-label';
+    legend.textContent = sprintf(
+      /* translators: %s: the block's or pattern's own title. */
+      __('Edit the %s tool', 'toolrail'),
+      baseTitle
+    );
+    fieldset.appendChild(legend);
+
+    var help = settingsRow('p', 'toolrail-settings-empty');
+    help.id = 'toolrail-editform-help';
+    help.textContent = __('Give this tool your own name, description and icon. Empty fields use the block\'s own. Only your toolbar changes.', 'toolrail');
+    fieldset.appendChild(help);
+
+    function field(id, labelText, control, describedBy) {
+      var lbl = settingsRow('label', 'toolrail-settings-label');
+      lbl.setAttribute('for', id);
+      lbl.textContent = labelText;
+      fieldset.appendChild(lbl);
+      control.id = id;
+      control.className = 'toolrail-settings-search';
+      control.setAttribute('autocomplete', 'off');
+      if (describedBy) {
+        control.setAttribute('aria-describedby', describedBy);
+      }
+      fieldset.appendChild(control);
+      return control;
+    }
+
+    var titleInput = field('toolrail-editform-title', __('Name', 'toolrail'), document.createElement('input'), 'toolrail-editform-help');
+    titleInput.type = 'text';
+    titleInput.maxLength = PIN_META_LIMITS.title;
+    titleInput.value = current.title;
+
+    var descInput = field('toolrail-editform-description', __('Description', 'toolrail'), document.createElement('textarea'), 'toolrail-editform-help');
+    descInput.rows = 2;
+    descInput.maxLength = PIN_META_LIMITS.description;
+    descInput.className += ' toolrail-settings-textarea';
+    descInput.value = current.description;
+
+    var iconInput = field('toolrail-editform-icon', __('Icon', 'toolrail'), document.createElement('input'), 'toolrail-editform-iconhelp toolrail-editform-status');
+    iconInput.type = 'text';
+    iconInput.value = current.icon;
+    var iconHelp = settingsRow('p', 'toolrail-settings-empty');
+    iconHelp.id = 'toolrail-editform-iconhelp';
+    iconHelp.textContent = sprintf(
+      /* translators: %d: maximum number of characters. */
+      __('Up to %d characters, such as Aa or a symbol, or a Dashicon name such as dashicons-star-filled.', 'toolrail'),
+      PIN_META_LIMITS.icon
+    );
+    fieldset.appendChild(iconHelp);
+    iconInput.addEventListener('input', function () {
+      iconInput.removeAttribute('aria-invalid');
+      status.textContent = '';
+    });
+
+    // The form's own outcome line, for a refused icon. Visible text under
+    // the field it describes; speak() announces it. Saved outcomes go to
+    // the section's pinnedStatus instead, because saving closes the form.
+    var status = settingsRow('p', 'toolrail-settings-status');
+    status.id = 'toolrail-editform-status';
+    fieldset.appendChild(status);
+
+    var actions = settingsRow('div', 'toolrail-settings-helprow');
+    var save = document.createElement('button');
+    save.type = 'submit';
+    save.className = 'toolrail-settings-btn toolrail-settings-editsave';
+    save.textContent = __('Save', 'toolrail');
+    actions.appendChild(save);
+    if (meta) {
+      actions.appendChild(settingsButton(__('Reset', 'toolrail'), function () {
+        setPinMeta(name, null);
+        pinnedStatus = sprintf(
+          /* translators: %s: the block's or pattern's own title. */
+          __('%s uses its own name, description and icon again.', 'toolrail'),
+          baseTitle
+        );
+        closeEditForm();
+      }, 'toolrail-settings-editreset'));
+    }
+    actions.appendChild(settingsButton(__('Cancel', 'toolrail'), function () {
+      closeEditForm();
+    }, 'toolrail-settings-editcancel'));
+    fieldset.appendChild(actions);
+    form.appendChild(fieldset);
+
+    // Enter in a text field submits, like any form; the textarea keeps
+    // Enter for a line break (collapsed to a space on save).
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var iconValue = iconInput.value.trim();
+      if (iconValue !== '' && !isValidPinIcon(iconValue)) {
+        status.textContent = sprintf(
+          /* translators: %d: maximum number of characters. */
+          __('The icon must be up to %d characters, or a Dashicon name such as dashicons-star-filled.', 'toolrail'),
+          PIN_META_LIMITS.icon
+        );
+        iconInput.setAttribute('aria-invalid', 'true');
+        speak(status.textContent);
+        iconInput.focus();
+        return;
+      }
+      var entry = normalizePinMeta({ title: titleInput.value, description: descInput.value, icon: iconValue });
+      if (!setPinMeta(name, entry)) {
+        // Unpinned from elsewhere while the form was open: nothing to
+        // store, and the rebuild below drops the row and the form.
+        closeEditForm();
+        return;
+      }
+      pinnedStatus = entry
+        ? sprintf(
+          /* translators: %s: the tool's name as it now reads. */
+          __('Saved your changes to %s.', 'toolrail'),
+          entry.title || baseTitle
+        )
+        : sprintf(
+          /* translators: %s: the block's or pattern's own title. */
+          __('%s uses its own name, description and icon again.', 'toolrail'),
+          baseTitle
+        );
+      closeEditForm();
+    });
+
+    return form;
   }
 
   function buildSettingsContent(node, searchValue) {
@@ -3123,13 +3557,16 @@
       var type = isPattern ? null : wp.blocks.getBlockType(name);
       var li = settingsRow('li', 'toolrail-settings-pinnedrow');
       var label = settingsRow('span', 'toolrail-settings-pinnedname');
-      if (isPattern) {
-        label.textContent = pattern
-          ? pattern.title
-          : name.slice(PATTERN_SLOT_PREFIX.length) + ' ' + __('(inactive)', 'toolrail');
-      } else {
-        label.textContent = type ? type.title : name + ' ' + __('(inactive)', 'toolrail');
-      }
+      // The block's or pattern's own title, and the author's name for the
+      // pin when one is set (Pin metadata). The row shows the author's;
+      // the Edit form's legend names the block, so the two never blur.
+      var meta = getPinMeta(name);
+      var available = isPattern ? !!pattern : !!type;
+      var baseTitle = isPattern
+        ? (pattern ? pattern.title : name.slice(PATTERN_SLOT_PREFIX.length))
+        : (type ? type.title : name);
+      var shownTitle = meta && meta.title ? meta.title : baseTitle;
+      label.textContent = available ? shownTitle : shownTitle + ' ' + __('(inactive)', 'toolrail');
       li.appendChild(label);
       if (isPattern) {
         // The kind, visible, OUTSIDE the name span — so the arrow and
@@ -3138,11 +3575,18 @@
         kindTag.textContent = __('Pattern', 'toolrail');
         li.appendChild(kindTag);
       }
+      if (meta) {
+        // Text, never a mark alone: this pin carries the author's own
+        // name, description or icon.
+        var customTag = settingsRow('span', 'toolrail-settings-tag');
+        customTag.textContent = __('Custom', 'toolrail');
+        li.appendChild(customTag);
+      }
 
       // Reaching either end disables the arrow that was just clicked, so
       // each handler offers the opposite arrow on the same row as its
       // second choice — focus stays on the row the author is moving.
-      var row = '.toolrail-settings-pinnedrow[data-block="' + name + '"] ';
+      var row = pinnedRowSelector(name);
 
       var up = settingsButton('↑', function () {
         if (moveSlot(name, -1)) {
@@ -3167,12 +3611,36 @@
       // With "Remove" on screen and "Unpin Paragraph" as the name, a
       // speech-input user saying "click Remove" matched nothing. It also
       // matches the wording of the block menu's own Unpin item.
+      // Edit opens the inline form for this pin's own name, description
+      // and icon (Pin metadata). A disclosure, not a dialog: aria-expanded
+      // says whether the form below the row is open, and the button's
+      // accessible name "Edit <title>" contains its visible "Edit".
+      var isEditing = editingSlot === name;
+      var edit = settingsButton(__('Edit', 'toolrail'), function () {
+        if (editingSlot === name) {
+          closeEditForm();
+          return;
+        }
+        editingSlot = name;
+        refreshSettings('#toolrail-editform-title');
+      }, 'toolrail-settings-edit');
+      edit.setAttribute('aria-label', sprintf(__('Edit %s', 'toolrail'), label.textContent));
+      edit.setAttribute('aria-expanded', isEditing ? 'true' : 'false');
+      if (isEditing) {
+        edit.setAttribute('aria-controls', 'toolrail-editform');
+      }
+      li.appendChild(edit);
+
       var remove = settingsButton(__('Unpin', 'toolrail'), function () {
         unpinBlock(name);
         refreshSettings('#toolrail-settings-search');
       }, 'toolrail-settings-remove');
       remove.setAttribute('aria-label', sprintf(__('Unpin %s', 'toolrail'), label.textContent));
       li.appendChild(remove);
+
+      if (isEditing) {
+        li.appendChild(buildPinEditForm(name, baseTitle, meta));
+      }
 
       li.dataset.block = name;
       pinnedList.appendChild(li);
@@ -3694,7 +4162,8 @@
         body: [
           __('Pin any block type or pattern as a quick-insert tool: search under "Add a block or pattern" in Toolbar settings, drag a block or pattern from the inserter onto the toolbar, or choose "Pin to toolbar" in a block\'s options menu.', 'toolrail'),
           __('Drop a block from the canvas onto the toolbar to pin its type, or to save it as a pattern with its settings and contents and pin that. "Save as pattern and pin to toolbar…" in the block\'s options menu does the same.', 'toolrail'),
-          __('Remove a pin with Unpin in Toolbar settings, or "Unpin from toolbar" in the block\'s options menu.', 'toolrail')
+          __('Remove a pin with Unpin in Toolbar settings, or "Unpin from toolbar" in the block\'s options menu.', 'toolrail'),
+          __('Edit, beside a pinned tool in Toolbar settings, gives that tool your own name, description or icon — useful when you pin several patterns. Empty fields use the block\'s own.', 'toolrail')
         ]
       },
       {
@@ -7123,6 +7592,12 @@
     // feedback 2026-08-26). Instructional copy belongs in the planned
     // help panel (private/roadmap.md), not in each button's name.
     btn.setAttribute('aria-label', tool.label);
+    // A description the AUTHOR wrote for a pinned tool (Edit in Toolbar
+    // settings) is specific to that tool, unlike the repeated how-to
+    // hint, so it is the accessible description as well as the tooltip.
+    if (tool.description) {
+      btn.setAttribute('aria-description', tool.description);
+    }
     btn.setAttribute('aria-pressed', 'false');
     btn.title = toolTitle(tool);
     btn.tabIndex = -1;
@@ -7138,7 +7613,9 @@
 
     var icon = document.createElement('span');
     icon.className = 'toolrail-tool-icon';
-    if (tool.pinnedBlock) {
+    if (tool.customIcon) {
+      renderCustomIcon(icon, tool.customIcon);
+    } else if (tool.pinnedBlock) {
       renderBlockIcon(icon, tool.blockIcon);
     } else if (tool.icon) {
       icon.innerHTML = tool.icon;
@@ -8460,6 +8937,8 @@
     openAddToToolbar: openAddToToolbar,
     isPinned: isPinned,
     moveSlot: moveSlot,
+    getPinMeta: getPinMeta,
+    setPinMeta: setPinMeta,
     saveConfig: saveConfig,
     loadConfig: loadConfig,
     deleteConfig: deleteConfig,

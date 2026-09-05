@@ -2,6 +2,11 @@
 
 Every version of Editor Tool Rail. The 0.1.x versions were development builds that were never listed on WordPress.org. The WordPress.org listing (`readme.txt`) shows only listed versions.
 
+## 1.0.1
+
+* Edit a pinned tool's name, description and icon: an Edit button beside each tool under "Pinned tools" in Toolbar settings opens an inline form. Empty fields use the block's own. The icon is up to three characters or a Dashicon name. The description is the tool's tooltip and its accessible description. Stored per user under one preference key (`toolrail-pin-meta`), removed with the tool when it is unpinned, and carried in set files as an optional `meta` object. `window.toolrail.getPinMeta()` and `setPinMeta()` read and write it.
+* A WordPress Playground blueprint for the WordPress.org Live Preview (`.wordpress-org/blueprints/blueprint.json`), generated from `scripts/playground/`. It installs Typography Stylist too, pins that block with a custom name and description, creates a demo post, and opens the editor. `npm run playground` runs it against this checkout. Not part of the plugin zip.
+
 ## 1.0.0
 
 First public release. Everything in the 0.1.x entries below is in it.

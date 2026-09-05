@@ -33,6 +33,7 @@ const RAIL_PREF_KEYS = [
   'toolrail-appearance',
   'toolrail-group-seeded',
   'toolrail-hide-core-inserter',
+  'toolrail-pin-meta',
 ];
 
 /**
@@ -5651,5 +5652,203 @@ test.describe('review 2026-09-03 follow-ups (patterns and drag)', () => {
     const result = page.locator('.toolrail-settings-result[data-block="core/quote"]');
     await expect(result).toHaveAttribute('aria-label', 'Pin the Quote block to the toolbar');
     await expect(result.locator('.toolrail-settings-tag')).toHaveText('Block');
+  });
+});
+
+test.describe('pin metadata (1.0.1)', () => {
+  const quoteBtn = '#toolrail-rail [data-tool="pin:core/quote"]';
+  const paragraphRow = '.toolrail-settings-pinnedrow[data-block="core/paragraph"]';
+
+  test('setPinMeta renames a pinned tool, describes it, gives it a glyph, and persists to the account', async ({ page }) => {
+    await openNewPost(page);
+
+    // Only a PINNED slot can carry metadata.
+    expect(await page.evaluate(() => window.toolrail.setPinMeta('core/quote', { title: 'Nope' }))).toBe(false);
+    expect(await page.evaluate(() => window.toolrail.getPinMeta('core/quote'))).toBeNull();
+
+    await page.evaluate(() => {
+      window.toolrail.pinBlock('core/quote');
+      window.toolrail.setPinMeta('core/quote', {
+        title: '  Pull  quote ',
+        description: 'Added by the site. Click, then click the canvas.',
+        icon: 'Aa',
+      });
+    });
+    const btn = page.locator(quoteBtn);
+    // The name keeps the kind suffix; the description is exposed to AT
+    // and rides the tooltip; the glyph is text inside the icon box.
+    await expect(btn).toHaveAttribute('aria-label', 'Pull quote (pinned block)');
+    await expect(btn).toHaveAttribute('aria-description', 'Added by the site. Click, then click the canvas.');
+    await expect(btn).toHaveAttribute('title', 'Pull quote (pinned block) — Added by the site. Click, then click the canvas.');
+    await expect(btn.locator('.toolrail-tool-glyph')).toHaveText('Aa');
+    expect(await page.evaluate(() => window.toolrail.getPinMeta('core/quote'))).toEqual({
+      title: 'Pull quote',
+      description: 'Added by the site. Click, then click the canvas.',
+      icon: 'Aa',
+    });
+
+    // Account store, not this page: a plain reload still reads it.
+    expect(await getPref(page, 'toolrail-pin-meta')).toContain('Pull quote');
+    await page.reload();
+    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+    await expect(page.locator(quoteBtn)).toHaveAttribute('aria-label', 'Pull quote (pinned block)');
+
+    // Unpinning takes the entry with it.
+    await page.evaluate(() => window.toolrail.unpinBlock('core/quote'));
+    expect(await page.evaluate(() => window.toolrail.getPinMeta('core/quote'))).toBeNull();
+    expect(await getPref(page, 'toolrail-pin-meta')).not.toContain('core/quote');
+  });
+
+  test('a Dashicon slug renders as a Dashicon; an over-long icon is dropped; a title is never markup', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      window.toolrail.pinBlock('core/quote');
+      window.toolrail.setPinMeta('core/quote', { icon: 'dashicons-star-filled' });
+    });
+    const icon = page.locator(`${quoteBtn} .toolrail-tool-icon`);
+    await expect(icon).toHaveClass(/dashicons-star-filled/);
+
+    await page.evaluate(() => window.toolrail.setPinMeta('core/quote', { title: '<b>Bold</b>', icon: 'toolong' }));
+    expect(await page.evaluate(() => window.toolrail.getPinMeta('core/quote'))).toEqual({
+      title: '<b>Bold</b>',
+      description: '',
+      icon: '',
+    });
+    // Rendered as text: the label span carries the literal angle brackets
+    // and the button gained no child <b>.
+    expect(await page.locator(`${quoteBtn} b`).count()).toBe(0);
+    await expect(page.locator(`${quoteBtn} .toolrail-tool-label`)).toHaveText('<b>Bold</b>');
+    // No custom icon any more: the block's own icon is back.
+    expect(await page.locator(`${quoteBtn} .toolrail-tool-glyph`).count()).toBe(0);
+
+    // Clearing every field removes the entry.
+    await page.evaluate(() => window.toolrail.setPinMeta('core/quote', { title: '', description: '', icon: '' }));
+    expect(await page.evaluate(() => window.toolrail.getPinMeta('core/quote'))).toBeNull();
+    await page.evaluate(() => window.toolrail.unpinBlock('core/quote'));
+  });
+
+  test('Edit in Toolbar settings: a disclosure form, Enter saves, focus returns to Edit, the row shows Custom', async ({ page }) => {
+    await openNewPost(page);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await expect(page.locator('.toolrail-settings')).toBeVisible();
+
+    const edit = page.locator(`${paragraphRow} .toolrail-settings-edit`);
+    await expect(edit).toHaveAttribute('aria-label', 'Edit Paragraph');
+    await expect(edit).toHaveAttribute('aria-expanded', 'false');
+    await edit.click();
+
+    // Open: focus lands in the first field, the button says so, and the
+    // legend names the block so the author knows which tool this is.
+    await expect(page.locator('#toolrail-editform')).toBeVisible();
+    await expect(page.locator('#toolrail-editform-title')).toBeFocused();
+    await expect(edit).toHaveAttribute('aria-expanded', 'true');
+    await expect(edit).toHaveAttribute('aria-controls', 'toolrail-editform');
+    await expect(page.locator('#toolrail-editform legend')).toHaveText('Edit the Paragraph tool');
+    // Every field has a visible, associated label.
+    for (const id of ['toolrail-editform-title', 'toolrail-editform-description', 'toolrail-editform-icon']) {
+      await expect(page.locator(`label[for="${id}"]`)).toBeVisible();
+    }
+
+    await page.keyboard.type('Body text');
+    await page.keyboard.press('Enter');
+
+    // Saved: the form is gone, focus is back on THIS row's Edit, the row
+    // reads the new name with a Custom tag, the outcome is visible text,
+    // and the rail button carries the name.
+    await expect(page.locator('#toolrail-editform')).toHaveCount(0);
+    await expect(page.locator(`${paragraphRow} .toolrail-settings-edit`)).toBeFocused();
+    await expect(page.locator(`${paragraphRow} .toolrail-settings-pinnedname`)).toHaveText('Body text');
+    await expect(page.locator(`${paragraphRow} .toolrail-settings-tag`)).toHaveText('Custom');
+    await expect(page.locator(`${paragraphRow} .toolrail-settings-edit`)).toHaveAttribute('aria-label', 'Edit Body text');
+    await expect(page.locator(`${paragraphRow} .toolrail-settings-remove`)).toHaveAttribute('aria-label', 'Unpin Body text');
+    await expect(page.locator('#toolrail-settings-pinned-status')).toHaveText('Saved your changes to Body text.');
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveAttribute('aria-label', 'Body text (pinned block)');
+
+    // Reset puts the block's own name back and clears the entry.
+    await page.locator(`${paragraphRow} .toolrail-settings-edit`).click();
+    await page.locator('.toolrail-settings-editreset').click();
+    await expect(page.locator(`${paragraphRow} .toolrail-settings-pinnedname`)).toHaveText('Paragraph');
+    expect(await page.evaluate(() => window.toolrail.getPinMeta('core/paragraph'))).toBeNull();
+    await expect(page.locator(`${paragraphRow} .toolrail-settings-edit`)).toBeFocused();
+  });
+
+  test('Escape inside the form closes the form only; a second Escape closes the dialog', async ({ page }) => {
+    await openNewPost(page);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator(`${paragraphRow} .toolrail-settings-edit`).click();
+    await expect(page.locator('#toolrail-editform-title')).toBeFocused();
+
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#toolrail-editform')).toHaveCount(0);
+    await expect(page.locator('.toolrail-settings')).toBeVisible();
+    await expect(page.locator(`${paragraphRow} .toolrail-settings-edit`)).toBeFocused();
+
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.toolrail-settings')).toHaveCount(0);
+    await expect(page.locator('#toolrail-rail [data-tool="settings"]')).toBeFocused();
+  });
+
+  test('an invalid icon is refused in text, marks the field, keeps focus there, and does not save', async ({ page }) => {
+    await openNewPost(page);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator(`${paragraphRow} .toolrail-settings-edit`).click();
+    await page.locator('#toolrail-editform-icon').fill('toolong');
+    await page.locator('.toolrail-settings-editsave').click();
+
+    await expect(page.locator('#toolrail-editform')).toBeVisible();
+    await expect(page.locator('#toolrail-editform-icon')).toHaveAttribute('aria-invalid', 'true');
+    await expect(page.locator('#toolrail-editform-icon')).toBeFocused();
+    await expect(page.locator('#toolrail-editform-status')).toContainText('up to 3 characters');
+    expect(await page.evaluate(() => window.toolrail.getPinMeta('core/paragraph'))).toBeNull();
+
+    // Typing clears the error state; a valid value then saves.
+    await page.locator('#toolrail-editform-icon').fill('¶');
+    await expect(page.locator('#toolrail-editform-icon')).not.toHaveAttribute('aria-invalid', 'true');
+    await page.locator('.toolrail-settings-editsave').click();
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"] .toolrail-tool-glyph')).toHaveText('¶');
+    await page.evaluate(() => window.toolrail.setPinMeta('core/paragraph', null));
+  });
+
+  test('a half-edited form survives a rebuild from elsewhere', async ({ page }) => {
+    await openNewPost(page);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator(`${paragraphRow} .toolrail-settings-edit`).click();
+    await page.locator('#toolrail-editform-title').fill('Draft name');
+    await page.locator('#toolrail-editform-description').fill('Draft description');
+
+    // Pinning from outside the dialog rebuilds its content.
+    await page.evaluate(() => window.toolrail.pinBlock('core/quote'));
+
+    await expect(page.locator('#toolrail-editform')).toBeVisible();
+    await expect(page.locator('#toolrail-editform-title')).toHaveValue('Draft name');
+    await expect(page.locator('#toolrail-editform-description')).toHaveValue('Draft description');
+    await page.evaluate(() => window.toolrail.unpinBlock('core/quote'));
+  });
+
+  test('set files carry the labels of their blocks; import reports how many it set', async ({ page }) => {
+    await openNewPost(page);
+    const result = await page.evaluate(() => window.toolrail.importConfig({
+      format: 'toolrail-set',
+      version: 1,
+      name: 'labeled',
+      blocks: ['core/quote', 'core/paragraph'],
+      meta: {
+        'core/quote': { title: 'Testimonial', icon: '“' },
+        'core/list': { title: 'Not in the set' },
+        'core/paragraph': { title: '', description: '' },
+      },
+    }));
+    expect(result.ok).toBe(true);
+    expect(result.labels).toBe(1);
+
+    await page.evaluate(() => window.toolrail.loadConfig('labeled'));
+    await expect(page.locator(quoteBtn)).toHaveAttribute('aria-label', 'Testimonial (pinned block)');
+    await expect(page.locator(`${quoteBtn} .toolrail-tool-glyph`)).toHaveText('“');
+    // A label for a block the file did not list is ignored.
+    expect(await page.evaluate(() => window.toolrail.getPinMeta('core/list'))).toBeNull();
+    await page.evaluate(() => {
+      window.toolrail.deleteConfig('labeled');
+      window.toolrail.unpinBlock('core/quote');
+    });
   });
 });

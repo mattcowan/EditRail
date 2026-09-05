@@ -1696,3 +1696,75 @@ body.toolrail-hides-inserter .block-editor-block-popover__inbetween .block-edito
 body.toolrail-hides-inserter .block-editor-block-list__block-side-inserter-popover {
     display: none !important;
 }
+
+/* --- Pin metadata (1.0.1): the inline Edit form under a pinned row, and
+   the author-chosen text glyph on a tool button. --- */
+
+/* The form is a full-width child of the flex row, so the row wraps. */
+.toolrail-settings-pinnedrow {
+    flex-wrap: wrap;
+}
+
+.toolrail-settings-editform {
+    flex: 1 1 100%;
+    margin: 6px 0 4px;
+}
+
+.toolrail-settings-editfields {
+    margin: 0;
+    padding: 8px 10px 10px;
+    border: 1px solid var(--toolrail-field-border);
+    border-radius: 3px;
+    min-width: 0;
+}
+
+.toolrail-settings-editfields legend {
+    padding: 0 4px;
+}
+
+.toolrail-settings-editfields .toolrail-settings-label {
+    margin-top: 8px;
+}
+
+.toolrail-settings-editfields .toolrail-settings-empty {
+    margin: 4px 0 0;
+}
+
+.toolrail-settings-textarea {
+    resize: vertical;
+    font: inherit;
+    line-height: 1.4;
+}
+
+.toolrail-settings-editfields .toolrail-settings-helprow {
+    margin-top: 10px;
+}
+
+/* An invalid icon value: the field's border joins the text explanation
+   under it (never color alone — see the status line the form renders). */
+.toolrail-settings-editfields [aria-invalid="true"] {
+    border-color: var(--toolrail-status);
+}
+
+/* Up to three characters in the 24px icon box, sized so "Aa" and a single
+   emoji both fit; currentColor so every appearance preset applies. */
+.toolrail-tool-glyph {
+    display: inline-block;
+    max-width: 28px;
+    overflow: hidden;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 24px;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+    text-overflow: clip;
+    color: currentColor;
+}
+
+/* Inside a wrapping row the name must never force the buttons onto a
+   second line: basis 0 (it is overflow:hidden, so its automatic minimum
+   is 0 too) lets it take what is left instead of asking for its text. */
+.toolrail-settings-pinnedrow > .toolrail-settings-pinnedname {
+    flex-basis: 0;
+    min-width: 0;
+}

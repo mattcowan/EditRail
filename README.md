@@ -44,6 +44,10 @@ The PHP files use no feature above 7.4. The JavaScript is ES5 with no build step
 
 `.distignore` decides what goes into the zip. A new production file ships without a change to any script. A new development-only file must be added to `.distignore`.
 
+## Try it in Playground
+
+`npm run playground` starts a throwaway WordPress in the [Playground CLI](https://wordpress.github.io/wordpress-playground/developers/local-development/wp-playground-cli) with this checkout as the plugin, Typography Stylist installed and pinned to the toolbar, and a demo post open in the editor. `scripts/playground/README.md` describes the blueprint and how it is built. The same blueprint is the plugin's Live Preview on WordPress.org once the plugin is listed.
+
 ## Use
 
 Open a post in the editor. The toolbar is on the left edge. `readme.txt` describes every control. In short:
@@ -51,6 +55,7 @@ Open a post in the editor. The toolbar is on the left edge. `readme.txt` describ
 - Click a tool, then click the canvas. The block lands at the click point.
 - Drag a tool into the canvas to put its block where you drop it.
 - Pin any block type or pattern as a tool. Open Toolbar settings from the gear, or drag a block from the inserter or the canvas onto the toolbar.
+- Give a pinned tool your own name, description or icon with Edit beside it in Toolbar settings.
 - Save pinned arrangements as named sets. Export a set as a JSON file and import it on a different site.
 - Move the toolbar to any edge, or float it. Change its colors. Show tool names beside the icons.
 - Open the Section overview to zoom out, outline every top-level block, and reorder blocks by drag or by keyboard.
@@ -130,6 +135,7 @@ Keys must start with `toolrail-ext:`. Values are strings. The store is the same 
 `window.toolrail` also has calls for these. The header comment of `assets/editor-rail.js` documents each one.
 
 - Pins: `pinBlock`, `unpinBlock`, `isPinned`, `moveSlot`.
+- A pin's own name, description and icon: `getPinMeta(slot)`, `setPinMeta(slot, { title, description, icon })`. Text only. The icon is a Dashicon name or up to three characters.
 - Saved sets: `saveConfig`, `loadConfig`, `deleteConfig`, `getConfigs`, `exportConfig`, `importConfig`.
 - The active tool: `getActiveTool`, `setActiveTool`.
 - The dock: `setDock`.
@@ -143,6 +149,8 @@ A set file is JSON with this shape:
 ```
 
 `blocks` lists slot ids. A block type is its block name. A pattern is `pattern:<name>`, or `pattern:user:<post id>` for one of the author's own patterns. A set may name a block or a pattern that a site does not have. The import keeps it, and it appears when its plugin or theme is active.
+
+A set file can also carry the author's own name, description and icon for its blocks, in an optional `meta` object keyed by slot id: `"meta": { "core/quote": { "title": "Testimonial", "icon": "“" } }`. The import stores these for the listed blocks and ignores the rest.
 
 ### Extensions that use this contract
 
