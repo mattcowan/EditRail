@@ -41,6 +41,7 @@
 # (readme.txt DOES ship: it is the WordPress.org listing.)
 /CLAUDE.md
 /README.md
+/CHANGELOG.md
 
 # --- misc ---
 *.zip

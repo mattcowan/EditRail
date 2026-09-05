@@ -1847,6 +1847,55 @@ test.describe('regressions', () => {
     const lifted = JSON.parse(await getPref(page, 'toolrail-position'));
     expect(lifted).toEqual({ dock: 'right', x: 40, y: 60 });
   });
+
+  test('a browser\'s stale local copy is dropped once the account holds the key', async ({ page }) => {
+    await openNewPost(page);
+    // Give the account a position of its own (boot only READS one; a
+    // fresh account has no key, and the lift would rightly win). Then a
+    // leftover local copy that disagrees must neither win nor linger: it
+    // is the thing that resurrected old pins after a delete + reinstall,
+    // and WHICH pins depended on which browser booted first.
+    await page.evaluate(() => window.toolrail.setDock('left'));
+    await page.waitForTimeout(3000);
+    await page.evaluate(() => {
+      window.localStorage.setItem('toolrail-position', JSON.stringify({ dock: 'right', x: 40, y: 60 }));
+      window.localStorage.setItem('toolrail-quick-slots', JSON.stringify(['core/cover']));
+    });
+    await page.reload();
+    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+
+    await expect(page.locator('#toolrail-region')).toHaveAttribute('data-dock', 'left');
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/cover"]')).toHaveCount(0);
+    const local = await page.evaluate(() => ({
+      position: window.localStorage.getItem('toolrail-position'),
+      slots: window.localStorage.getItem('toolrail-quick-slots'),
+    }));
+    expect(local).toEqual({ position: null, slots: null });
+  });
+
+  test('a lifted local copy survives one boot, then is consumed', async ({ page }) => {
+    await openNewPost(page);
+    // Account empty of the key, local copy present: the lift keeps the
+    // source, because boot's own write can still be wiped by a late
+    // attach and the next boot has to lift from it again. The boot after
+    // that reads the key back from the account and drops the copy.
+    await page.evaluate(() => {
+      window.localStorage.setItem('toolrail-position', JSON.stringify({ dock: 'right', x: 40, y: 60 }));
+      window.wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-position', undefined);
+    });
+    await page.reload();
+    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('#toolrail-region')).toHaveAttribute('data-dock', 'right');
+    expect(await page.evaluate(() => window.localStorage.getItem('toolrail-position'))).not.toBeNull();
+
+    // Let the account write land, then boot against the hydrated account.
+    await page.waitForTimeout(3000);
+    await page.reload();
+    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('#toolrail-region')).toHaveAttribute('data-dock', 'right');
+    expect(await page.evaluate(() => window.localStorage.getItem('toolrail-position'))).toBeNull();
+    expect(JSON.parse(await getPref(page, 'toolrail-position'))).toEqual({ dock: 'right', x: 40, y: 60 });
+  });
 });
 
 test.describe('account persistence', () => {

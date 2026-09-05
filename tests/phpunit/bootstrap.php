@@ -88,5 +88,100 @@ if (!class_exists('WP_UnitTestCase')) {
     class WP_UnitTestCase extends \PHPUnit\Framework\TestCase {}
 }
 
+// --- Uninstall stubs: a fake usermeta store keyed [user_id][meta_key] =>
+// LIST of row values (usermeta allows several rows per key), a single-site
+// default, and just enough of $wpdb for get_blog_prefix(). The uninstall
+// runner is a loop over these calls and nothing else, so faking them here
+// makes the whole runner testable, not only its pure helper. The update
+// stub honors $prev_value the way update_metadata() does — every row whose
+// value matches is rewritten, and no match returns false — and
+// `toolrail_test_before_update` is a hook a test can use to slip a
+// concurrent write in between the runner's read and its write.
+$GLOBALS['toolrail_test_user_meta']     = [];
+$GLOBALS['toolrail_test_multisite']     = false;
+$GLOBALS['toolrail_test_site_ids']      = [1];
+$GLOBALS['toolrail_test_before_update'] = null;
+
+if (!function_exists('wp_cache_delete')) {
+    function wp_cache_delete($key, $group = '') {
+        return true;
+    }
+}
+
+if (!function_exists('is_multisite')) {
+    function is_multisite() {
+        return !empty($GLOBALS['toolrail_test_multisite']);
+    }
+}
+
+if (!function_exists('get_sites')) {
+    function get_sites($args = []) {
+        $GLOBALS['toolrail_test_last_site_query'] = $args;
+        return $GLOBALS['toolrail_test_site_ids'];
+    }
+}
+
+if (!function_exists('get_users')) {
+    function get_users($args = []) {
+        $GLOBALS['toolrail_test_last_user_query'] = $args;
+        $ids = [];
+        foreach ($GLOBALS['toolrail_test_user_meta'] as $user_id => $meta) {
+            if (isset($args['meta_key']) && !array_key_exists($args['meta_key'], $meta)) {
+                continue;
+            }
+            $ids[] = $user_id;
+        }
+        return $ids;
+    }
+}
+
+if (!function_exists('get_user_meta')) {
+    function get_user_meta($user_id, $key = '', $single = false) {
+        $meta = $GLOBALS['toolrail_test_user_meta'][$user_id] ?? [];
+        if (empty($meta[$key])) {
+            return $single ? '' : [];
+        }
+        return $single ? $meta[$key][0] : $meta[$key];
+    }
+}
+
+if (!function_exists('update_user_meta')) {
+    function update_user_meta($user_id, $key, $value, $prev_value = '') {
+        if (is_callable($GLOBALS['toolrail_test_before_update'])) {
+            call_user_func($GLOBALS['toolrail_test_before_update'], $user_id, $key);
+        }
+        $rows = $GLOBALS['toolrail_test_user_meta'][$user_id][$key] ?? [];
+        if ($rows === []) {
+            $GLOBALS['toolrail_test_user_meta'][$user_id][$key] = [$value];
+            return true;
+        }
+        $matched = 0;
+        foreach ($rows as $i => $row) {
+            if ($prev_value !== '' && $row !== $prev_value) {
+                continue;
+            }
+            $rows[$i] = $value;
+            $matched++;
+        }
+        if ($matched === 0) {
+            return false;
+        }
+        $GLOBALS['toolrail_test_user_meta'][$user_id][$key] = $rows;
+        return true;
+    }
+}
+
+if (!class_exists('Toolrail_Test_WPDB')) {
+    class Toolrail_Test_WPDB {
+        public function get_blog_prefix($blog_id = null) {
+            return ($blog_id === null || (int) $blog_id === 1) ? 'wp_' : 'wp_' . (int) $blog_id . '_';
+        }
+    }
+}
+if (!isset($GLOBALS['wpdb'])) {
+    $GLOBALS['wpdb'] = new Toolrail_Test_WPDB();
+}
+
 require_once TOOLRAIL_PLUGIN_DIR . 'includes/providers.php';
 require_once TOOLRAIL_PLUGIN_DIR . 'includes/rail.php';
+require_once TOOLRAIL_PLUGIN_DIR . 'includes/uninstall.php';

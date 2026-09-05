@@ -189,6 +189,18 @@
     }
   }
 
+  function removeLocalKey(key) {
+    delete memoryStore[key];
+    if (storageBroken) {
+      return;
+    }
+    try {
+      window.localStorage.removeItem(key);
+    } catch (e) {
+      storageBroken = true;
+    }
+  }
+
   // Per-KEY latch: set when disp.set() has thrown once for that key — see
   // writeKey. Reads must honor it too, and only for that key: core's own
   // reducer never applies a failed write, so sel.get() would keep
@@ -302,6 +314,20 @@
    * migrate) block every later browser's real local state from ever
    * being lifted. The per-key check alone is idempotent and cheap enough
    * to run unconditionally.
+   *
+   * The skipped branch also CONSUMES the local copy. A successful account
+   * write never touches localStorage (see writeKey), so a local value is
+   * either pre-0.1.6 state or a fallback session's write — and once the
+   * account holds the key, that copy can never be read again through the
+   * store path, only lie in wait: with no uninstall able to reach a
+   * browser, a leftover mirror resurrected old pins after a delete +
+   * reinstall, and WHICH pins depended on which browser booted first
+   * (owner concern 2026-09-04). Deleting it here — at boot, when the
+   * account copy read back hydrated — is the safe moment: the lift branch
+   * deliberately keeps the local copy, because boot's own write can still
+   * be wiped by a late attach (watchPersistenceAttach) and the next boot
+   * needs the source to lift from again. So a lifted key survives exactly
+   * one more boot and is gone once the account provably has it.
    */
   function migrateLocalToPrefs() {
     var sel = prefsSelect();
@@ -311,6 +337,9 @@
     // writeKey, not a raw dispatch: it owns the throwing-Storage guard.
     [POSITION_KEY, SLOTS_KEY, CONFIGS_KEY, MIGRATED_KEY].forEach(function (key) {
       if (sel.get(PREFS_SCOPE, key) !== undefined) {
+        if (!brokenPrefKeys[key]) {
+          removeLocalKey(key);
+        }
         return;
       }
       var local = readLocalKey(key);
