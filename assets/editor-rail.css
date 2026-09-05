@@ -1768,3 +1768,100 @@ body.toolrail-hides-inserter .block-editor-block-list__block-side-inserter-popov
     flex-basis: 0;
     min-width: 0;
 }
+
+/* Text fields in both dialogs, at a specificity that beats wp-admin's
+   forms.css. Its `input[type="text"]` rule (0,1,1) painted the Name and
+   Icon inputs white on the Dark preset while the bare `textarea` rule
+   (0,0,1) lost to .toolrail-settings-search, so the Description field
+   was dark and its neighbors were not (owner report 2026-09-05). One
+   rule for every field, and no wp-admin focus glow on top of our ring. */
+.toolrail-settings input.toolrail-settings-search,
+.toolrail-settings textarea.toolrail-settings-search {
+    background: var(--toolrail-field-bg);
+    color: var(--toolrail-fg-strong);
+    border: 1px solid var(--toolrail-field-border);
+    box-shadow: none;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.toolrail-settings input.toolrail-settings-search:focus,
+.toolrail-settings textarea.toolrail-settings-search:focus {
+    border-color: var(--toolrail-field-border);
+    box-shadow: none;
+}
+
+/* --- The Icon field's row and its Dashicon browser (1.0.1) --- */
+
+.toolrail-settings-iconrow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.toolrail-settings-iconrow .toolrail-settings-search {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+/* Live preview of the typed value, drawn the way the tool button draws it. */
+.toolrail-settings-iconpreview {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--toolrail-field-border);
+    border-radius: 3px;
+    color: var(--toolrail-fg-strong);
+}
+
+.toolrail-settings-iconpreview .toolrail-tool-glyph {
+    line-height: 30px;
+}
+
+.toolrail-settings-iconbrowser {
+    margin-top: 8px;
+    padding: 8px;
+    border: 1px solid var(--toolrail-field-border);
+    border-radius: 3px;
+}
+
+.toolrail-settings-iconbrowser .toolrail-settings-label {
+    margin-top: 0;
+}
+
+/* The results: icon + name chips that wrap, in a scrollable box. Every
+   chip is a button, so the box is reachable by keyboard without a
+   tabindex of its own. */
+.toolrail-settings-icongrid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    max-height: 220px;
+    overflow-y: auto;
+    margin-top: 6px;
+}
+
+.toolrail-settings-iconresult {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 4px 8px;
+    font-size: 11px;
+}
+
+.toolrail-settings-iconresult .dashicons {
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+}
+
+/* The chip for the value already in the field: a filled marker plus the
+   pressed state for AT, never color alone. */
+.toolrail-settings-iconresult[aria-pressed="true"] {
+    background: var(--toolrail-fg-strong);
+    color: var(--toolrail-bg);
+    border-color: var(--toolrail-fg-strong);
+}

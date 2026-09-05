@@ -135,7 +135,8 @@ Keys must start with `toolrail-ext:`. Values are strings. The store is the same 
 `window.toolrail` also has calls for these. The header comment of `assets/editor-rail.js` documents each one.
 
 - Pins: `pinBlock`, `unpinBlock`, `isPinned`, `moveSlot`.
-- A pin's own name, description and icon: `getPinMeta(slot)`, `setPinMeta(slot, { title, description, icon })`. Text only. The icon is a Dashicon name or up to three characters.
+- A pin's own name, description and icon: `getPinMeta(slot)`, `setPinMeta(slot, { title, description, icon })`. Text only. The icon is the name of a Dashicon WordPress ships (`dashicons-star-filled`) or up to three characters.
+- Your extension's data on a pin: `getPinData(slot, namespace)`, `setPinData(slot, namespace, value)`. The namespace is your short name, `[a-z0-9-]`. The value is plain JSON, up to 2 KB serialized; `null` removes it. The rail stores it and nothing more: it is removed when the pin is unpinned, saved with sets, carried in set files, and applied when a set is loaded. Give it meaning with a tool registered under the pin, `parent: 'pin:<slot>'`, whose `createBlock` reads it. The `toolrail:pin-meta-changed` window event fires with `{ slot }` in `detail` on every change to a pin's entry.
 - Saved sets: `saveConfig`, `loadConfig`, `deleteConfig`, `getConfigs`, `exportConfig`, `importConfig`.
 - The active tool: `getActiveTool`, `setActiveTool`.
 - The dock: `setDock`.

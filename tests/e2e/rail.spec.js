@@ -5915,3 +5915,230 @@ test.describe('pin metadata (1.0.1)', () => {
     expect(await getPref(page, 'toolrail-set-meta')).not.toContain('labeled');
   });
 });
+
+test.describe('Icon field: Dashicon browser and dark-mode fields (1.0.1)', () => {
+  const paragraphRow = '.toolrail-settings-pinnedrow[data-block="core/paragraph"]';
+
+  test('every text field in the dialog shares one background on the Dark preset', async ({ page }) => {
+    await openNewPost(page);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator(`${paragraphRow} .toolrail-settings-edit`).click();
+    const colors = await page.evaluate(() => {
+      const bg = (sel) => getComputedStyle(document.querySelector(sel)).backgroundColor;
+      return {
+        search: bg('#toolrail-settings-search'),
+        setName: bg('#toolrail-settings-setname'),
+        title: bg('#toolrail-editform-title'),
+        description: bg('#toolrail-editform-description'),
+        icon: bg('#toolrail-editform-icon'),
+        dialog: bg('.toolrail-settings'),
+      };
+    });
+    // wp-admin's input[type="text"] rule used to win and paint the inputs
+    // white while the textarea took the rail's dark field color.
+    expect(colors.title).toBe(colors.description);
+    expect(colors.icon).toBe(colors.description);
+    expect(colors.search).toBe(colors.description);
+    expect(colors.setName).toBe(colors.description);
+    expect(colors.title).not.toBe('rgb(255, 255, 255)');
+  });
+
+  test('Browse icons: search, pick, and the name lands in the field with a preview', async ({ page }) => {
+    await openNewPost(page);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator(`${paragraphRow} .toolrail-settings-edit`).click();
+
+    const browse = page.locator('.toolrail-settings-iconbrowse');
+    await expect(browse).toHaveAttribute('aria-expanded', 'false');
+    await browse.click();
+    await expect(page.locator('#toolrail-iconbrowser')).toBeVisible();
+    await expect(page.locator('#toolrail-iconbrowser-search')).toBeFocused();
+    await expect(browse).toHaveAttribute('aria-expanded', 'true');
+    await expect(browse).toHaveAttribute('aria-controls', 'toolrail-iconbrowser');
+    // Capped, with the cap said in text.
+    await expect(page.locator('#toolrail-iconbrowser-count')).toContainText('Showing the first 72 of');
+
+    await page.keyboard.type('star');
+    await expect(page.locator('#toolrail-iconbrowser-count')).toHaveText('3 icons.');
+    const names = await page.locator('.toolrail-settings-iconresult').allTextContents();
+    expect(names).toEqual(['star-empty', 'star-filled', 'star-half']);
+    // The chip's accessible name is the name the field will hold.
+    await expect(page.locator('.toolrail-settings-iconresult[data-icon="star-filled"]')).toHaveAccessibleName('star-filled');
+
+    // A rebuild from elsewhere keeps the browser open with its query.
+    await page.evaluate(() => window.toolrail.pinBlock('core/quote'));
+    await expect(page.locator('#toolrail-iconbrowser-search')).toHaveValue('star');
+    await expect(page.locator('#toolrail-iconbrowser-count')).toHaveText('3 icons.');
+
+    await page.locator('.toolrail-settings-iconresult[data-icon="star-filled"]').click();
+    await expect(page.locator('#toolrail-iconbrowser')).toHaveCount(0);
+    await expect(page.locator('#toolrail-editform-icon')).toHaveValue('dashicons-star-filled');
+    await expect(page.locator('#toolrail-editform-icon')).toBeFocused();
+    await expect(page.locator('.toolrail-settings-iconpreview')).toHaveClass(/dashicons-star-filled/);
+
+    // Reopening marks the current value's chip as pressed.
+    await browse.click();
+    await page.keyboard.type('star-f');
+    await expect(page.locator('.toolrail-settings-iconresult[data-icon="star-filled"]')).toHaveAttribute('aria-pressed', 'true');
+    // Escape closes the browser only; the form stays, focus on Browse icons.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#toolrail-iconbrowser')).toHaveCount(0);
+    await expect(page.locator('#toolrail-editform')).toBeVisible();
+    await expect(browse).toBeFocused();
+
+    await page.locator('.toolrail-settings-editsave').click();
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"] .toolrail-tool-icon')).toHaveClass(/dashicons-star-filled/);
+    await page.evaluate(() => {
+      window.toolrail.setPinMeta('core/paragraph', null);
+      window.toolrail.unpinBlock('core/quote');
+    });
+  });
+
+  test('a Dashicon name WordPress does not ship is refused, so no tool ends up with an empty icon', async ({ page }) => {
+    await openNewPost(page);
+    expect(await page.evaluate(() => {
+      window.toolrail.setPinMeta('core/paragraph', { icon: 'dashicons-not-a-real-icon' });
+      return window.toolrail.getPinMeta('core/paragraph');
+    })).toBeNull();
+    // Control: a real one is kept.
+    expect(await page.evaluate(() => {
+      window.toolrail.setPinMeta('core/paragraph', { icon: 'dashicons-heart' });
+      const m = window.toolrail.getPinMeta('core/paragraph');
+      window.toolrail.setPinMeta('core/paragraph', null);
+      return m && m.icon;
+    })).toBe('dashicons-heart');
+  });
+});
+
+test.describe('extension data on a pin (setPinData / getPinData / pin-meta-changed)', () => {
+  const quoteBtn = '#toolrail-rail [data-tool="pin:core/quote"]';
+  const quoteRow = '.toolrail-settings-pinnedrow[data-block="core/quote"]';
+
+  test('namespaced JSON on a pinned slot: gates, copies, and independence from the author fields', async ({ page }) => {
+    await openNewPost(page);
+    const result = await page.evaluate(() => {
+      const t = window.toolrail;
+      const out = {};
+      out.unpinned = t.setPinData('core/quote', 'presets', { a: 1 });
+      t.pinBlock('core/quote');
+      out.badNamespace = [t.setPinData('core/quote', 'Bad NS', {}), t.setPinData('core/quote', '__proto__', {}), t.setPinData('core/quote', '', {})];
+      out.badData = [t.setPinData('core/quote', 'presets', () => 1), t.setPinData('core/quote', 'presets', undefined), t.setPinData('core/quote', 'presets', 'x'.repeat(3000))];
+      out.stored = t.setPinData('core/quote', 'presets', { list: [{ name: 'Pull', attrs: { align: 'wide' } }], n: 2 });
+      const copy = t.getPinData('core/quote', 'presets');
+      copy.list.push('mutated');
+      out.roundTrip = t.getPinData('core/quote', 'presets');
+      out.other = t.getPinData('core/quote', 'other');
+      // The author's view does not see extension data, and setPinMeta
+      // leaves it alone in both directions.
+      out.metaBefore = t.getPinMeta('core/quote');
+      t.setPinMeta('core/quote', { title: 'Testimonial' });
+      out.afterTitle = t.getPinData('core/quote', 'presets');
+      t.setPinMeta('core/quote', null);
+      out.afterReset = t.getPinData('core/quote', 'presets');
+      out.removed = t.setPinData('core/quote', 'presets', null);
+      out.afterRemove = t.getPinData('core/quote', 'presets');
+      return out;
+    });
+    expect(result.unpinned).toBe(false);
+    expect(result.badNamespace).toEqual([false, false, false]);
+    expect(result.badData).toEqual([false, false, false]);
+    expect(result.stored).toBe(true);
+    expect(result.roundTrip).toEqual({ list: [{ name: 'Pull', attrs: { align: 'wide' } }], n: 2 });
+    expect(result.other).toBeNull();
+    expect(result.metaBefore).toBeNull();
+    expect(result.afterTitle).toEqual({ list: [{ name: 'Pull', attrs: { align: 'wide' } }], n: 2 });
+    expect(result.afterReset).toEqual({ list: [{ name: 'Pull', attrs: { align: 'wide' } }], n: 2 });
+    expect(result.removed).toBe(true);
+    expect(result.afterRemove).toBeNull();
+
+    // Extension data alone does not make a pin "Custom" in the dialog.
+    await page.evaluate(() => window.toolrail.setPinData('core/quote', 'presets', { n: 1 }));
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    expect(await page.locator(`${quoteRow} .toolrail-settings-tag`).count()).toBe(0);
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => window.toolrail.unpinBlock('core/quote'));
+  });
+
+  test('pin-meta-changed fires for every entry change, and unpinning drops the data with the pin', async ({ page }) => {
+    await openNewPost(page);
+    const events = await page.evaluate(() => {
+      const t = window.toolrail;
+      const seen = [];
+      window.addEventListener('toolrail:pin-meta-changed', (e) => seen.push(e.detail.slot));
+      t.pinBlock('core/quote');
+      t.setPinData('core/quote', 'presets', { n: 1 });
+      t.setPinMeta('core/quote', { title: 'Testimonial' });
+      t.setPinData('core/quote', 'presets', { n: 1 }); // the same value is still a write
+      t.unpinBlock('core/quote');
+      const afterUnpin = { meta: t.getPinMeta('core/quote'), data: t.getPinData('core/quote', 'presets') };
+      t.pinBlock('core/quote');
+      const afterRepin = t.getPinData('core/quote', 'presets');
+      t.unpinBlock('core/quote');
+      return { seen, afterUnpin, afterRepin };
+    });
+    expect(events.seen).toEqual(['core/quote', 'core/quote', 'core/quote', 'core/quote']);
+    expect(events.afterUnpin).toEqual({ meta: null, data: null });
+    expect(events.afterRepin).toBeNull();
+  });
+
+  test('extension data rides in saved sets and set files, and comes back on load', async ({ page }) => {
+    await openNewPost(page);
+    const result = await page.evaluate(() => {
+      const t = window.toolrail;
+      t.pinBlock('core/quote');
+      t.setPinData('core/quote', 'presets', { n: 3 });
+      t.saveConfig('with data');
+      t.unpinBlock('core/quote');
+      const gone = t.getPinData('core/quote', 'presets');
+      t.loadConfig('with data');
+      const back = t.getPinData('core/quote', 'presets');
+      t.deleteConfig('with data');
+      t.unpinBlock('core/quote');
+      // A set FILE carries it too, through the same normalizer.
+      const imported = t.importConfig({
+        format: 'toolrail-set', version: 1, name: 'from file', blocks: ['core/quote'],
+        meta: { 'core/quote': { title: 'Q', ext: { presets: { n: 4 }, 'Bad NS': { n: 5 }, big: 'x'.repeat(3000) } } },
+      });
+      t.loadConfig('from file');
+      const fromFile = { data: t.getPinData('core/quote', 'presets'), bad: t.getPinData('core/quote', 'big'), meta: t.getPinMeta('core/quote') };
+      t.deleteConfig('from file');
+      t.unpinBlock('core/quote');
+      return { gone, back, imported: imported.labels, fromFile };
+    });
+    expect(result.gone).toBeNull();
+    expect(result.back).toEqual({ n: 3 });
+    expect(result.imported).toBe(1);
+    expect(result.fromFile.data).toEqual({ n: 4 });
+    expect(result.fromFile.bad).toBeNull();
+    expect(result.fromFile.meta.title).toBe('Q');
+  });
+
+  test('a provider tool nested under a pin reads that pin’s data when it inserts', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const t = window.toolrail;
+      t.pinBlock('core/quote');
+      t.setPinData('core/quote', 'presets', { citation: 'Preset citation' });
+      t.registerTool({
+        id: 'e2e-quote-preset',
+        label: 'Quote with preset',
+        parent: 'pin:core/quote',
+        createBlock: () => window.wp.blocks.createBlock('core/quote', {
+          citation: (t.getPinData('core/quote', 'presets') || {}).citation || '',
+        }),
+      });
+    });
+    // The child renders in the pin's flyout; arm it and click the canvas.
+    await page.locator(quoteBtn).focus();
+    await page.keyboard.press('ArrowRight');
+    await page.locator('.toolrail-flyout [data-tool="e2e-quote-preset"]').click();
+    await clickBelowContent(page);
+    const citation = await page.evaluate(() => {
+      const blocks = window.wp.data.select('core/block-editor').getBlocks();
+      const q = blocks.filter((b) => b.name === 'core/quote').pop();
+      return q ? q.attributes.citation : null;
+    });
+    expect(citation).toBe('Preset citation');
+    await page.evaluate(() => window.toolrail.unpinBlock('core/quote'));
+  });
+});

@@ -42,6 +42,13 @@
  * author's own name, description and icon for a pinned slot — the same
  * values the Edit form in Toolbar settings edits. See the "Pin metadata"
  * block for the rules (text only; icon = Dashicon slug or ≤3 characters).
+ *   window.toolrail.getPinData(slot, namespace) / setPinData(slot,
+ *   namespace, jsonValue|null) store an EXTENSION's own data on a pinned
+ *   slot (namespace [a-z0-9-], plain JSON, ≤2KB serialized). It shares
+ *   the entry's lifecycle — cleared on unpin, snapshotted into saved
+ *   sets, carried in set files — and is opaque to the rail: pair it with
+ *   registerTool({parent: 'pin:<slot>', …}) to give it meaning. Every
+ *   entry change fires 'toolrail:pin-meta-changed' ({slot} in detail).
  *
  * AVAILABILITY (roadmap R9): a tool declares what it needs, never where
  * it is hidden. `supports.canvas: true` means "activation is completed
@@ -1272,10 +1279,12 @@
     }
     slots.splice(idx, 1);
     saveSlots(slots);
-    // The author's name/description/icon for this pin go with it: a
-    // later re-pin is a fresh tool, and the map only ever describes
-    // tools the author has.
-    clearPinMeta(blockName);
+    // The author's name/description/icon for this pin, and any extension
+    // data on it, go with it: a later re-pin is a fresh tool, and the map
+    // only ever describes tools the author has.
+    if (clearPinMeta(blockName)) {
+      announcePinMetaChange(blockName);
+    }
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
     rerender();
     return true;
@@ -1323,13 +1332,126 @@
   // editor screen, and string block icons already render that way in
   // renderBlockIcon) or up to three characters of text ('Aa', '¶', one
   // emoji).
+  //
+  // EXTENSION DATA (owner decision 2026-09-05). The same entry carries
+  // an `ext` map, one namespace per extension: { ext: { presets: {…} } }.
+  // window.toolrail.setPinData(slot, namespace, data) / getPinData()
+  // read and write ONE namespace; the author's three fields are never
+  // touched by them, and setPinMeta never touches `ext`. Data is plain
+  // JSON (a JSON round trip is the normalizer), capped per namespace,
+  // and opaque to the rail: it changes nothing about how the pin
+  // renders or inserts — a provider that registers tools under the pin
+  // (parent: 'pin:<slot>') is what gives it meaning. Because it lives in
+  // the entry it gets the entry's lifecycle for free: cleared on unpin,
+  // snapshotted into saved sets, carried in set files, applied on load.
+  // Every change to an entry fires 'toolrail:pin-meta-changed' on window
+  // with {slot} in detail.
   // -------------------------------------------------------------------
 
   var PIN_META_LIMITS = { title: 80, description: 240, icon: 3 };
   var DASHICON_PATTERN = /^dashicons-[a-z0-9-]+$/;
+  // Same shape as an extension's 'toolrail-ext:' key segment.
+  var PIN_DATA_NAMESPACE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+  // Serialized size cap per namespace: the whole preferences array is one
+  // user-meta row that core rewrites on every change.
+  var PIN_DATA_MAX_LENGTH = 2048;
+
+  /**
+   * Plain JSON, or nothing: a round trip drops functions, undefined and
+   * anything else JSON cannot carry, and the result must serialize
+   * within the cap. Returns the cleaned copy, or undefined when refused.
+   */
+  function normalizePinData(data) {
+    if (data === undefined || data === null || typeof data === 'function') {
+      return undefined;
+    }
+    var json;
+    try {
+      json = JSON.stringify(data);
+    } catch (e) {
+      return undefined;
+    }
+    if (typeof json !== 'string' || json.length > PIN_DATA_MAX_LENGTH) {
+      return undefined;
+    }
+    return JSON.parse(json);
+  }
+
+  function announcePinMetaChange(slot) {
+    window.dispatchEvent(new CustomEvent('toolrail:pin-meta-changed', { detail: { slot: slot } }));
+  }
+
+  // Every Dashicon WordPress ships, from wp-includes/css/dashicons.css
+  // (WP 7.1; the set has not changed since 5.5), so the Icon field's
+  // browser can list them and a typed name can be checked — an unknown
+  // name would render as an empty box on the toolbar. Kept as data here
+  // rather than read from the stylesheet at run time: a site that serves
+  // wp-includes from a CDN makes the CSSOM cross-origin and unreadable.
+var DASHICON_NAMES = [
+    'admin-appearance', 'admin-collapse', 'admin-comments', 'admin-customizer', 'admin-generic',
+    'admin-home', 'admin-links', 'admin-media', 'admin-multisite', 'admin-network',
+    'admin-page', 'admin-plugins', 'admin-post', 'admin-settings', 'admin-site',
+    'admin-site-alt', 'admin-site-alt2', 'admin-site-alt3', 'admin-tools', 'admin-users',
+    'airplane', 'album', 'align-center', 'align-full-width', 'align-left', 'align-none',
+    'align-pull-left', 'align-pull-right', 'align-right', 'align-wide', 'amazon', 'analytics',
+    'archive', 'arrow-down', 'arrow-down-alt', 'arrow-down-alt2', 'arrow-left',
+    'arrow-left-alt', 'arrow-left-alt2', 'arrow-right', 'arrow-right-alt', 'arrow-right-alt2',
+    'arrow-up', 'arrow-up-alt', 'arrow-up-alt2', 'arrow-up-duplicate', 'art', 'awards',
+    'backup', 'bank', 'beer', 'bell', 'block-default', 'book', 'book-alt', 'buddicons-activity',
+    'buddicons-bbpress-logo', 'buddicons-buddypress-logo', 'buddicons-community',
+    'buddicons-forums', 'buddicons-friends', 'buddicons-groups', 'buddicons-pm',
+    'buddicons-replies', 'buddicons-topics', 'buddicons-tracking', 'building', 'businessman',
+    'businessperson', 'businesswoman', 'button', 'calculator', 'calendar', 'calendar-alt',
+    'camera', 'camera-alt', 'car', 'carrot', 'cart', 'category', 'chart-area', 'chart-bar',
+    'chart-line', 'chart-pie', 'clipboard', 'clock', 'cloud', 'cloud-saved', 'cloud-upload',
+    'code-standards', 'coffee', 'color-picker', 'columns', 'controls-back', 'controls-forward',
+    'controls-pause', 'controls-play', 'controls-repeat', 'controls-skipback',
+    'controls-skipforward', 'controls-volumeoff', 'controls-volumeon', 'cover-image',
+    'dashboard', 'database', 'database-add', 'database-export', 'database-import',
+    'database-remove', 'database-view', 'desktop', 'dismiss', 'download', 'drumstick', 'edit',
+    'edit-large', 'edit-page', 'editor-aligncenter', 'editor-alignleft', 'editor-alignright',
+    'editor-bold', 'editor-break', 'editor-code', 'editor-code-duplicate', 'editor-contract',
+    'editor-customchar', 'editor-distractionfree', 'editor-expand', 'editor-help',
+    'editor-indent', 'editor-insertmore', 'editor-italic', 'editor-justify',
+    'editor-kitchensink', 'editor-ltr', 'editor-ol', 'editor-ol-rtl', 'editor-outdent',
+    'editor-paragraph', 'editor-paste-text', 'editor-paste-word', 'editor-quote',
+    'editor-removeformatting', 'editor-rtl', 'editor-spellcheck', 'editor-strikethrough',
+    'editor-table', 'editor-textcolor', 'editor-ul', 'editor-underline', 'editor-unlink',
+    'editor-video', 'ellipsis', 'email', 'email-alt', 'email-alt2', 'embed-audio',
+    'embed-generic', 'embed-photo', 'embed-post', 'embed-video', 'excerpt-view', 'exerpt-view',
+    'exit', 'external', 'facebook', 'facebook-alt', 'feedback', 'filter', 'flag', 'food',
+    'format-aside', 'format-audio', 'format-chat', 'format-gallery', 'format-image',
+    'format-links', 'format-quote', 'format-standard', 'format-status', 'format-video', 'forms',
+    'fullscreen-alt', 'fullscreen-exit-alt', 'games', 'google', 'googleplus', 'grid-view',
+    'groups', 'hammer', 'heading', 'heart', 'hidden', 'hourglass', 'html', 'id', 'id-alt',
+    'image-crop', 'image-filter', 'image-flip-horizontal', 'image-flip-vertical',
+    'image-rotate', 'image-rotate-left', 'image-rotate-right', 'images-alt', 'images-alt2',
+    'index-card', 'info', 'info-outline', 'insert', 'insert-after', 'insert-before',
+    'instagram', 'laptop', 'layout', 'leftright', 'lightbulb', 'linkedin', 'list-view',
+    'location', 'location-alt', 'lock', 'lock-duplicate', 'marker', 'media-archive',
+    'media-audio', 'media-code', 'media-default', 'media-document', 'media-interactive',
+    'media-spreadsheet', 'media-text', 'media-video', 'megaphone', 'menu', 'menu-alt',
+    'menu-alt2', 'menu-alt3', 'microphone', 'migrate', 'minus', 'money', 'money-alt', 'move',
+    'nametag', 'networking', 'no', 'no-alt', 'open-folder', 'palmtree', 'paperclip', 'pdf',
+    'performance', 'pets', 'phone', 'pinterest', 'playlist-audio', 'playlist-video',
+    'plugins-checked', 'plus', 'plus-alt', 'plus-alt2', 'podio', 'portfolio', 'post-status',
+    'post-trash', 'pressthis', 'printer', 'privacy', 'products', 'randomize', 'reddit', 'redo',
+    'remove', 'rest-api', 'rss', 'saved', 'schedule', 'screenoptions', 'search', 'share',
+    'share-alt', 'share-alt2', 'share1', 'shield', 'shield-alt', 'shortcode', 'slides',
+    'smartphone', 'smiley', 'sort', 'sos', 'spotify', 'star-empty', 'star-filled', 'star-half',
+    'sticky', 'store', 'superhero', 'superhero-alt', 'table-col-after', 'table-col-before',
+    'table-col-delete', 'table-row-after', 'table-row-before', 'table-row-delete', 'tablet',
+    'tag', 'tagcloud', 'testimonial', 'text', 'text-page', 'thumbs-down', 'thumbs-up',
+    'tickets', 'tickets-alt', 'tide', 'translation', 'trash', 'twitch', 'twitter',
+    'twitter-alt', 'undo', 'universal-access', 'universal-access-alt', 'unlock', 'update',
+    'update-alt', 'upload', 'vault', 'video-alt', 'video-alt2', 'video-alt3', 'visibility',
+    'warning', 'welcome-add-page', 'welcome-comments', 'welcome-edit-page',
+    'welcome-learn-more', 'welcome-view-site', 'welcome-widgets-menus', 'welcome-write-blog',
+    'whatsapp', 'wordpress', 'wordpress-alt', 'xing', 'yes', 'yes-alt', 'youtube'
+  ];
 
   function isDashiconName(value) {
-    return DASHICON_PATTERN.test(value);
+    return DASHICON_PATTERN.test(value) && DASHICON_NAMES.indexOf(value.slice('dashicons-'.length)) !== -1;
   }
 
   /**
@@ -1392,7 +1514,29 @@
         out.icon = icon;
       }
     }
+    // Extension namespaces: name must match the pattern (so '__proto__'
+    // and friends never become keys), data must be plain JSON in size.
+    if (raw.ext && typeof raw.ext === 'object' && !Array.isArray(raw.ext)) {
+      var ext = {};
+      Object.keys(raw.ext).forEach(function (ns) {
+        if (!PIN_DATA_NAMESPACE.test(ns)) {
+          return;
+        }
+        var data = normalizePinData(raw.ext[ns]);
+        if (data !== undefined) {
+          ext[ns] = data;
+        }
+      });
+      if (Object.keys(ext).length) {
+        out.ext = ext;
+      }
+    }
     return Object.keys(out).length ? out : null;
+  }
+
+  /** Whether an entry carries any of the author's three fields. */
+  function hasAuthorFields(entry) {
+    return !!entry && !!(entry.title || entry.description || entry.icon);
   }
 
   function loadPinMeta() {
@@ -1421,20 +1565,23 @@
   /**
    * The author's metadata for one pinned slot, as a complete
    * {title, description, icon} with '' for an unset field — or null when
-   * the slot has none. A copy: editing it changes nothing.
+   * the slot has none of the three (extension data alone does not
+   * count: this is the author-facing view, and the Edit form's Custom
+   * tag and Reset button key off it). A copy: editing it changes nothing.
    */
   function getPinMeta(blockName) {
     var map = loadPinMeta();
     var entry = typeof blockName === 'string' ? map[blockName] : undefined;
-    return entry
+    return hasAuthorFields(entry)
       ? { title: entry.title || '', description: entry.description || '', icon: entry.icon || '' }
       : null;
   }
 
   /**
-   * Set — or clear, with null or all-empty fields — the metadata of a
-   * PINNED slot. The whole entry is replaced, so pass every field to
-   * keep. An unpinned name is refused, so the map only ever holds
+   * Set — or clear, with null or all-empty fields — the author's three
+   * fields on a PINNED slot. All three are replaced, so pass every field
+   * to keep; extension data on the entry is left as it is (see
+   * setPinData). An unpinned name is refused, so the map only ever holds
    * entries for tools the author has (unpinBlock clears its entry). An
    * icon that is not valid (see isValidPinIcon) is dropped; the settings
    * form checks it first and says why.
@@ -1448,26 +1595,103 @@
       return false;
     }
     var map = loadPinMeta();
-    var entry = normalizePinMeta(meta);
-    if (entry) {
+    var fields = normalizePinMeta(meta ? { title: meta.title, description: meta.description, icon: meta.icon } : null);
+    var existing = map[blockName];
+    var entry = fields || {};
+    if (existing && existing.ext) {
+      entry.ext = existing.ext;
+    }
+    if (Object.keys(entry).length) {
       map[blockName] = entry;
-    } else if (map[blockName]) {
+    } else if (existing) {
       delete map[blockName];
     } else {
       return true;
     }
     persistPinMeta(map);
+    announcePinMetaChange(blockName);
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
     rerender();
     return true;
   }
 
+  /**
+   * One extension's data on a pinned slot, as a fresh copy — or null when
+   * there is none. `namespace` is the extension's own short name.
+   *
+   * @param {string} blockName Slot name.
+   * @param {string} namespace [a-z0-9-], up to 40 characters.
+   * @return {*} The stored JSON value, or null.
+   */
+  function getPinData(blockName, namespace) {
+    if (typeof namespace !== 'string' || !PIN_DATA_NAMESPACE.test(namespace)) {
+      return null;
+    }
+    var map = loadPinMeta();
+    var entry = typeof blockName === 'string' ? map[blockName] : undefined;
+    if (!entry || !entry.ext || !Object.prototype.hasOwnProperty.call(entry.ext, namespace)) {
+      return null;
+    }
+    return JSON.parse(JSON.stringify(entry.ext[namespace]));
+  }
+
+  /**
+   * Store — or, with null, remove — one extension's data on a PINNED
+   * slot. Refused (false) for an unpinned slot, a namespace outside
+   * [a-z0-9-], or data that is not plain JSON within PIN_DATA_MAX_LENGTH
+   * once serialized. The author's fields and other namespaces are
+   * untouched. Fires 'toolrail:pin-meta-changed'; does NOT rebuild the
+   * rail, because the data means nothing to the rail itself — the
+   * extension redraws what it owns.
+   *
+   * @param {string} blockName Slot name.
+   * @param {string} namespace [a-z0-9-], up to 40 characters.
+   * @param {*}      data      Plain JSON value, or null to remove.
+   * @return {boolean} Whether the change was stored.
+   */
+  function setPinData(blockName, namespace, data) {
+    if (!isPinned(blockName) || typeof namespace !== 'string' || !PIN_DATA_NAMESPACE.test(namespace)) {
+      return false;
+    }
+    var map = loadPinMeta();
+    var entry = map[blockName] || {};
+    var ext = entry.ext || {};
+    if (data === null) {
+      if (!Object.prototype.hasOwnProperty.call(ext, namespace)) {
+        return true;
+      }
+      delete ext[namespace];
+    } else {
+      var clean = normalizePinData(data);
+      if (clean === undefined) {
+        return false;
+      }
+      ext[namespace] = clean;
+    }
+    if (Object.keys(ext).length) {
+      entry.ext = ext;
+    } else {
+      delete entry.ext;
+    }
+    if (Object.keys(entry).length) {
+      map[blockName] = entry;
+    } else {
+      delete map[blockName];
+    }
+    persistPinMeta(map);
+    announcePinMetaChange(blockName);
+    return true;
+  }
+
+  /** Drop a slot's whole entry. Returns whether there was one. */
   function clearPinMeta(blockName) {
     var map = loadPinMeta();
-    if (map[blockName]) {
-      delete map[blockName];
-      persistPinMeta(map);
+    if (!map[blockName]) {
+      return false;
     }
+    delete map[blockName];
+    persistPinMeta(map);
+    return true;
   }
 
   /**
@@ -1594,12 +1818,17 @@
     if (labels) {
       var pinMeta = loadPinMeta();
       var pinned = loadSlots();
+      var changed = [];
       Object.keys(labels).forEach(function (slot) {
         if (pinned.indexOf(slot) !== -1) {
           pinMeta[slot] = labels[slot];
+          changed.push(slot);
         }
       });
-      persistPinMeta(pinMeta);
+      if (changed.length) {
+        persistPinMeta(pinMeta);
+        changed.forEach(announcePinMetaChange);
+      }
     }
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
     rerender();
@@ -2816,6 +3045,15 @@
   // looking accepted with the same bad value in it (PR review 2026-09-04,
   // finding 5). Cleared when the author edits the field or the form closes.
   var editFormError = '';
+  // The Icon field's Dashicon browser: open or not, and its search text.
+  // Module state like the form itself, so a rebuild re-renders the
+  // browser with the same query instead of dropping it.
+  var iconBrowserOpen = false;
+  var iconBrowserQuery = '';
+  // How many chips the browser draws at once. All 350 icons as buttons
+  // are cheap to build but not to read; past this the count line asks
+  // the author to narrow the search.
+  var ICON_BROWSER_LIMIT = 72;
 
   function insertableBlockTypes() {
     return wp.blocks.getBlockTypes().filter(function (t) {
@@ -2851,6 +3089,8 @@
     settingsOpen = false;
     editingSlot = '';
     editFormError = '';
+    iconBrowserOpen = false;
+    iconBrowserQuery = '';
     syncLayer();
     // Drop any message that never got rendered — closing the dialog
     // before an in-flight file read resolves used to strand it here, and
@@ -2897,10 +3137,15 @@
     }
     e.preventDefault();
     e.stopPropagation();
-    // Escape with focus inside an open Edit form closes the FORM and
-    // hands focus back to the Edit button that opened it; the dialog
-    // stays. A second Escape closes the dialog as before — one level per
-    // press, the way nested disclosures are expected to unwind.
+    // Escape unwinds ONE level per press, the way nested disclosures are
+    // expected to: focus inside the Icon field's browser closes the
+    // browser (focus back on Browse icons); inside the Edit form, closes
+    // the form (focus back on Edit); anywhere else, closes the dialog.
+    var browser = iconBrowserOpen ? document.getElementById('toolrail-iconbrowser') : null;
+    if (browser && browser.contains(e.target)) {
+      closeIconBrowser();
+      return;
+    }
     var form = editingSlot ? document.getElementById('toolrail-editform') : null;
     if (form && form.contains(e.target)) {
       closeEditForm();
@@ -2914,7 +3159,19 @@
     var name = editingSlot;
     editingSlot = '';
     editFormError = '';
+    iconBrowserOpen = false;
+    iconBrowserQuery = '';
     refreshSettings(pinnedRowSelector(name) + '.toolrail-settings-edit');
+  }
+
+  /**
+   * Close the Icon field's Dashicon browser. Focus goes to the control
+   * named, or to Browse icons — the button that opened it.
+   */
+  function closeIconBrowser(focusSelector) {
+    iconBrowserOpen = false;
+    iconBrowserQuery = '';
+    refreshSettings(focusSelector || '.toolrail-settings-iconbrowse');
   }
 
   function pinnedRowSelector(name) {
@@ -3022,6 +3279,11 @@
       var field = node.querySelector(sel);
       if (field && preserved[sel] !== undefined) {
         field.value = preserved[sel];
+        // A field with a derived view (the Icon field's preview) redraws
+        // it from the restored value; see buildPinEditForm.
+        if (typeof field.toolrailAfterRestore === 'function') {
+          field.toolrailAfterRestore();
+        }
       }
     });
 
@@ -3556,21 +3818,69 @@
     descInput.className += ' toolrail-settings-textarea';
     descInput.value = current.description;
 
-    var iconInput = field('toolrail-editform-icon', __('Icon', 'toolrail'), document.createElement('input'), 'toolrail-editform-iconhelp toolrail-editform-status');
+    // The Icon field sits in a row with a live preview of its value and
+    // the Browse icons disclosure; the browser panel renders under the
+    // row while it is open.
+    var iconLabel = settingsRow('label', 'toolrail-settings-label');
+    iconLabel.setAttribute('for', 'toolrail-editform-icon');
+    iconLabel.textContent = __('Icon', 'toolrail');
+    fieldset.appendChild(iconLabel);
+    var iconRow = settingsRow('div', 'toolrail-settings-iconrow');
+    var iconInput = document.createElement('input');
     iconInput.type = 'text';
+    iconInput.id = 'toolrail-editform-icon';
+    iconInput.className = 'toolrail-settings-search';
+    iconInput.setAttribute('autocomplete', 'off');
+    iconInput.setAttribute('aria-describedby', 'toolrail-editform-iconhelp toolrail-editform-status');
     iconInput.value = current.icon;
+    iconRow.appendChild(iconInput);
+    // The preview is decorative: the field's text IS the value for AT.
+    var preview = settingsRow('span', 'toolrail-settings-iconpreview');
+    preview.setAttribute('aria-hidden', 'true');
+    iconRow.appendChild(preview);
+    function renderPreview() {
+      preview.className = 'toolrail-settings-iconpreview';
+      preview.textContent = '';
+      var value = iconInput.value.trim();
+      if (value !== '' && isValidPinIcon(value)) {
+        renderCustomIcon(preview, value);
+      }
+    }
+    renderPreview();
+    // refreshSettings restores a preserved value AFTER this form is
+    // built, so the preview drawn above is of the STORED value; the
+    // restore path calls this hook so the preview follows the field.
+    iconInput.toolrailAfterRestore = renderPreview;
+    var browse = settingsButton(__('Browse icons', 'toolrail'), function () {
+      if (iconBrowserOpen) {
+        closeIconBrowser();
+        return;
+      }
+      iconBrowserOpen = true;
+      refreshSettings('#toolrail-iconbrowser-search');
+    }, 'toolrail-settings-iconbrowse');
+    browse.setAttribute('aria-expanded', iconBrowserOpen ? 'true' : 'false');
+    if (iconBrowserOpen) {
+      browse.setAttribute('aria-controls', 'toolrail-iconbrowser');
+    }
+    iconRow.appendChild(browse);
+    fieldset.appendChild(iconRow);
     var iconHelp = settingsRow('p', 'toolrail-settings-empty');
     iconHelp.id = 'toolrail-editform-iconhelp';
     iconHelp.textContent = sprintf(
       /* translators: %d: maximum number of characters. */
-      __('Up to %d characters, such as Aa or a symbol, or a Dashicon name such as dashicons-star-filled.', 'toolrail'),
+      __('Up to %d characters, such as Aa or a symbol, or a Dashicon. Browse icons lists every Dashicon.', 'toolrail'),
       PIN_META_LIMITS.icon
     );
     fieldset.appendChild(iconHelp);
+    if (iconBrowserOpen) {
+      fieldset.appendChild(buildIconBrowser(iconInput));
+    }
     iconInput.addEventListener('input', function () {
       editFormError = '';
       iconInput.removeAttribute('aria-invalid');
       status.textContent = '';
+      renderPreview();
     });
 
     // The form's own outcome line, for a refused icon. Visible text under
@@ -3616,7 +3926,7 @@
       if (iconValue !== '' && !isValidPinIcon(iconValue)) {
         editFormError = sprintf(
           /* translators: %d: maximum number of characters. */
-          __('The icon must be up to %d characters, or a Dashicon name such as dashicons-star-filled.', 'toolrail'),
+          __('The icon must be up to %d characters, or the name of a Dashicon. Use Browse icons to pick one.', 'toolrail'),
           PIN_META_LIMITS.icon
         );
         status.textContent = editFormError;
@@ -3647,6 +3957,124 @@
     });
 
     return form;
+  }
+
+  /**
+   * The Icon field's Dashicon browser: a search field and the matching
+   * icons as icon-plus-name chips. Choosing one writes its name into the
+   * Icon field, announces it, closes the browser and puts focus in the
+   * field, so the author can read what was set and go on to Save. A
+   * disclosure under the field, not a popup: the same Escape-per-level
+   * model as the form it lives in (onSettingsKeydown).
+   *
+   * Each chip is a button whose visible text is the icon's name, with
+   * the icon itself aria-hidden — so the accessible name is the name the
+   * field will hold, and Label in Name holds. The chip for the value
+   * already in the field is aria-pressed, and styled from that.
+   *
+   * @param {HTMLInputElement} iconInput The Icon field to fill.
+   * @return {HTMLElement}
+   */
+  function buildIconBrowser(iconInput) {
+    var panel = settingsRow('div', 'toolrail-settings-iconbrowser');
+    panel.id = 'toolrail-iconbrowser';
+    panel.setAttribute('role', 'group');
+    panel.setAttribute('aria-labelledby', 'toolrail-iconbrowser-title');
+
+    var title = settingsRow('h4', 'toolrail-settings-label');
+    title.id = 'toolrail-iconbrowser-title';
+    title.textContent = __('Dashicons', 'toolrail');
+    panel.appendChild(title);
+
+    var searchLabel = settingsRow('label', 'toolrail-settings-label');
+    searchLabel.setAttribute('for', 'toolrail-iconbrowser-search');
+    searchLabel.textContent = __('Search icons', 'toolrail');
+    panel.appendChild(searchLabel);
+    var search = document.createElement('input');
+    search.type = 'search';
+    search.id = 'toolrail-iconbrowser-search';
+    search.className = 'toolrail-settings-search';
+    search.setAttribute('autocomplete', 'off');
+    search.setAttribute('aria-describedby', 'toolrail-iconbrowser-count');
+    search.value = iconBrowserQuery;
+    panel.appendChild(search);
+
+    // Result count as text, referenced by the search field, so a
+    // screen-reader user hears how many icons a query left.
+    var count = settingsRow('p', 'toolrail-settings-empty');
+    count.id = 'toolrail-iconbrowser-count';
+    panel.appendChild(count);
+    var grid = settingsRow('div', 'toolrail-settings-icongrid');
+    panel.appendChild(grid);
+
+    function matches(query) {
+      var q = query.trim().toLowerCase().replace(/\s+/g, ' ');
+      if (q === '') {
+        return DASHICON_NAMES;
+      }
+      return DASHICON_NAMES.filter(function (name) {
+        return name.indexOf(q) !== -1 || name.replace(/-/g, ' ').indexOf(q) !== -1;
+      });
+    }
+
+    function render() {
+      var hits = matches(iconBrowserQuery);
+      var shown = hits.slice(0, ICON_BROWSER_LIMIT);
+      grid.textContent = '';
+      if (!hits.length) {
+        count.textContent = sprintf(
+          /* translators: %s: the search text. */
+          __('No icon matches "%s".', 'toolrail'),
+          iconBrowserQuery.trim()
+        );
+        return;
+      }
+      count.textContent = shown.length < hits.length
+        ? sprintf(
+          /* translators: 1: icons shown, 2: icons matching. */
+          __('Showing the first %1$d of %2$d icons. Type to narrow the list.', 'toolrail'),
+          shown.length,
+          hits.length
+        )
+        : sprintf(
+          /* translators: %d: number of icons. */
+          _n('%d icon.', '%d icons.', hits.length, 'toolrail'),
+          hits.length
+        );
+      var currentValue = iconInput.value.trim();
+      shown.forEach(function (name) {
+        var value = 'dashicons-' + name;
+        var chip = settingsButton('', function () {
+          iconInput.value = value;
+          // The field's own input handler clears a refusal and redraws
+          // the preview; fire it the way typing would.
+          iconInput.dispatchEvent(new Event('input', { bubbles: true }));
+          speak(sprintf(
+            /* translators: %s: Dashicon name. */
+            __('Icon set to %s.', 'toolrail'),
+            name
+          ));
+          closeIconBrowser('#toolrail-editform-icon');
+        }, 'toolrail-settings-iconresult');
+        var glyph = document.createElement('span');
+        glyph.className = 'dashicons ' + value;
+        glyph.setAttribute('aria-hidden', 'true');
+        chip.appendChild(glyph);
+        var label = document.createElement('span');
+        label.textContent = name;
+        chip.appendChild(label);
+        chip.setAttribute('aria-pressed', currentValue === value ? 'true' : 'false');
+        chip.dataset.icon = name;
+        grid.appendChild(chip);
+      });
+    }
+
+    search.addEventListener('input', function () {
+      iconBrowserQuery = search.value;
+      render();
+    });
+    render();
+    return panel;
   }
 
   function buildSettingsContent(node, searchValue) {
@@ -9077,6 +9505,8 @@
     moveSlot: moveSlot,
     getPinMeta: getPinMeta,
     setPinMeta: setPinMeta,
+    getPinData: getPinData,
+    setPinData: setPinData,
     saveConfig: saveConfig,
     loadConfig: loadConfig,
     deleteConfig: deleteConfig,
