@@ -134,6 +134,14 @@ function check() {
 }
 
 function local() {
+  // The port is the one value from the command line that reaches the
+  // shell (npx is a .cmd on Windows, so spawnSync runs through cmd.exe,
+  // which parses metacharacters in arguments). An integer or nothing.
+  const port = flags.port === undefined ? 9400 : Number(flags.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    console.error('x --port must be a whole number from 1 to 65535.');
+    process.exit(1);
+  }
   const bp = blueprint({ step: 'activatePlugin', pluginPath: 'toolrail/toolrail.php' });
   const outDir = path.join(rootDir, 'build', 'playground');
   fs.mkdirSync(outDir, { recursive: true });
@@ -150,7 +158,7 @@ function local() {
     'server',
     `--blueprint=${path.relative(rootDir, localFile).split(path.sep).join('/')}`,
     '--mount=.:/wordpress/wp-content/plugins/toolrail',
-    `--port=${flags.port || 9400}`,
+    `--port=${port}`,
   ];
   console.log('npx ' + args.join(' '));
   const result = spawnSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', args, {

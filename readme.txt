@@ -31,7 +31,7 @@ Everything the rail inserts is an ordinary core block. Deactivating this plugin 
 * Pick the toolbar's colors: Dark (default), Light and Gray presets, or your own background + text pair. Every preset meets the WCAG contrast minimums, and with custom colors the focus ring and pressed markers are adjusted automatically so they stay visible.
 * A Help panel ("?" next to the gear) explains inserting, pinning, moving the toolbar, the keyboard model, saved sets, and what a highlighted tool means. It never opens by itself; open it from the "?" or from Toolbar settings. You can hide the "?" from the toolbar — the panel stays available from Toolbar settings.
 * Tools that need a canvas click are dimmed while the Section overview is open, with the reason in their tooltip. They stay in the keyboard order and keep their names for screen readers. Tools that open a panel stay available.
-* Provider API for themes and plugins: PHP filter `toolrail_tool_providers` + JS `window.toolrail.registerTool()`. A tool can declare `supports: { canvas: true }` when its action needs a canvas click, so the toolbar dims it in any mode that captures the canvas. A plugin can nest its tools under a pinned tool and keep its own settings on that pin; the settings go with the pin when it is unpinned, and travel in saved sets.
+* Provider API for themes and plugins: PHP filter `toolrail_tool_providers` + JS `window.toolrail.registerTool()`. A tool can declare `supports: { canvas: true }` when its action needs a canvas click, so the toolbar dims it in any mode that captures the canvas. A plugin can nest its tools under a pinned tool and keep its own settings on that pin. The settings are removed when the pin is unpinned, and come back when you load a saved set that has them.
 
 == Frequently Asked Questions ==
 
@@ -51,7 +51,7 @@ Its own preferences, and nothing else. The plugin stores no options and writes n
 
 = 1.0.1 =
 * Edit a pinned tool's name, description and icon from Toolbar settings. Pick the icon from a searchable list of Dashicons, or type up to three characters. Saved sets keep these, and set files carry them along.
-* Plugins can keep their own settings on a pinned tool. The settings go with the tool when it is unpinned, and travel in saved sets.
+* Plugins can keep their own settings on a pinned tool. The settings are removed when the tool is unpinned, and travel in saved sets.
 
 = 1.0.0 =
 * First public release.

@@ -42,8 +42,9 @@ if (!function_exists('add_action')) {
 }
 
 // Fixed so the blueprint's landingPage can name it. Free on a fresh
-// install (core seeds posts 1–3); if it is taken, the demo post is left
-// out rather than landing under a different ID.
+// install (core seeds posts 1–3); if another post already owns it,
+// toolrail_demo_create_post() throws, so the blueprint step fails
+// instead of landing on a different ID.
 define('TOOLRAIL_DEMO_POST_ID', 2026);
 
 /**
@@ -299,8 +300,14 @@ function toolrail_demo_content() {
  * key in the scope (dock, saved sets, colors, the sibling plugins'
  * `toolrail-ext:*` keys) is left as it was.
  *
+ * The write is verified by reading the row back, not by update_user_meta()'s
+ * return value: that is false both when the write fails AND when the stored
+ * value is already identical, and this script may run twice on one site
+ * (idempotent by design), where a same-second re-run stores the same array.
+ *
  * @param int $user_id The admin.
  * @return void
+ * @throws RuntimeException When the seeded scope does not read back.
  */
 function toolrail_demo_seed_preferences($user_id) {
     global $wpdb;
@@ -340,6 +347,15 @@ function toolrail_demo_seed_preferences($user_id) {
     $prefs['toolrail']  = $scope;
     $prefs['_modified'] = gmdate('Y-m-d\TH:i:s') . '.000Z';
     update_user_meta($user_id, $meta_key, $prefs);
+    wp_cache_delete($user_id, 'user_meta');
+    $stored = get_user_meta($user_id, $meta_key, true);
+    if (!is_array($stored) || !isset($stored['toolrail']) || $stored['toolrail'] !== $scope) {
+        throw new RuntimeException(sprintf(
+            'Editor Tool Rail demo: the toolbar preferences did not persist to %s for user %d.',
+            $meta_key,
+            $user_id
+        ));
+    }
 }
 
 /**

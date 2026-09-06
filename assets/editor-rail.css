@@ -348,14 +348,14 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
 .toolrail-region[data-dock="right"] .toolrail-scrollbtn[data-dir="prev"]::before,
 .toolrail-region[data-dock="float"] .toolrail-scrollbtn[data-dir="prev"]::before {
     border-top-width: 0;
-    border-bottom-color: currentColor;
+    border-bottom-color: currentcolor;
 }
 
 .toolrail-region[data-dock="left"] .toolrail-scrollbtn[data-dir="next"]::before,
 .toolrail-region[data-dock="right"] .toolrail-scrollbtn[data-dir="next"]::before,
 .toolrail-region[data-dock="float"] .toolrail-scrollbtn[data-dir="next"]::before {
     border-bottom-width: 0;
-    border-top-color: currentColor;
+    border-top-color: currentcolor;
 }
 
 .toolrail-region[data-dock="top"] .toolrail-scrollbtn,
@@ -367,13 +367,13 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
 .toolrail-region[data-dock="top"] .toolrail-scrollbtn[data-dir="prev"]::before,
 .toolrail-region[data-dock="bottom"] .toolrail-scrollbtn[data-dir="prev"]::before {
     border-left-width: 0;
-    border-right-color: currentColor;
+    border-right-color: currentcolor;
 }
 
 .toolrail-region[data-dock="top"] .toolrail-scrollbtn[data-dir="next"]::before,
 .toolrail-region[data-dock="bottom"] .toolrail-scrollbtn[data-dir="next"]::before {
     border-right-width: 0;
-    border-left-color: currentColor;
+    border-left-color: currentcolor;
 }
 
 .toolrail-region[data-dock="left"] #toolrail-rail {
@@ -404,7 +404,7 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
     flex: 0 0 auto;
     cursor: grab;
     border-radius: 3px;
-    background-image: radial-gradient(currentColor 1px, transparent 1px);
+    background-image: radial-gradient(currentcolor 1px, transparent 1px);
     background-size: 4px 4px;
     color: var(--toolrail-grip);
     opacity: 0.9;
@@ -469,7 +469,7 @@ body.toolrail-dragging * {
 }
 
 .toolrail-tool svg {
-    fill: currentColor;
+    fill: currentcolor;
 }
 
 /* Core block icons (@wordpress/icons) ship viewBox-only SVGs with NO
@@ -665,7 +665,7 @@ body.toolrail-dragging * {
     width: 0;
     height: 0;
     border-left: 5px solid transparent;
-    border-bottom: 5px solid currentColor;
+    border-bottom: 5px solid currentcolor;
 }
 
 .toolrail-region[data-dock="left"][data-wide] .toolrail-flyout-glyph,
@@ -674,7 +674,7 @@ body.toolrail-dragging * {
     position: static;
     flex: 0 0 auto;
     margin-left: auto;
-    border-left: 5px solid currentColor;
+    border-left: 5px solid currentcolor;
     border-top: 5px solid transparent;
     border-bottom: 5px solid transparent;
 }
@@ -745,7 +745,7 @@ body.toolrail-dragging * {
 }
 
 .toolrail-flyout-icon svg {
-    fill: currentColor;
+    fill: currentcolor;
 }
 
 /* Pinned quick slots carry no on-rail removal affordance: the hover × and
@@ -1751,7 +1751,7 @@ body.toolrail-hides-inserter .block-editor-block-list__block-side-inserter-popov
 }
 
 /* Up to three characters in the 24px icon box, sized so "Aa" and a single
-   emoji both fit; currentColor so every appearance preset applies. */
+   emoji both fit; currentcolor so every appearance preset applies. */
 .toolrail-tool-glyph {
     display: inline-block;
     max-width: 28px;
@@ -1762,7 +1762,7 @@ body.toolrail-hides-inserter .block-editor-block-list__block-side-inserter-popov
     letter-spacing: -0.02em;
     white-space: nowrap;
     text-overflow: clip;
-    color: currentColor;
+    color: currentcolor;
 }
 
 /* Inside a wrapping row the name must never force the buttons onto a
