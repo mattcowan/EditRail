@@ -50,7 +50,7 @@ Its own preferences, and nothing else. The plugin stores no options and writes n
 == Upgrade Notice ==
 
 = 1.0.1 =
-The plugin folder and main file are now editrail/editrail.php. If you installed 1.0.0 from a zip, delete the old toolrail folder after this version is active, so two copies do not load. If you deploy from git, WordPress deactivates the old path; activate Editrail again once in the Plugins screen. Your pinned tools and saved sets are kept.
+The plugin folder is now editrail. After a zip upgrade, delete the old toolrail folder so two copies do not load. After a git deploy, activate Editrail again once in the Plugins screen. Pinned tools and saved sets are kept.
 
 == Changelog ==
 
