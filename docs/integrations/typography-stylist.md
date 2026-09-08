@@ -1,9 +1,9 @@
-# Typography Stylist × Editor Tool Rail — integration handoff
+# Typography Stylist × Editrail — integration handoff
 
-**Audience:** the Typography Stylist work session. Editor Tool Rail's session never edits
+**Audience:** the Typography Stylist work session. Editrail's session never edits
 Typography Stylist (session boundary); this doc + snippet is everything TS needs to land
-its side. Degradation is graceful in both directions: TS without Toolrail changes nothing,
-Toolrail without TS simply never shows the button.
+its side. Degradation is graceful in both directions: TS without Editrail changes nothing,
+Editrail without TS simply never shows the button.
 
 ## The zero-code lane already works — read this before writing anything
 
@@ -72,12 +72,12 @@ built-ins, and `'text'` is an alias for the pinned Paragraph slot. A block name
 pinned block, `typost/block` included. If the author has unpinned the parent, the tool
 renders at top level instead of vanishing.
 
-**PHP** — declare yourself a provider so Toolrail enqueues your script on post-editor
+**PHP** — declare yourself a provider so Editrail enqueues your script on post-editor
 screens, ordered after the rail:
 
 ```php
 // In your enqueue_block_editor_assets callback (default priority is fine —
-// Toolrail registers its 'toolrail-editor-rail' handle at priority 1 and
+// Editrail registers its 'toolrail-editor-rail' handle at priority 1 and
 // enqueues providers at priority 20):
 wp_register_script(
     'typost-rail-tools',
@@ -101,11 +101,11 @@ add_filter( 'toolrail_tool_providers', function ( $providers ) {
 
 ## Graceful degradation
 
-- **Toolrail absent:** the `toolrail_tool_providers` filter never runs and
+- **Editrail absent:** the `toolrail_tool_providers` filter never runs and
   `toolrail-editor-rail` is never a registered handle, so your `wp_register_script`
   dependency keeps the script from loading. Nothing to guard. If you'd rather register the
   filter unconditionally, that's also safe — an unconsumed filter is free.
-- **Toolrail present, TS's JS decides not to register** (e.g. a capability your payload
+- **Editrail present, TS's JS decides not to register** (e.g. a capability your payload
   gates): simply don't call `registerTool`; the Text flyout then has no TS entry (Text
   itself stays a plain armed tool with no flyout glyph when it has no children).
 
@@ -121,6 +121,6 @@ provider validator refuses entries without a `sanitize_key`-stable `slug` or a
 
 With both plugins active on mnc4: open any post, focus the rail's Text button,
 press ArrowRight — the flyout should list Typography Stylist; picking it and clicking the
-canvas should insert `typost/block`. Toolrail's own E2E spec
+canvas should insert `typost/block`. Editrail's own E2E spec
 (`tests/e2e/rail.spec.js`, "registration API" describe block) proves the identical path
 with a fixture tool if you want a reference.

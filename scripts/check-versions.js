@@ -2,8 +2,8 @@
  * Version-consistency guard. Zero dependencies.
  *
  * The plugin's version lives in SIX places that must always agree:
- *   1. toolrail.php  — plugin header `Version:`
- *   2. toolrail.php  — `define('TOOLRAIL_VERSION', '...')`
+ *   1. editrail.php  — plugin header `Version:`
+ *   2. editrail.php  — `define('TOOLRAIL_VERSION', '...')`
  *   3. readme.txt    — `Stable tag:`
  *   4. package.json  — `version`
  *   5+6. package-lock.json — root `version` and `packages[""].version`
@@ -58,14 +58,14 @@ function extract(pattern, text, label, file) {
   return m[1].trim();
 }
 
-const mainPhp = read('toolrail.php');
+const mainPhp = read('editrail.php');
 const readmeTxt = read('readme.txt');
 const pkg = JSON.parse(read('package.json'));
 const lock = JSON.parse(read('package-lock.json'));
 
 const versions = {
-  'plugin header (toolrail.php)': extract(/^\s*\*\s*Version:\s*(.+)$/m, mainPhp, 'plugin header Version', 'toolrail.php'),
-  'TOOLRAIL_VERSION (toolrail.php)': extract(/define\(\s*'TOOLRAIL_VERSION'\s*,\s*'([^']+)'/, mainPhp, 'TOOLRAIL_VERSION', 'toolrail.php'),
+  'plugin header (editrail.php)': extract(/^\s*\*\s*Version:\s*(.+)$/m, mainPhp, 'plugin header Version', 'editrail.php'),
+  'TOOLRAIL_VERSION (editrail.php)': extract(/define\(\s*'TOOLRAIL_VERSION'\s*,\s*'([^']+)'/, mainPhp, 'TOOLRAIL_VERSION', 'editrail.php'),
   'Stable tag (readme.txt)': extract(/^Stable tag:\s*(.+)$/m, readmeTxt, 'Stable tag', 'readme.txt'),
   'version (package.json)': String(pkg.version || ''),
   // The lockfile carries the root version twice; npm does not fail on a

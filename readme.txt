@@ -1,10 +1,10 @@
-=== Editor Tool Rail ===
+=== Editrail ===
 Contributors: matthewneilcowan
 Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.0.0
+Stable tag: 1.0.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -12,7 +12,7 @@ A movable, graphics-editor-style toolbar for the block editor. Click a tool, the
 
 == Description ==
 
-Editor Tool Rail adds a toolbar to the post editor, docked to the left edge by default, movable to any edge or floating as a palette. Selecting a tool arms it: the next click in the canvas inserts that tool's block at the click point, then the rail returns to Select (Shift-click keeps the tool armed).
+Editrail adds a toolbar to the post editor, docked to the left edge by default, movable to any edge or floating as a palette. Selecting a tool arms it: the next click in the canvas inserts that tool's block at the click point, then the rail returns to Select (Shift-click keeps the tool armed).
 
 Everything the rail inserts is an ordinary core block. Deactivating this plugin changes nothing about how authored content renders or stays editable.
 
@@ -46,7 +46,16 @@ Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a 
 
 Its own preferences, and nothing else. The plugin stores no options and writes nothing into posts. Deleting it from the Plugins screen removes the pinned tools, toolbar position, saved sets and colors from every user account on the site. Deactivating it keeps them, so the toolbar comes back as you left it when you activate the plugin again. In rare cases a browser holds an older local copy of the pins, the toolbar position or the saved sets (from a session where the browser's storage failed, or from a version before 0.1.6). If you install the plugin again in that browser, that copy comes back one time. Unpin what you do not want; it does not return again.
 
+== Upgrade Notice ==
+
+= 1.0.1 =
+The plugin folder and main file are now editrail/editrail.php. If you installed 1.0.0 from a zip, delete the old toolrail folder after this version is active, so two copies do not load. If you deploy from git, WordPress deactivates the old path; activate Editrail again once in the Plugins screen. Your pinned tools and saved sets are kept.
+
 == Changelog ==
+
+= 1.0.1 =
+
+* Renamed the plugin to Editrail. The slug and the text domain are now `editrail`. The stored preferences, the JavaScript API and the PHP filter keep their names, so pinned tools, saved sets and extensions are not affected.
 
 = 1.0.0 =
 * First public release.

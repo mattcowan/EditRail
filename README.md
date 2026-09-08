@@ -1,4 +1,4 @@
-# Editor Tool Rail
+# Editrail
 
 A movable, graphics-editor-style toolbar for the WordPress block editor. Click a tool, then click the canvas to insert a core block at that point.
 
@@ -6,7 +6,7 @@ This file is for developers and for people who read the repository. The user gui
 
 ## Why it exists
 
-The block editor's inserter is a menu: open it, find the block, and it lands where the cursor is. A graphics editor works the other way. You pick a tool, and the next click puts the thing where you clicked. Editor Tool Rail brings that model to the block editor.
+The block editor's inserter is a menu: open it, find the block, and it lands where the cursor is. A graphics editor works the other way. You pick a tool, and the next click puts the thing where you clicked. Editrail brings that model to the block editor.
 
 Two things set it apart from other toolbar plugins:
 
@@ -17,8 +17,8 @@ Two things set it apart from other toolbar plugins:
 
 | Requirement | Version | Where it is declared |
 | --- | --- | --- |
-| WordPress | 6.5 or later | `toolrail.php`, `Requires at least` |
-| PHP | 7.4 or later | `toolrail.php`, `Requires PHP` |
+| WordPress | 6.5 or later | `editrail.php`, `Requires at least` |
+| PHP | 7.4 or later | `editrail.php`, `Requires PHP` |
 
 The PHP files use no feature above 7.4. The JavaScript is ES5 with no build step, so the files in `assets/` are the files that ship.
 
@@ -27,19 +27,19 @@ The PHP files use no feature above 7.4. The JavaScript is ES5 with no build step
 **From WordPress.org**
 
 1. Open Plugins > Add New in wp-admin.
-2. Search for "Editor Tool Rail".
+2. Search for "Editrail".
 3. Install and activate it.
 
 **From a GitHub release**
 
 1. Open the Releases page of this repository.
-2. Download `toolrail.zip` from the release.
+2. Download `editrail.zip` from the release.
 3. Open Plugins > Add New > Upload Plugin in wp-admin and upload the file.
 
 **From a checkout**
 
 1. Run `npm install`.
-2. Run `npm run package`. This checks that every version number agrees, then writes `toolrail.zip`.
+2. Run `npm run package`. This checks that every version number agrees, then writes `editrail.zip`.
 3. Upload the zip as above, or copy the checkout into `wp-content/plugins/`.
 
 `.distignore` decides what goes into the zip. A new production file ships without a change to any script. A new development-only file must be added to `.distignore`.
@@ -155,7 +155,7 @@ Separate plugins by the same author use this contract and nothing else: rulers a
 | `npm run test:php` | Runs the PHPUnit suite in `tests/phpunit/`. It needs no WordPress install. The bootstrap stubs the few WordPress functions the PHP uses. |
 | `npm run test:e2e` | Runs the Playwright suite in `tests/e2e/` against a WordPress site. |
 | `npm run check-versions` | Checks that all six version numbers agree. |
-| `npm run package` | Runs the version check, then builds `toolrail.zip`. |
+| `npm run package` | Runs the version check, then builds `editrail.zip`. |
 
 To run the e2e suite on a disposable WordPress, start Docker and use wp-env:
 
@@ -175,4 +175,4 @@ The plugin stores per-user editor preferences and nothing else. They live in the
 
 ## License
 
-GPL-2.0-or-later. See the plugin header in `toolrail.php`.
+GPL-2.0-or-later. See the plugin header in `editrail.php`.

@@ -1,6 +1,11 @@
 # Changelog
 
-Every version of Editor Tool Rail. The 0.1.x versions were development builds that were never listed on WordPress.org. The WordPress.org listing (`readme.txt`) shows only listed versions.
+Every version of Editrail (Editor Tool Rail before 1.0.1). The 0.1.x versions were development builds that were never listed on WordPress.org. The WordPress.org listing (`readme.txt`) shows only listed versions.
+
+## 1.0.1
+
+* Renamed the plugin to Editrail. The slug, the main file and the text domain are now `editrail`. The `toolrail_` prefix, the `window.toolrail` API, the `toolrail_tool_providers` filter, the script handle and the stored preferences keep their names, so pinned tools, saved sets and extensions are not affected.
+* Upgrade note: the plugin folder and main file changed from toolrail/toolrail.php to editrail/editrail.php. A zip upgrade installs a second folder; delete the old toolrail folder after Editrail is active, so two copies do not load. A git deploy leaves the old path in active_plugins; activate Editrail again once. A CI checkout is not affected: wp-env activates by folder basename.
 
 ## 1.0.0
 

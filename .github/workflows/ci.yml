@@ -95,6 +95,6 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: toolrail-${{ github.sha }}
-          path: toolrail.zip
+          name: editrail-${{ github.sha }}
+          path: editrail.zip
           retention-days: 7

@@ -3,7 +3,7 @@
 # and a stray `git push --tags` can never publish anything by accident).
 #
 #   Any release (tag vX.Y.Z, or vX.Y.Z-beta.N with "pre-release" checked):
-#     version guard -> package -> attach toolrail.zip to the GitHub Release.
+#     version guard -> package -> attach editrail.zip to the GitHub Release.
 #
 # WordPress.org is NOT touched by this workflow. The plugin is not listed
 # yet; when it is, add the 10up/action-wordpress-plugin-deploy step here
@@ -52,7 +52,7 @@ jobs:
       - run: npm run package
 
       - name: Attach zip to the GitHub Release
-        run: gh release upload "$TAG" toolrail.zip --clobber
+        run: gh release upload "$TAG" editrail.zip --clobber
         env:
           TAG: ${{ github.event.release.tag_name }}
           GH_TOKEN: ${{ github.token }}

@@ -1,5 +1,5 @@
 /**
- * Editor Tool Rail — a graphics-editor-style left toolbar for the block editor.
+ * Editrail — a graphics-editor-style left toolbar for the block editor.
  *
  * Unlike a launcher rail, tools here ARM: selecting a tool means the next
  * click in the canvas inserts that tool's block at the click point, then the
@@ -379,11 +379,11 @@
   var RAIL_BAND = 53;
 
   var DOCK_LABELS = {
-    left: __('Left edge', 'toolrail'),
-    right: __('Right edge, past the side panel', 'toolrail'),
-    top: __('Top, panels open downward', 'toolrail'),
-    bottom: __('Bottom, panels open upward', 'toolrail'),
-    float: __('Floating', 'toolrail')
+    left: __('Left edge', 'editrail'),
+    right: __('Right edge, past the side panel', 'editrail'),
+    top: __('Top, panels open downward', 'editrail'),
+    bottom: __('Bottom, panels open upward', 'editrail'),
+    float: __('Floating', 'editrail')
   };
 
   function loadPosition() {
@@ -591,10 +591,10 @@
   var APPEARANCE_MODES = ['dark', 'light', 'gray', 'custom'];
 
   var APPEARANCE_LABELS = {
-    dark: __('Dark (default)', 'toolrail'),
-    light: __('Light', 'toolrail'),
-    gray: __('Gray', 'toolrail'),
-    custom: __('Custom colors', 'toolrail')
+    dark: __('Dark (default)', 'editrail'),
+    light: __('Light', 'editrail'),
+    gray: __('Gray', 'editrail'),
+    custom: __('Custom colors', 'editrail')
   };
 
   /** Every token applyAppearance() manages — must match the stylesheet's
@@ -866,7 +866,7 @@
   var SHAPES = [
     {
       id: 'shape-circle',
-      label: __('Circle', 'toolrail'),
+      label: __('Circle', 'editrail'),
       icon: '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9" fill="currentColor"/></svg>',
       createBlock: function () {
         return shapeSvgBlock('<circle cx="100" cy="100" r="96" fill="' + SHAPE_FILL + '"/>');
@@ -874,7 +874,7 @@
     },
     {
       id: 'shape-rounded-rect',
-      label: __('Rounded rectangle', 'toolrail'),
+      label: __('Rounded rectangle', 'editrail'),
       icon: '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><rect x="3" y="6" width="18" height="12" rx="4" fill="currentColor"/></svg>',
       createBlock: function () {
         return wp.blocks.createBlock('core/group', {
@@ -890,7 +890,7 @@
     },
     {
       id: 'shape-hexagon',
-      label: __('Hexagon', 'toolrail'),
+      label: __('Hexagon', 'editrail'),
       icon: '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 2l8.7 5v10L12 22l-8.7-5V7z"/></svg>',
       createBlock: function () {
         return shapeSvgBlock('<polygon points="100,4 183,52 183,148 100,196 17,148 17,52" fill="' + SHAPE_FILL + '"/>');
@@ -898,7 +898,7 @@
     },
     {
       id: 'shape-star',
-      label: __('Star', 'toolrail'),
+      label: __('Star', 'editrail'),
       icon: '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/></svg>',
       createBlock: function () {
         return shapeSvgBlock('<polygon points="100,6 129,65 194,74 147,120 158,185 100,154 42,185 53,120 6,74 71,65" fill="' + SHAPE_FILL + '"/>');
@@ -920,13 +920,13 @@
   var BUILTIN_TOOLS = [
     {
       id: 'select',
-      label: __('Select', 'toolrail'),
+      label: __('Select', 'editrail'),
       icon: ICONS.select,
       select: true
     },
     {
       id: 'shape',
-      label: __('Shape', 'toolrail'),
+      label: __('Shape', 'editrail'),
       icon: ICONS.shape,
       children: SHAPES,
       // SHELVED with Phase 4 (owner decision 2026-08-27): shapes wait
@@ -939,8 +939,8 @@
     },
     {
       id: 'overview',
-      label: __('Section overview', 'toolrail'),
-      hint: __('zoom the canvas out and reorder sections; Enter a section to reorder the blocks inside it', 'toolrail'),
+      label: __('Section overview', 'editrail'),
+      hint: __('zoom the canvas out and reorder sections; Enter a section to reorder the blocks inside it', 'editrail'),
       icon: ICONS.overview,
       // A toggle, not an arming tool: reordering is an ordinary editing
       // action, so the deactivation promise is untouched (roadmap R6).
@@ -1431,7 +1431,7 @@
       postId: r.id,
       title: recordText(r.title) || sprintf(
         /* translators: %d: pattern post id. */
-        __('Pattern %d', 'toolrail'),
+        __('Pattern %d', 'editrail'),
         r.id
       ),
       content: recordText(r.content),
@@ -1584,11 +1584,11 @@
           id: 'pin:' + name,
           label: sprintf(
             /* translators: %s: pattern title. */
-            __('%s (pinned pattern)', 'toolrail'),
+            __('%s (pinned pattern)', 'editrail'),
             pattern.title
           ),
           shortLabel: pattern.title,
-          hint: __('click in the canvas to insert this pattern; manage pinned tools in Toolbar settings', 'toolrail'),
+          hint: __('click in the canvas to insert this pattern; manage pinned tools in Toolbar settings', 'editrail'),
           icon: ICONS.pattern,
           blockIcon: null,
           insertBlock: '',
@@ -1606,7 +1606,7 @@
         id: 'pin:' + name,
         label: sprintf(
           /* translators: %s: block title. */
-          __('%s (pinned block)', 'toolrail'),
+          __('%s (pinned block)', 'editrail'),
           type.title || name
         ),
         // Wide mode's visible row text: the block title alone — the
@@ -1614,7 +1614,7 @@
         // the accessible name (which keeps it) still contains the
         // visible text, so WCAG 2.5.3 Label in Name holds.
         shortLabel: type.title || name,
-        hint: __('click in the canvas to insert; manage pinned tools in Toolbar settings', 'toolrail'),
+        hint: __('click in the canvas to insert; manage pinned tools in Toolbar settings', 'editrail'),
         icon: '',
         blockIcon: type.icon,
         insertBlock: name,
@@ -1811,8 +1811,8 @@
   /** The tooltip suffix that tells a pointer user WHY a tool is dimmed. */
   function unavailableReason() {
     return railMode() === 'overview'
-      ? __('not available in Section overview', 'toolrail')
-      : __('not available now', 'toolrail');
+      ? __('not available in Section overview', 'editrail')
+      : __('not available now', 'editrail');
   }
 
   /**
@@ -2002,7 +2002,7 @@
   function notifyCannotInsert(label) {
     var message = sprintf(
       /* translators: %s: block or pattern title. */
-      __('%s cannot be inserted here.', 'toolrail'),
+      __('%s cannot be inserted here.', 'editrail'),
       label
     );
     try {
@@ -2684,7 +2684,7 @@
 
     var legend = document.createElement('legend');
     legend.className = 'toolrail-settings-label';
-    legend.textContent = __('Toolbar position', 'toolrail');
+    legend.textContent = __('Toolbar position', 'editrail');
     fieldset.appendChild(legend);
 
     DOCKS.forEach(function (dock) {
@@ -2715,7 +2715,7 @@
     });
 
     var hint = settingsRow('p', 'toolrail-settings-empty');
-    hint.textContent = __('You can also drag the toolbar by the grip at its end; releasing near an edge snaps it there.', 'toolrail');
+    hint.textContent = __('You can also drag the toolbar by the grip at its end; releasing near an edge snaps it there.', 'editrail');
     fieldset.appendChild(hint);
 
     return fieldset;
@@ -2740,7 +2740,7 @@
 
     var legend = document.createElement('legend');
     legend.className = 'toolrail-settings-label';
-    legend.textContent = __('Tool names', 'toolrail');
+    legend.textContent = __('Tool names', 'editrail');
     fieldset.appendChild(legend);
 
     var wideRow = settingsRow('label', 'toolrail-settings-positionrow');
@@ -2752,7 +2752,7 @@
       setWide(wideInput.checked);
     });
     var wideText = settingsRow('span', '');
-    wideText.textContent = __('Show tool names beside the icons (wide toolbar)', 'toolrail');
+    wideText.textContent = __('Show tool names beside the icons (wide toolbar)', 'editrail');
     wideRow.appendChild(wideInput);
     wideRow.appendChild(wideText);
     fieldset.appendChild(wideRow);
@@ -2770,7 +2770,7 @@
       rerender();
     });
     var toggleText = settingsRow('span', '');
-    toggleText.textContent = __('Show an expand/contract button on the toolbar', 'toolrail');
+    toggleText.textContent = __('Show an expand/contract button on the toolbar', 'editrail');
     toggleRow.appendChild(toggleInput);
     toggleRow.appendChild(toggleText);
     fieldset.appendChild(toggleRow);
@@ -2779,7 +2779,7 @@
     // wide mode applies. Stated rather than disabling the controls —
     // a disabled checkbox hides its state.
     var hint = settingsRow('p', 'toolrail-settings-empty');
-    hint.textContent = __('Tool names show on left, right and floating toolbars.', 'toolrail');
+    hint.textContent = __('Tool names show on left, right and floating toolbars.', 'editrail');
     fieldset.appendChild(hint);
 
     return fieldset;
@@ -2801,13 +2801,13 @@
     if (ratio < 4.5) {
       return sprintf(
         /* translators: %s: measured contrast ratio, e.g. "2.5:1". */
-        __('These colors measure %s, below the 4.5:1 minimum for text. They are applied anyway; the focus ring and pressed markers are adjusted automatically and stay at 3:1 or better.', 'toolrail'),
+        __('These colors measure %s, below the 4.5:1 minimum for text. They are applied anyway; the focus ring and pressed markers are adjusted automatically and stay at 3:1 or better.', 'editrail'),
         formatted
       );
     }
     return sprintf(
       /* translators: %s: measured contrast ratio, e.g. "12.6:1". */
-      __('Custom colors applied. Text contrast is %s.', 'toolrail'),
+      __('Custom colors applied. Text contrast is %s.', 'editrail'),
       formatted
     );
   }
@@ -2848,7 +2848,7 @@
 
     var legend = document.createElement('legend');
     legend.className = 'toolrail-settings-label';
-    legend.textContent = __('Appearance', 'toolrail');
+    legend.textContent = __('Appearance', 'editrail');
     fieldset.appendChild(legend);
 
     var current = loadAppearance();
@@ -2883,8 +2883,8 @@
 
     var inputs = {};
     [
-      { key: 'bg', id: 'toolrail-settings-appearance-bg', label: __('Background color', 'toolrail') },
-      { key: 'fg', id: 'toolrail-settings-appearance-fg', label: __('Text color', 'toolrail') }
+      { key: 'bg', id: 'toolrail-settings-appearance-bg', label: __('Background color', 'editrail') },
+      { key: 'fg', id: 'toolrail-settings-appearance-fg', label: __('Text color', 'editrail') }
     ].forEach(function (spec) {
       var row = settingsRow('label', 'toolrail-settings-colorrow');
       var text = settingsRow('span', 'toolrail-settings-colortext');
@@ -3006,7 +3006,7 @@
    */
   function importConfigPayload(parsed) {
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.blocks)) {
-      return { ok: false, error: __('Not a Toolrail set file — expected JSON with a "blocks" array.', 'toolrail') };
+      return { ok: false, error: __('Not an Editrail set file — expected JSON with a "blocks" array.', 'editrail') };
     }
     var valid = parsed.blocks.filter(function (n) {
       return typeof n === 'string' && (BLOCK_NAME_PATTERN.test(n) || PATTERN_SLOT_PATTERN.test(n));
@@ -3021,7 +3021,7 @@
 
     var base = typeof parsed.name === 'string' && parsed.name.trim() !== ''
       ? parsed.name.trim()
-      : __('Imported set', 'toolrail');
+      : __('Imported set', 'editrail');
     var map = loadConfigs();
     var name = base;
     var n = 2;
@@ -3046,7 +3046,7 @@
   function importStatusMessage(result) {
     var msg = sprintf(
       /* translators: 1: set name, 2: block count. */
-      _n('Imported "%1$s" (%2$d block).', 'Imported "%1$s" (%2$d blocks).', result.total, 'toolrail'),
+      _n('Imported "%1$s" (%2$d block).', 'Imported "%1$s" (%2$d blocks).', result.total, 'editrail'),
       result.name,
       result.total
     );
@@ -3057,7 +3057,7 @@
           '%d of them is not available on this site — it stays in the set and appears when its plugin or theme is active.',
           '%d of them are not available on this site — they stay in the set and appear when their plugin or theme is active.',
           result.missing,
-          'toolrail'
+          'editrail'
         ),
         result.missing
       );
@@ -3065,14 +3065,14 @@
     if (result.duplicates > 0) {
       msg += ' ' + sprintf(
         /* translators: %d: count of repeated block names collapsed to one. */
-        _n('%d repeated block was listed once.', '%d repeated blocks were listed once.', result.duplicates, 'toolrail'),
+        _n('%d repeated block was listed once.', '%d repeated blocks were listed once.', result.duplicates, 'editrail'),
         result.duplicates
       );
     }
     if (result.dropped > 0) {
       msg += ' ' + sprintf(
         /* translators: %d: count of invalid entries. */
-        _n('%d invalid entry was ignored.', '%d invalid entries were ignored.', result.dropped, 'toolrail'),
+        _n('%d invalid entry was ignored.', '%d invalid entries were ignored.', result.dropped, 'editrail'),
         result.dropped
       );
     }
@@ -3082,16 +3082,16 @@
   function buildSettingsContent(node, searchValue) {
     var head = settingsRow('div', 'toolrail-settings-head');
     var title = settingsRow('h2', 'toolrail-settings-title');
-    title.textContent = __('Toolbar settings', 'toolrail');
+    title.textContent = __('Toolbar settings', 'editrail');
     title.id = 'toolrail-settings-title';
     head.appendChild(title);
     var close = settingsButton('×', function () { closeSettings(true); }, 'toolrail-settings-close');
-    close.setAttribute('aria-label', __('Close toolbar settings', 'toolrail'));
+    close.setAttribute('aria-label', __('Close toolbar settings', 'editrail'));
     head.appendChild(close);
     node.appendChild(head);
 
     var note = settingsRow('p', 'toolrail-settings-note');
-    note.textContent = __('Pinned tools appear on the toolbar as quick-insert tools: any block type, and any pattern. They are saved to your account on this site, for you only.', 'toolrail');
+    note.textContent = __('Pinned tools appear on the toolbar as quick-insert tools: any block type, and any pattern. They are saved to your account on this site, for you only.', 'editrail');
     node.appendChild(note);
 
     node.appendChild(buildPositionControl());
@@ -3107,14 +3107,14 @@
     // list — right above the search that added it, owner decision
     // 2026-08-27) ---
     var pinnedHead = settingsRow('h3', 'toolrail-settings-subtitle');
-    pinnedHead.textContent = __('Pinned tools', 'toolrail');
+    pinnedHead.textContent = __('Pinned tools', 'editrail');
     node.appendChild(pinnedHead);
 
     var pinnedList = settingsRow('ul', 'toolrail-settings-pinned');
     var slots = loadSlots();
     if (!slots.length) {
       var empty = settingsRow('p', 'toolrail-settings-empty');
-      empty.textContent = __('Nothing pinned yet.', 'toolrail');
+      empty.textContent = __('Nothing pinned yet.', 'editrail');
       node.appendChild(empty);
     }
     slots.forEach(function (name, i) {
@@ -3126,16 +3126,16 @@
       if (isPattern) {
         label.textContent = pattern
           ? pattern.title
-          : name.slice(PATTERN_SLOT_PREFIX.length) + ' ' + __('(inactive)', 'toolrail');
+          : name.slice(PATTERN_SLOT_PREFIX.length) + ' ' + __('(inactive)', 'editrail');
       } else {
-        label.textContent = type ? type.title : name + ' ' + __('(inactive)', 'toolrail');
+        label.textContent = type ? type.title : name + ' ' + __('(inactive)', 'editrail');
       }
       li.appendChild(label);
       if (isPattern) {
         // The kind, visible, OUTSIDE the name span — so the arrow and
         // Unpin names below stay "Move <title> up" / "Unpin <title>".
         var kindTag = settingsRow('span', 'toolrail-settings-tag');
-        kindTag.textContent = __('Pattern', 'toolrail');
+        kindTag.textContent = __('Pattern', 'editrail');
         li.appendChild(kindTag);
       }
 
@@ -3149,7 +3149,7 @@
           refreshSettings([row + '.toolrail-settings-up', row + '.toolrail-settings-down']);
         }
       }, 'toolrail-settings-up');
-      up.setAttribute('aria-label', sprintf(__('Move %s up', 'toolrail'), label.textContent));
+      up.setAttribute('aria-label', sprintf(__('Move %s up', 'editrail'), label.textContent));
       up.disabled = i === 0;
       li.appendChild(up);
 
@@ -3158,7 +3158,7 @@
           refreshSettings([row + '.toolrail-settings-down', row + '.toolrail-settings-up']);
         }
       }, 'toolrail-settings-down');
-      down.setAttribute('aria-label', sprintf(__('Move %s down', 'toolrail'), label.textContent));
+      down.setAttribute('aria-label', sprintf(__('Move %s down', 'editrail'), label.textContent));
       down.disabled = i === slots.length - 1;
       li.appendChild(down);
 
@@ -3167,11 +3167,11 @@
       // With "Remove" on screen and "Unpin Paragraph" as the name, a
       // speech-input user saying "click Remove" matched nothing. It also
       // matches the wording of the block menu's own Unpin item.
-      var remove = settingsButton(__('Unpin', 'toolrail'), function () {
+      var remove = settingsButton(__('Unpin', 'editrail'), function () {
         unpinBlock(name);
         refreshSettings('#toolrail-settings-search');
       }, 'toolrail-settings-remove');
-      remove.setAttribute('aria-label', sprintf(__('Unpin %s', 'toolrail'), label.textContent));
+      remove.setAttribute('aria-label', sprintf(__('Unpin %s', 'editrail'), label.textContent));
       li.appendChild(remove);
 
       li.dataset.block = name;
@@ -3202,7 +3202,7 @@
     // meaning ("the one-time upgrade has run") is unrelated, and
     // clearing it would re-arm the upgrade path.
     var restoreRow = settingsRow('div', 'toolrail-settings-restorerow');
-    restoreRow.appendChild(settingsButton(__('Restore default tools', 'toolrail'), function () {
+    restoreRow.appendChild(settingsButton(__('Restore default tools', 'editrail'), function () {
       // A corrupt stored list must not be silently replaced (review
       // 2026-08-27, finding 3): loadSlots() returns [] for key-absent,
       // key-empty AND unparseable alike, and "restore" overwriting a
@@ -3217,7 +3217,7 @@
           parseFailed = true;
         }
         if (parseFailed) {
-          pinnedStatus = __('Your saved pinned list could not be read, so nothing was changed. Pin a block or load a saved set to start a fresh list.', 'toolrail');
+          pinnedStatus = __('Your saved pinned list could not be read, so nothing was changed. Pin a block or load a saved set to start a fresh list.', 'editrail');
           refreshSettings('.toolrail-settings-restore');
           return;
         }
@@ -3228,7 +3228,7 @@
       });
       if (!missing.length) {
         // Say so rather than silently no-op'ing.
-        pinnedStatus = __('All default tools are already pinned.', 'toolrail');
+        pinnedStatus = __('All default tools are already pinned.', 'editrail');
         refreshSettings('.toolrail-settings-restore');
         return;
       }
@@ -3237,7 +3237,7 @@
       rerender();
       pinnedStatus = sprintf(
         /* translators: %d: number of default tools restored. */
-        _n('Restored %d default tool.', 'Restored %d default tools.', missing.length, 'toolrail'),
+        _n('Restored %d default tool.', 'Restored %d default tools.', missing.length, 'editrail'),
         missing.length
       );
       refreshSettings('.toolrail-settings-restore');
@@ -3247,14 +3247,14 @@
     // --- Add a block ---
     var searchLabel = settingsRow('label', 'toolrail-settings-label');
     searchLabel.setAttribute('for', 'toolrail-settings-search');
-    searchLabel.textContent = __('Add a block or pattern', 'toolrail');
+    searchLabel.textContent = __('Add a block or pattern', 'editrail');
     node.appendChild(searchLabel);
 
     var search = document.createElement('input');
     search.type = 'search';
     search.id = 'toolrail-settings-search';
     search.className = 'toolrail-settings-search';
-    search.placeholder = __('Search block types and patterns…', 'toolrail');
+    search.placeholder = __('Search block types and patterns…', 'editrail');
     search.value = searchValue || '';
     node.appendChild(search);
 
@@ -3280,13 +3280,13 @@
 
       if (!term) {
         var hint = settingsRow('p', 'toolrail-settings-empty');
-        hint.textContent = __('Type to search the available block types and patterns.', 'toolrail');
+        hint.textContent = __('Type to search the available block types and patterns.', 'editrail');
         results.appendChild(hint);
         return;
       }
       if (!blockMatches.length && !patternMatches.length) {
         var none = settingsRow('p', 'toolrail-settings-empty');
-        none.textContent = __('No matching blocks or patterns.', 'toolrail');
+        none.textContent = __('No matching blocks or patterns.', 'editrail');
         results.appendChild(none);
         return;
       }
@@ -3304,18 +3304,18 @@
         return btn;
       };
       blockMatches.forEach(function (t) {
-        var btn = resultButton(t.title, __('Block', 'toolrail'), sprintf(
+        var btn = resultButton(t.title, __('Block', 'editrail'), sprintf(
           /* translators: %s: block title. */
-          __('Pin the %s block to the toolbar', 'toolrail'),
+          __('Pin the %s block to the toolbar', 'editrail'),
           t.title
         ), function () { pinBlock(t.name); });
         btn.dataset.block = t.name;
         results.appendChild(btn);
       });
       patternMatches.forEach(function (p) {
-        var btn = resultButton(p.title, __('Pattern', 'toolrail'), sprintf(
+        var btn = resultButton(p.title, __('Pattern', 'editrail'), sprintf(
           /* translators: %s: pattern title. */
-          __('Pin the %s pattern to the toolbar', 'toolrail'),
+          __('Pin the %s pattern to the toolbar', 'editrail'),
           p.title
         ), function () { pinBlock(p.id); });
         btn.dataset.pattern = p.id;
@@ -3328,7 +3328,7 @@
     // --- Saved sets ---
     node.appendChild(settingsDivider());
     var setsHead = settingsRow('h3', 'toolrail-settings-subtitle');
-    setsHead.textContent = __('Saved sets', 'toolrail');
+    setsHead.textContent = __('Saved sets', 'editrail');
     node.appendChild(setsHead);
 
     // Import/load outcomes land here in TEXT (never color/glyph alone).
@@ -3351,7 +3351,7 @@
     var saveRow = settingsRow('div', 'toolrail-settings-saverow');
     var nameLabel = settingsRow('label', 'toolrail-settings-label');
     nameLabel.setAttribute('for', 'toolrail-settings-setname');
-    nameLabel.textContent = __('Save the current set as', 'toolrail');
+    nameLabel.textContent = __('Save the current set as', 'editrail');
     node.appendChild(nameLabel);
 
     var nameInput = document.createElement('input');
@@ -3359,7 +3359,7 @@
     nameInput.id = 'toolrail-settings-setname';
     nameInput.className = 'toolrail-settings-search';
     saveRow.appendChild(nameInput);
-    saveRow.appendChild(settingsButton(__('Save set', 'toolrail'), function () {
+    saveRow.appendChild(settingsButton(__('Save set', 'editrail'), function () {
       if (saveConfig(nameInput.value)) {
         refreshSettings('#toolrail-settings-setname');
       } else {
@@ -3377,7 +3377,7 @@
         var label = settingsRow('span', 'toolrail-settings-pinnedname');
         label.textContent = cfg;
         li.appendChild(label);
-        var load = settingsButton(__('Load', 'toolrail'), function () {
+        var load = settingsButton(__('Load', 'editrail'), function () {
           loadConfig(cfg);
           var missing = missingBlockCount(loadSlots());
           if (missing > 0) {
@@ -3387,7 +3387,7 @@
                 'Loaded "%1$s". %2$d pinned block is not available on this site and stays hidden until its plugin or theme is active.',
                 'Loaded "%1$s". %2$d pinned blocks are not available on this site and stay hidden until their plugin or theme is active.',
                 missing,
-                'toolrail'
+                'editrail'
               ),
               cfg,
               missing
@@ -3398,24 +3398,24 @@
             // no confirmation that Load had done anything at all.
             settingsStatus = sprintf(
               /* translators: %s: set name. */
-              __('Loaded "%s".', 'toolrail'),
+              __('Loaded "%s".', 'editrail'),
               cfg
             );
           }
           refreshSettings('#toolrail-settings-search');
         }, 'toolrail-settings-load');
-        load.setAttribute('aria-label', sprintf(__('Load the set %s', 'toolrail'), cfg));
+        load.setAttribute('aria-label', sprintf(__('Load the set %s', 'editrail'), cfg));
         li.appendChild(load);
-        var exp = settingsButton(__('Export', 'toolrail'), function () {
+        var exp = settingsButton(__('Export', 'editrail'), function () {
           exportConfig(cfg);
         }, 'toolrail-settings-export');
-        exp.setAttribute('aria-label', sprintf(__('Export the set %s as a file', 'toolrail'), cfg));
+        exp.setAttribute('aria-label', sprintf(__('Export the set %s as a file', 'editrail'), cfg));
         li.appendChild(exp);
-        var del = settingsButton(__('Delete', 'toolrail'), function () {
+        var del = settingsButton(__('Delete', 'editrail'), function () {
           deleteConfig(cfg);
           refreshSettings('#toolrail-settings-setname');
         }, 'toolrail-settings-delset');
-        del.setAttribute('aria-label', sprintf(__('Delete the set %s', 'toolrail'), cfg));
+        del.setAttribute('aria-label', sprintf(__('Delete the set %s', 'editrail'), cfg));
         li.appendChild(del);
         li.dataset.config = cfg;
         setList.appendChild(li);
@@ -3426,7 +3426,7 @@
     // --- Import ---
     var importLabel = settingsRow('label', 'toolrail-settings-label');
     importLabel.setAttribute('for', 'toolrail-settings-import');
-    importLabel.textContent = __('Import a set file', 'toolrail');
+    importLabel.textContent = __('Import a set file', 'editrail');
     node.appendChild(importLabel);
 
     var importInput = document.createElement('input');
@@ -3467,11 +3467,11 @@
         try {
           result = importConfigPayload(JSON.parse(text));
         } catch (e) {
-          result = { ok: false, error: __('That file is not valid JSON.', 'toolrail') };
+          result = { ok: false, error: __('That file is not valid JSON.', 'editrail') };
         }
         reportImport(result.ok ? importStatusMessage(result) : result.error);
       }).catch(function () {
-        reportImport(__('The file could not be read.', 'toolrail'));
+        reportImport(__('The file could not be read.', 'editrail'));
       });
     });
     node.appendChild(importInput);
@@ -3479,7 +3479,7 @@
     // --- Inserting ---
     node.appendChild(settingsDivider());
     var insertHead = settingsRow('h3', 'toolrail-settings-subtitle');
-    insertHead.textContent = __('Inserting', 'toolrail');
+    insertHead.textContent = __('Inserting', 'editrail');
     node.appendChild(insertHead);
 
     var hideInserterRow = settingsRow('label', 'toolrail-settings-positionrow');
@@ -3493,23 +3493,23 @@
       markCanvasArmed();
     });
     var hideInserterText = settingsRow('span', '');
-    hideInserterText.textContent = __('While a tool is armed, hide the editor\'s own "+" buttons (between blocks, and beside an empty block)', 'toolrail');
+    hideInserterText.textContent = __('While a tool is armed, hide the editor\'s own "+" buttons (between blocks, and beside an empty block)', 'editrail');
     hideInserterRow.appendChild(hideInserter);
     hideInserterRow.appendChild(hideInserterText);
     node.appendChild(hideInserterRow);
 
     var hideInserterHint = settingsRow('p', 'toolrail-settings-empty');
-    hideInserterHint.textContent = __('With this off, the "+" can take the click that was meant for the armed tool.', 'toolrail');
+    hideInserterHint.textContent = __('With this off, the "+" can take the click that was meant for the armed tool.', 'editrail');
     node.appendChild(hideInserterHint);
 
     // --- Help ---
     node.appendChild(settingsDivider());
     var helpHead = settingsRow('h3', 'toolrail-settings-subtitle');
-    helpHead.textContent = __('Help', 'toolrail');
+    helpHead.textContent = __('Help', 'editrail');
     node.appendChild(helpHead);
 
     var helpRow = settingsRow('div', 'toolrail-settings-helprow');
-    helpRow.appendChild(settingsButton(__('Open toolbar help', 'toolrail'), function () {
+    helpRow.appendChild(settingsButton(__('Open toolbar help', 'editrail'), function () {
       // openHelp closes this dialog on purpose — the panel and the
       // dialog are sibling surfaces anchored to the same rail.
       var wrapper = document.getElementById('toolrail-region');
@@ -3531,7 +3531,7 @@
       rerender();
     });
     var hideHelpText = settingsRow('span', '');
-    hideHelpText.textContent = __('Hide the Help button from the toolbar (help stays available here)', 'toolrail');
+    hideHelpText.textContent = __('Hide the Help button from the toolbar (help stays available here)', 'editrail');
     hideHelpRow.appendChild(hideHelp);
     hideHelpRow.appendChild(hideHelpText);
     node.appendChild(hideHelpRow);
@@ -3682,56 +3682,56 @@
   function helpSections() {
     return [
       {
-        title: __('Inserting with a tool', 'toolrail'),
+        title: __('Inserting with a tool', 'editrail'),
         body: [
-          __('Select a tool, then click in the canvas. The tool\'s block is inserted at the click point and the toolbar returns to Select. You can also drag a tool from the toolbar into the canvas and drop it where you want it.', 'toolrail'),
-          __('Shift-click in the canvas to keep the tool armed for repeat inserts. Press Escape to return to Select at any time.', 'toolrail'),
-          __('While a tool is armed, the editor\'s own "+" buttons are hidden, so your click goes to the tool. A checkbox under "Inserting" in Toolbar settings turns this off.', 'toolrail')
+          __('Select a tool, then click in the canvas. The tool\'s block is inserted at the click point and the toolbar returns to Select. You can also drag a tool from the toolbar into the canvas and drop it where you want it.', 'editrail'),
+          __('Shift-click in the canvas to keep the tool armed for repeat inserts. Press Escape to return to Select at any time.', 'editrail'),
+          __('While a tool is armed, the editor\'s own "+" buttons are hidden, so your click goes to the tool. A checkbox under "Inserting" in Toolbar settings turns this off.', 'editrail')
         ]
       },
       {
-        title: __('Pinning tools', 'toolrail'),
+        title: __('Pinning tools', 'editrail'),
         body: [
-          __('Pin any block type or pattern as a quick-insert tool: search under "Add a block or pattern" in Toolbar settings, drag a block or pattern from the inserter onto the toolbar, or choose "Pin to toolbar" in a block\'s options menu.', 'toolrail'),
-          __('Drop a block from the canvas onto the toolbar to pin its type, or to save it as a pattern with its settings and contents and pin that. "Save as pattern and pin to toolbar…" in the block\'s options menu does the same.', 'toolrail'),
-          __('Remove a pin with Unpin in Toolbar settings, or "Unpin from toolbar" in the block\'s options menu.', 'toolrail')
+          __('Pin any block type or pattern as a quick-insert tool: search under "Add a block or pattern" in Toolbar settings, drag a block or pattern from the inserter onto the toolbar, or choose "Pin to toolbar" in a block\'s options menu.', 'editrail'),
+          __('Drop a block from the canvas onto the toolbar to pin its type, or to save it as a pattern with its settings and contents and pin that. "Save as pattern and pin to toolbar…" in the block\'s options menu does the same.', 'editrail'),
+          __('Remove a pin with Unpin in Toolbar settings, or "Unpin from toolbar" in the block\'s options menu.', 'editrail')
         ]
       },
       {
-        title: __('Section overview', 'toolrail'),
+        title: __('Section overview', 'editrail'),
         body: [
-          __('The Section overview tool zooms the canvas out and outlines every top-level block. Click an outline to show its reorder controls — arrows to move it, "Reorder inside" to step into a section — or simply drag an outline to a new spot. Zoom with the +/− buttons and pan long documents with the mouse wheel.', 'toolrail'),
-          __('Select several outlines at once: Shift+click for a range, Ctrl+click (Cmd on Mac) to add or remove one, Alt+click to remove one, or drag a rectangle from empty space. Shift+Arrow extends the selection from the focused outline and Ctrl+Space toggles it. The arrows or a drag then move the whole group; a locked block shows a padlock and stays where it is.', 'toolrail'),
-          __('Escape closes the overview, the same as the Done button. While you drag an outline or draw a selection rectangle, Escape cancels that first and keeps the overview open. To leave a level without closing, use "Up one level" or the breadcrumb. Closing centers and selects the block you last picked, moved or stepped into; if you touched nothing, it returns you to where you were scrolled.', 'toolrail')
+          __('The Section overview tool zooms the canvas out and outlines every top-level block. Click an outline to show its reorder controls — arrows to move it, "Reorder inside" to step into a section — or simply drag an outline to a new spot. Zoom with the +/− buttons and pan long documents with the mouse wheel.', 'editrail'),
+          __('Select several outlines at once: Shift+click for a range, Ctrl+click (Cmd on Mac) to add or remove one, Alt+click to remove one, or drag a rectangle from empty space. Shift+Arrow extends the selection from the focused outline and Ctrl+Space toggles it. The arrows or a drag then move the whole group; a locked block shows a padlock and stays where it is.', 'editrail'),
+          __('Escape closes the overview, the same as the Done button. While you drag an outline or draw a selection rectangle, Escape cancels that first and keeps the overview open. To leave a level without closing, use "Up one level" or the breadcrumb. Closing centers and selects the block you last picked, moved or stepped into; if you touched nothing, it returns you to where you were scrolled.', 'editrail')
         ]
       },
       {
-        title: __('Moving the toolbar', 'toolrail'),
+        title: __('Moving the toolbar', 'editrail'),
         body: [
-          __('Drag the toolbar by its grip and release near an edge to dock it there, or let go anywhere to float it over the editor.', 'toolrail'),
-          __('The keyboard path: pick a position under "Toolbar position" in Toolbar settings.', 'toolrail')
+          __('Drag the toolbar by its grip and release near an edge to dock it there, or let go anywhere to float it over the editor.', 'editrail'),
+          __('The keyboard path: pick a position under "Toolbar position" in Toolbar settings.', 'editrail')
         ]
       },
       {
-        title: __('Keyboard', 'toolrail'),
+        title: __('Keyboard', 'editrail'),
         body: [
-          __('The toolbar is one Tab stop. Arrow keys move between tools, following the toolbar\'s orientation; Home and End jump to the ends.', 'toolrail'),
-          __('ArrowRight opens a tool\'s flyout on a vertical toolbar; ArrowDown opens it on a horizontal one. Escape closes any open panel.', 'toolrail')
+          __('The toolbar is one Tab stop. Arrow keys move between tools, following the toolbar\'s orientation; Home and End jump to the ends.', 'editrail'),
+          __('ArrowRight opens a tool\'s flyout on a vertical toolbar; ArrowDown opens it on a horizontal one. Escape closes any open panel.', 'editrail')
         ]
       },
       {
-        title: __('Saved sets', 'toolrail'),
+        title: __('Saved sets', 'editrail'),
         body: [
-          __('Save the current pinned arrangement as a named set in Toolbar settings, and load a set to switch arrangements.', 'toolrail'),
-          __('Export a set as a small JSON file and import it on another site. Blocks the site does not have stay in the set and appear when their plugin or theme is active.', 'toolrail')
+          __('Save the current pinned arrangement as a named set in Toolbar settings, and load a set to switch arrangements.', 'editrail'),
+          __('Export a set as a small JSON file and import it on another site. Blocks the site does not have stay in the set and appear when their plugin or theme is active.', 'editrail')
         ]
       },
       {
         // R10: the three kinds of "blue" on the rail, named. STE.
-        title: __('What a highlighted tool means', 'toolrail'),
+        title: __('What a highlighted tool means', 'editrail'),
         body: [
-          __('A highlighted insert tool is armed: your next click in the canvas inserts its block. Select is highlighted whenever no tool is armed.', 'toolrail'),
-          __('A highlighted Section overview means that view is open, not that a tool is armed. Tools that need a canvas click are dimmed while the overview is open, and become available again when you close it.', 'toolrail')
+          __('A highlighted insert tool is armed: your next click in the canvas inserts its block. Select is highlighted whenever no tool is armed.', 'editrail'),
+          __('A highlighted Section overview means that view is open, not that a tool is armed. Tools that need a canvas click are dimmed while the overview is open, and become available again when you close it.', 'editrail')
         ]
       }
     ];
@@ -3762,11 +3762,11 @@
 
     var head = settingsRow('div', 'toolrail-settings-head');
     var title = settingsRow('h2', 'toolrail-settings-title');
-    title.textContent = __('Toolbar help', 'toolrail');
+    title.textContent = __('Toolbar help', 'editrail');
     title.id = 'toolrail-help-title';
     head.appendChild(title);
     var close = settingsButton('×', function () { closeHelp(true); }, 'toolrail-settings-close');
-    close.setAttribute('aria-label', __('Close toolbar help', 'toolrail'));
+    close.setAttribute('aria-label', __('Close toolbar help', 'editrail'));
     head.appendChild(close);
     node.appendChild(head);
 
@@ -4018,7 +4018,7 @@
         custom = attrs.metadata.name;
       }
     }
-    return custom || (type && type.title) || name || __('Block', 'toolrail');
+    return custom || (type && type.title) || name || __('Block', 'editrail');
   }
 
   /** clientIds at the current root, in document order. */
@@ -4287,7 +4287,7 @@
     if (announceIt) {
       speak(sprintf(
         /* translators: %d: zoom percentage. */
-        __('Zoom %d%%.', 'toolrail'),
+        __('Zoom %d%%.', 'editrail'),
         Math.round(overviewMetrics.k * 100)
       ));
     }
@@ -4452,7 +4452,7 @@
           pick.setAttribute('aria-label', isMember && overviewSelectedIds.length > 1
             ? sprintf(
               /* translators: %s: the pick button's base accessible name. */
-              __('%s — selected', 'toolrail'),
+              __('%s — selected', 'editrail'),
               base
             )
             : base);
@@ -4617,7 +4617,7 @@
   function announceOverviewSelection() {
     var n = overviewSelectedIds.length;
     if (!n) {
-      speak(__('Selection cleared.', 'toolrail'));
+      speak(__('Selection cleared.', 'editrail'));
       return;
     }
     var lockedCount = overviewSelectedIds.filter(function (id) {
@@ -4625,13 +4625,13 @@
     }).length;
     var message = sprintf(
       /* translators: %d: number of selected blocks. */
-      _n('%d block selected.', '%d blocks selected.', n, 'toolrail'),
+      _n('%d block selected.', '%d blocks selected.', n, 'editrail'),
       n
     );
     if (lockedCount) {
       message += ' ' + sprintf(
         /* translators: %d: number of locked blocks in the selection. */
-        _n('%d is locked and cannot move.', '%d are locked and cannot move.', lockedCount, 'toolrail'),
+        _n('%d is locked and cannot move.', '%d are locked and cannot move.', lockedCount, 'editrail'),
         lockedCount
       );
     }
@@ -5052,12 +5052,12 @@
     // visible Esc hint (owner feedback 2026-08-27: make it clearer that
     // this is a modal-like state and how to leave it).
     var modeTitle = settingsRow('strong', 'toolrail-ov-title');
-    modeTitle.textContent = __('Section overview', 'toolrail');
+    modeTitle.textContent = __('Section overview', 'editrail');
     bar.appendChild(modeTitle);
 
     var crumbs = document.createElement('nav');
     crumbs.className = 'toolrail-ov-crumbs';
-    crumbs.setAttribute('aria-label', __('Overview level', 'toolrail'));
+    crumbs.setAttribute('aria-label', __('Overview level', 'editrail'));
 
     var chain = [];
     var id = overviewRoot;
@@ -5081,7 +5081,7 @@
       btn.textContent = label;
       btn.setAttribute('aria-label', sprintf(
         /* translators: %s: breadcrumb level label. */
-        __('Go to %s', 'toolrail'),
+        __('Go to %s', 'editrail'),
         label
       ));
       btn.addEventListener('click', function () {
@@ -5090,7 +5090,7 @@
       crumbs.appendChild(btn);
     };
 
-    addCrumb(__('All sections', 'toolrail'), '', chain.length === 0);
+    addCrumb(__('All sections', 'editrail'), '', chain.length === 0);
     chain.forEach(function (cid, i) {
       addCrumb(overviewBlockLabel(cid), cid, i === chain.length - 1);
     });
@@ -5101,7 +5101,7 @@
       up.type = 'button';
       up.className = 'toolrail-ov-btn toolrail-ov-uplevel';
       up.dataset.ovAction = 'up-level';
-      up.textContent = __('Up one level', 'toolrail');
+      up.textContent = __('Up one level', 'editrail');
       up.addEventListener('click', function () {
         drillTo((sel && sel.getBlockRootClientId(overviewRoot)) || '');
       });
@@ -5116,7 +5116,7 @@
     zoomOut.className = 'toolrail-ov-btn toolrail-ov-zoom';
     zoomOut.dataset.ovAction = 'zoom-out';
     zoomOut.textContent = '−';
-    zoomOut.setAttribute('aria-label', __('Zoom out', 'toolrail'));
+    zoomOut.setAttribute('aria-label', __('Zoom out', 'editrail'));
     zoomOut.addEventListener('click', function () {
       setOverviewZoom(overviewMetrics.k / 1.25, true);
     });
@@ -5132,14 +5132,14 @@
     zoomIn.className = 'toolrail-ov-btn toolrail-ov-zoom';
     zoomIn.dataset.ovAction = 'zoom-in';
     zoomIn.textContent = '+';
-    zoomIn.setAttribute('aria-label', __('Zoom in', 'toolrail'));
+    zoomIn.setAttribute('aria-label', __('Zoom in', 'editrail'));
     zoomIn.addEventListener('click', function () {
       setOverviewZoom(overviewMetrics.k * 1.25, true);
     });
     bar.appendChild(zoomIn);
 
     var escHint = settingsRow('span', 'toolrail-ov-esc');
-    escHint.textContent = __('Esc exits', 'toolrail');
+    escHint.textContent = __('Esc exits', 'editrail');
     bar.appendChild(escHint);
 
     var close = document.createElement('button');
@@ -5148,7 +5148,7 @@
     close.dataset.ovAction = 'close';
     // A labeled exit, not a bare × — the visible text IS the accessible
     // name, so speech input's "click Done" just works.
-    close.textContent = __('Done', 'toolrail');
+    close.textContent = __('Done', 'editrail');
     close.addEventListener('click', function () {
       closeOverview(true);
     });
@@ -5162,7 +5162,7 @@
     var order = overviewOrder();
     if (!order.length) {
       var empty = settingsRow('p', 'toolrail-ov-empty');
-      empty.textContent = __('Nothing to reorder here.', 'toolrail');
+      empty.textContent = __('Nothing to reorder here.', 'editrail');
       bar.appendChild(empty);
     }
     if (overviewSelected && order.indexOf(overviewSelected) === -1) {
@@ -5225,7 +5225,7 @@
       pick.setAttribute('aria-expanded', isActive ? 'true' : 'false');
       var pickLabel = sprintf(
         /* translators: 1: block title, 2: its position, 3: count. */
-        __('%1$s, position %2$d of %3$d — show reorder controls', 'toolrail'),
+        __('%1$s, position %2$d of %3$d — show reorder controls', 'editrail'),
         label,
         i + 1,
         order.length
@@ -5233,7 +5233,7 @@
       if (!movable) {
         pickLabel = sprintf(
           /* translators: %s: the pick button's accessible name. */
-          __('%s — locked, cannot be moved', 'toolrail'),
+          __('%s — locked, cannot be moved', 'editrail'),
           pickLabel
         );
       }
@@ -5243,7 +5243,7 @@
       pick.setAttribute('aria-label', isMember && groupSize > 1
         ? sprintf(
           /* translators: %s: the pick button's base accessible name. */
-          __('%s — selected', 'toolrail'),
+          __('%s — selected', 'editrail'),
           pickLabel
         )
         : pickLabel);
@@ -5321,7 +5321,7 @@
         var lockTag = settingsRow('span', 'toolrail-ov-locktag');
         lockTag.setAttribute('aria-hidden', 'true');
         lockTag.innerHTML = OVERVIEW_LOCK_ICON + ' ';
-        lockTag.appendChild(document.createTextNode(__('Locked', 'toolrail')));
+        lockTag.appendChild(document.createTextNode(__('Locked', 'editrail')));
         li.appendChild(lockTag);
       }
 
@@ -5332,7 +5332,7 @@
       name.textContent = groupActive
         ? sprintf(
           /* translators: %d: number of selected blocks. */
-          _n('%d block selected', '%d blocks selected', groupSize, 'toolrail'),
+          _n('%d block selected', '%d blocks selected', groupSize, 'editrail'),
           groupSize
         )
         : label;
@@ -5341,7 +5341,7 @@
       var pos = settingsRow('span', 'toolrail-ov-pos');
       pos.textContent = sprintf(
         /* translators: 1: position, 2: count. */
-        __('%1$d of %2$d', 'toolrail'),
+        __('%1$d of %2$d', 'editrail'),
         i + 1,
         order.length
       );
@@ -5374,12 +5374,12 @@
       upBtn.setAttribute('aria-label', groupActive
         ? sprintf(
           /* translators: %d: number of selected blocks. */
-          _n('Move %d selected block up', 'Move %d selected blocks up', groupSize, 'toolrail'),
+          _n('Move %d selected block up', 'Move %d selected blocks up', groupSize, 'editrail'),
           groupSize
         )
         : sprintf(
           /* translators: 1: block title, 2: its position. */
-          __('Move %1$s, position %2$d, up', 'toolrail'),
+          __('Move %1$s, position %2$d, up', 'editrail'),
           label,
           i + 1
         ));
@@ -5403,12 +5403,12 @@
       downBtn.setAttribute('aria-label', groupActive
         ? sprintf(
           /* translators: %d: number of selected blocks. */
-          _n('Move %d selected block down', 'Move %d selected blocks down', groupSize, 'toolrail'),
+          _n('Move %d selected block down', 'Move %d selected blocks down', groupSize, 'editrail'),
           groupSize
         )
         : sprintf(
           /* translators: 1: block title, 2: its position. */
-          __('Move %1$s, position %2$d, down', 'toolrail'),
+          __('Move %1$s, position %2$d, down', 'editrail'),
           label,
           i + 1
         ));
@@ -5433,7 +5433,7 @@
         // a keyboard-driven surface "Enter" reads as the key, not the
         // action). The visible text leads the accessible name (WCAG
         // 2.5.3 Label in Name).
-        enter.textContent = __('Reorder inside', 'toolrail');
+        enter.textContent = __('Reorder inside', 'editrail');
         // The name is group-scoped in group mode, like both arrows —
         // otherwise a browse-mode pass reads "2 blocks selected", two
         // group-scoped arrows, then a single-block "Reorder inside
@@ -5447,13 +5447,13 @@
               'Reorder inside — not available while %d block is selected',
               'Reorder inside — not available while %d blocks are selected',
               groupSize,
-              'toolrail'
+              'editrail'
             ),
             groupSize
           )
           : sprintf(
             /* translators: 1: block title, 2: its position. */
-            __('Reorder inside %1$s, position %2$d', 'toolrail'),
+            __('Reorder inside %1$s, position %2$d', 'editrail'),
             label,
             i + 1
           ));
@@ -5535,7 +5535,7 @@
     if (overviewOrder()[to] !== clientId) {
       speak(sprintf(
         /* translators: %s: block title. */
-        __('%s cannot be moved.', 'toolrail'),
+        __('%s cannot be moved.', 'editrail'),
         overviewBlockLabel(clientId)
       ));
       return;
@@ -5559,7 +5559,7 @@
 
     speak(sprintf(
       /* translators: 1: block title, 2: new position, 3: count. */
-      __('Moved %1$s to position %2$d of %3$d.', 'toolrail'),
+      __('Moved %1$s to position %2$d of %3$d.', 'editrail'),
       overviewBlockLabel(clientId),
       to + 1,
       order.length
@@ -5645,7 +5645,7 @@
     if (locked.length === 1) {
       lockedSuffix = ' ' + sprintf(
         /* translators: %s: block title. */
-        __('%s is locked and stays where it is.', 'toolrail'),
+        __('%s is locked and stays where it is.', 'editrail'),
         overviewBlockLabel(locked[0])
       );
     } else if (locked.length) {
@@ -5655,7 +5655,7 @@
           '%d locked block stays where it is.',
           '%d locked blocks stay where they are.',
           locked.length,
-          'toolrail'
+          'editrail'
         ),
         locked.length
       );
@@ -5669,7 +5669,7 @@
       speak(members.length === 1
         ? sprintf(
           /* translators: %s: block title. */
-          __('%s cannot be moved.', 'toolrail'),
+          __('%s cannot be moved.', 'editrail'),
           overviewBlockLabel(members[0])
         )
         : sprintf(
@@ -5678,7 +5678,7 @@
             'The %d selected block is locked and cannot be moved.',
             'The %d selected blocks are locked and cannot be moved.',
             members.length,
-            'toolrail'
+            'editrail'
           ),
           members.length
         ));
@@ -5777,14 +5777,14 @@
           'Moved %1$d block to position %2$d of %3$d.',
           'Moved %1$d blocks to position %2$d of %3$d.',
           movable.length,
-          'toolrail'
+          'editrail'
         ),
         movable.length,
         insertAt + 1,
         finalOrder.length
       ) + lockedSuffix);
     } else {
-      speak(__('The move could not be completed.', 'toolrail'));
+      speak(__('The move could not be completed.', 'editrail'));
     }
   }
 
@@ -5995,14 +5995,14 @@
     if (overviewRoot) {
       message = sprintf(
         /* translators: 1: block title, 2: number of blocks inside it. */
-        _n('Viewing inside %1$s — %2$d block.', 'Viewing inside %1$s — %2$d blocks.', count, 'toolrail'),
+        _n('Viewing inside %1$s — %2$d block.', 'Viewing inside %1$s — %2$d blocks.', count, 'editrail'),
         overviewBlockLabel(overviewRoot),
         count
       );
     } else {
       message = sprintf(
         /* translators: %d: number of top-level sections. */
-        _n('Viewing all sections — %d section.', 'Viewing all sections — %d sections.', count, 'toolrail'),
+        _n('Viewing all sections — %d section.', 'Viewing all sections — %d sections.', count, 'editrail'),
         count
       );
     }
@@ -6013,7 +6013,7 @@
     // locked-member note.
     speak((announcePrefix ? announcePrefix + ' ' : '')
       + message
-      + (hadGroup ? ' ' + __('Selection cleared.', 'toolrail') : ''));
+      + (hadGroup ? ' ' + __('Selection cleared.', 'editrail') : ''));
   }
 
   /**
@@ -6073,12 +6073,12 @@
         // Abandon the rectangle; the selection goes back as found.
         cancelOverviewMarquee(true);
         latchOverviewCancelClick();
-        speak(__('Selection rectangle canceled. Press Escape again to close the overview.', 'toolrail'));
+        speak(__('Selection rectangle canceled. Press Escape again to close the overview.', 'editrail'));
       } else if (overviewDrag) {
         // Abandon an in-flight drag; nothing moves.
         finishOverviewDrag();
         latchOverviewCancelClick();
-        speak(__('Move canceled. Press Escape again to close the overview.', 'toolrail'));
+        speak(__('Move canceled. Press Escape again to close the overview.', 'editrail'));
       } else {
         closeOverview(true);
       }
@@ -6186,7 +6186,7 @@
     if (overviewRoot && sel && !sel.getBlock(overviewRoot)) {
       // A forced root change is a root change like any other — announce
       // it (review 2026-08-27, finding 5), composed with the reason.
-      drillTo('', __('The section you were viewing was removed.', 'toolrail'));
+      drillTo('', __('The section you were viewing was removed.', 'editrail'));
       return;
     }
     var sig = overviewCurrentSignature();
@@ -6209,7 +6209,7 @@
     var overlay = document.createElement('div');
     overlay.id = 'toolrail-overview';
     overlay.setAttribute('role', 'region');
-    overlay.setAttribute('aria-label', __('Section overview', 'toolrail'));
+    overlay.setAttribute('aria-label', __('Section overview', 'editrail'));
 
     // The overview is a MODE: while it is open the overlay captures all
     // pointer events over the canvas (CSS pointer-events: auto), so a
@@ -6424,7 +6424,7 @@
         'Section overview — %d section. Choose a section to show its reorder controls; Escape closes the overview. Insert tools are unavailable until you close the overview.',
         'Section overview — %d sections. Choose a section to show its reorder controls; Escape closes the overview. Insert tools are unavailable until you close the overview.',
         count,
-        'toolrail'
+        'editrail'
       ),
       count
     ));
@@ -6717,11 +6717,11 @@
     if (landing) {
       speak(sprintf(
         /* translators: %s: block title. */
-        __('Section overview closed. %s is selected.', 'toolrail'),
+        __('Section overview closed. %s is selected.', 'editrail'),
         overviewBlockLabel(landing)
       ));
     } else {
-      speak(__('Section overview closed.', 'toolrail'));
+      speak(__('Section overview closed.', 'editrail'));
     }
   }
 
@@ -7228,7 +7228,7 @@
     var grip = document.createElement('div');
     grip.className = 'toolrail-grip';
     grip.setAttribute('aria-hidden', 'true');
-    grip.title = __('Drag to move the toolbar', 'toolrail');
+    grip.title = __('Drag to move the toolbar', 'editrail');
     grip.addEventListener('mousedown', startDrag);
     return grip;
   }
@@ -7246,7 +7246,7 @@
     rail.id = 'toolrail-rail';
     rail.setAttribute('role', 'toolbar');
     rail.setAttribute('aria-orientation', isVertical() ? 'vertical' : 'horizontal');
-    rail.setAttribute('aria-label', __('Tools', 'toolrail'));
+    rail.setAttribute('aria-label', __('Tools', 'editrail'));
 
     // The head shares the scroll/tail container grammar (and, crucially,
     // their cross-axis padding): the chevron is a .toolrail-tool, so
@@ -7273,8 +7273,8 @@
       wideToggle.type = 'button';
       wideToggle.className = 'toolrail-tool toolrail-tool--wide-toggle';
       wideToggle.dataset.tool = 'wide-toggle';
-      wideToggle.setAttribute('aria-label', __('Show tool names', 'toolrail'));
-      wideToggle.title = __('Show tool names', 'toolrail');
+      wideToggle.setAttribute('aria-label', __('Show tool names', 'editrail'));
+      wideToggle.title = __('Show tool names', 'editrail');
       wideToggle.setAttribute('aria-pressed', isWide() ? 'true' : 'false');
       // A toggle (pressed = "names are showing"), so it takes the R10
       // bar-only treatment — built inline, it would otherwise miss the
@@ -7289,7 +7289,7 @@
       var wideLabel = document.createElement('span');
       wideLabel.className = 'toolrail-tool-label';
       // Contained in the accessible name "Show tool names" (2.5.3).
-      wideLabel.textContent = __('Tool names', 'toolrail');
+      wideLabel.textContent = __('Tool names', 'editrail');
       wideToggle.appendChild(wideLabel);
       wideToggle.addEventListener('click', function () {
         // setWide owns the pressed-state paint (shared with the
@@ -7371,7 +7371,7 @@
       btn.dataset.dir = dir;
       btn.setAttribute('aria-hidden', 'true');
       btn.tabIndex = -1;
-      btn.title = __('Scroll the tools', 'toolrail');
+      btn.title = __('Scroll the tools', 'editrail');
       btn.hidden = true;
       // A real <button> takes focus on mousedown even at tabIndex -1 —
       // the grip never had this problem only because it is a <div>. An
@@ -7443,8 +7443,8 @@
       help.type = 'button';
       help.className = 'toolrail-tool toolrail-tool--help';
       help.dataset.tool = 'help';
-      help.setAttribute('aria-label', __('Toolbar help', 'toolrail'));
-      help.title = __('Toolbar help', 'toolrail');
+      help.setAttribute('aria-label', __('Toolbar help', 'editrail'));
+      help.title = __('Toolbar help', 'editrail');
       help.setAttribute('aria-haspopup', 'dialog');
       help.setAttribute('aria-expanded', helpOpen ? 'true' : 'false');
       help.tabIndex = -1;
@@ -7455,7 +7455,7 @@
       help.appendChild(helpIcon);
       var helpLabel = document.createElement('span');
       helpLabel.className = 'toolrail-tool-label';
-      helpLabel.textContent = __('Help', 'toolrail');
+      helpLabel.textContent = __('Help', 'editrail');
       help.appendChild(helpLabel);
       help.addEventListener('click', function () {
         openHelp(wrapper);
@@ -7468,8 +7468,8 @@
     gear.type = 'button';
     gear.className = 'toolrail-tool toolrail-tool--settings';
     gear.dataset.tool = 'settings';
-    gear.setAttribute('aria-label', __('Toolbar settings — choose which blocks show as quick-insert tools', 'toolrail'));
-    gear.title = __('Toolbar settings', 'toolrail');
+    gear.setAttribute('aria-label', __('Toolbar settings — choose which blocks show as quick-insert tools', 'editrail'));
+    gear.title = __('Toolbar settings', 'editrail');
     gear.setAttribute('aria-haspopup', 'dialog');
     gear.setAttribute('aria-expanded', settingsOpen ? 'true' : 'false');
     gear.tabIndex = -1;
@@ -7480,7 +7480,7 @@
     gear.appendChild(gearIcon);
     var gearLabel = document.createElement('span');
     gearLabel.className = 'toolrail-tool-label';
-    gearLabel.textContent = __('Settings', 'toolrail');
+    gearLabel.textContent = __('Settings', 'editrail');
     gear.appendChild(gearLabel);
     gear.addEventListener('click', function () {
       openSettings(wrapper);
@@ -7545,7 +7545,7 @@
     // (the Phase 0 gap: the theme rail was unreachable via that shortcut).
     wrapper.className = 'interface-navigable-region toolrail-region';
     wrapper.setAttribute('role', 'region');
-    wrapper.setAttribute('aria-label', __('Tool rail', 'toolrail'));
+    wrapper.setAttribute('aria-label', __('Tool rail', 'editrail'));
     wrapper.tabIndex = -1;
     // Every dock-dependent style keys off this: rail orientation, which
     // border carries the edge, and which way surfaces open.
@@ -7927,7 +7927,7 @@
         disp = null;
       }
       if (!disp || typeof disp.saveEntityRecord !== 'function') {
-        reject(new Error(__('The editor\'s data store is not available.', 'toolrail')));
+        reject(new Error(__('The editor\'s data store is not available.', 'editrail')));
         return;
       }
       var record = {
@@ -7938,7 +7938,7 @@
       };
       Promise.resolve(disp.saveEntityRecord('postType', 'wp_block', record, { throwOnError: true })).then(function (saved) {
         if (!saved || !saved.id) {
-          reject(new Error(__('WordPress did not return the saved pattern.', 'toolrail')));
+          reject(new Error(__('WordPress did not return the saved pattern.', 'editrail')));
           return;
         }
         // Keep OUR markup as the content: the record core returns may
@@ -7989,10 +7989,10 @@
     var head = settingsRow('div', 'toolrail-settings-head');
     var title = settingsRow('h2', 'toolrail-settings-title');
     title.id = 'toolrail-adddialog-title';
-    title.textContent = __('Add to toolbar', 'toolrail');
+    title.textContent = __('Add to toolbar', 'editrail');
     head.appendChild(title);
     var close = settingsButton('×', function () { closeAddDialog(ids[0]); }, 'toolrail-settings-close');
-    close.setAttribute('aria-label', __('Close', 'toolrail'));
+    close.setAttribute('aria-label', __('Close', 'editrail'));
     head.appendChild(close);
     node.appendChild(head);
 
@@ -8003,31 +8003,31 @@
     // or nothing) ---
     if (single) {
       var typeHead = settingsRow('h3', 'toolrail-settings-subtitle');
-      typeHead.textContent = __('Block type', 'toolrail');
+      typeHead.textContent = __('Block type', 'editrail');
       node.appendChild(typeHead);
       var typeNote = settingsRow('p', 'toolrail-settings-empty');
       if (isPinned(single.name)) {
         typeNote.textContent = sprintf(
           /* translators: %s: block title. */
-          __('The %s block type is already pinned.', 'toolrail'),
+          __('The %s block type is already pinned.', 'editrail'),
           singleTitle
         );
         node.appendChild(typeNote);
       } else {
-        typeNote.textContent = __('A plain quick-insert tool for this block type, without this block\'s settings.', 'toolrail');
+        typeNote.textContent = __('A plain quick-insert tool for this block type, without this block\'s settings.', 'editrail');
         node.appendChild(typeNote);
         var pinRow = settingsRow('div', 'toolrail-settings-helprow');
         pinRow.appendChild(settingsButton(
           sprintf(
             /* translators: %s: block title. */
-            __('Pin the %s block type', 'toolrail'),
+            __('Pin the %s block type', 'editrail'),
             singleTitle
           ),
           function () {
             pinBlock(single.name);
             speak(sprintf(
               /* translators: %s: block title. */
-              __('%s pinned to the toolbar.', 'toolrail'),
+              __('%s pinned to the toolbar.', 'editrail'),
               singleTitle
             ));
             closeAddDialog(ids[0]);
@@ -8040,46 +8040,46 @@
 
     // --- Save as a pattern and pin it ---
     var patHead = settingsRow('h3', 'toolrail-settings-subtitle');
-    patHead.textContent = __('Pattern', 'toolrail');
+    patHead.textContent = __('Pattern', 'editrail');
     node.appendChild(patHead);
     var patNote = settingsRow('p', 'toolrail-settings-empty');
     if (canCreatePatterns() === false) {
-      patNote.textContent = __('You cannot create patterns on this site, so this block cannot be saved as one.', 'toolrail');
+      patNote.textContent = __('You cannot create patterns on this site, so this block cannot be saved as one.', 'editrail');
       node.appendChild(patNote);
     } else {
       patNote.textContent = single
-        ? __('Saves this block with its settings and contents as one of your patterns, and pins that pattern. The pin is a snapshot: editing an inserted copy never changes it.', 'toolrail')
-        : __('Saves these blocks with their settings and contents as one of your patterns, and pins that pattern. The pin is a snapshot: editing an inserted copy never changes it.', 'toolrail');
+        ? __('Saves this block with its settings and contents as one of your patterns, and pins that pattern. The pin is a snapshot: editing an inserted copy never changes it.', 'editrail')
+        : __('Saves these blocks with their settings and contents as one of your patterns, and pins that pattern. The pin is a snapshot: editing an inserted copy never changes it.', 'editrail');
       node.appendChild(patNote);
 
       var nameLabel = settingsRow('label', 'toolrail-settings-label');
       nameLabel.setAttribute('for', 'toolrail-adddialog-name');
-      nameLabel.textContent = __('Pattern name', 'toolrail');
+      nameLabel.textContent = __('Pattern name', 'editrail');
       node.appendChild(nameLabel);
       var nameInput = document.createElement('input');
       nameInput.type = 'text';
       nameInput.id = 'toolrail-adddialog-name';
       nameInput.className = 'toolrail-settings-search';
-      nameInput.value = single ? singleTitle : __('Pattern', 'toolrail');
+      nameInput.value = single ? singleTitle : __('Pattern', 'editrail');
       nameInput.setAttribute('aria-describedby', 'toolrail-adddialog-status');
       node.appendChild(nameInput);
 
       var saveRow = settingsRow('div', 'toolrail-settings-helprow');
-      var saveBtn = settingsButton(__('Save pattern and pin it', 'toolrail'), function () {
+      var saveBtn = settingsButton(__('Save pattern and pin it', 'editrail'), function () {
         var name = nameInput.value.trim();
         if (!name) {
-          status.textContent = __('Give the pattern a name first.', 'toolrail');
+          status.textContent = __('Give the pattern a name first.', 'editrail');
           speak(status.textContent);
           nameInput.focus();
           return;
         }
         saveBtn.disabled = true;
-        status.textContent = __('Saving…', 'toolrail');
+        status.textContent = __('Saving…', 'editrail');
         savePatternFromBlocks(name, blocks).then(function (pattern) {
           pinBlock(pattern.id);
           speak(sprintf(
             /* translators: %s: pattern name. */
-            __('Saved "%s" as a pattern and pinned it to the toolbar.', 'toolrail'),
+            __('Saved "%s" as a pattern and pinned it to the toolbar.', 'editrail'),
             pattern.title
           ));
           closeAddDialog(ids[0]);
@@ -8088,10 +8088,10 @@
           status.textContent = err && err.message
             ? sprintf(
               /* translators: %s: error message. */
-              __('The pattern could not be saved: %s', 'toolrail'),
+              __('The pattern could not be saved: %s', 'editrail'),
               err.message
             )
-            : __('The pattern could not be saved.', 'toolrail');
+            : __('The pattern could not be saved.', 'editrail');
           speak(status.textContent);
         });
       }, 'toolrail-adddialog-savepattern');
@@ -8199,7 +8199,7 @@
       if (!available) {
         title += ' — ' + unavailableReason();
       } else if (pressed && isToggleTool(tool)) {
-        title += ' — ' + __('open', 'toolrail');
+        title += ' — ' + __('open', 'editrail');
       }
       if (btn.title !== title) {
         btn.title = title;
@@ -8517,7 +8517,7 @@
                 }
                 close();
               }
-            }, pinned ? __('Unpin from toolbar', 'toolrail') : __('Pin to toolbar', 'toolrail')));
+            }, pinned ? __('Unpin from toolbar', 'editrail') : __('Pin to toolbar', 'editrail')));
           }
           // The keyboard path to the add-to-toolbar dialog (the pointer
           // path is dropping the block on the rail). One block or
@@ -8534,7 +8534,7 @@
                   openAddToToolbar(ids);
                 }, 0);
               }
-            }, __('Save as pattern and pin to toolbar…', 'toolrail')));
+            }, __('Save as pattern and pin to toolbar…', 'editrail')));
           }
           return items.length ? el(wp.element.Fragment, null, items) : null;
         });

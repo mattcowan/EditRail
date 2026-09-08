@@ -20,7 +20,7 @@ if (!defined('TOOLRAIL_PLUGIN_DIR')) {
     define('TOOLRAIL_PLUGIN_DIR', dirname(dirname(__DIR__)) . '/');
 }
 if (!defined('TOOLRAIL_PLUGIN_URL')) {
-    define('TOOLRAIL_PLUGIN_URL', 'http://example.test/wp-content/plugins/toolrail/');
+    define('TOOLRAIL_PLUGIN_URL', 'http://example.test/wp-content/plugins/editrail/');
 }
 
 $GLOBALS['toolrail_test_filters'] = [];
