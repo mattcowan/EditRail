@@ -4,8 +4,9 @@
  *
  * The plugin writes nothing of its own to the database: no options, no
  * transients, no post meta, no tables. Its whole footprint is the per-user
- * editor preferences (pinned tools, toolbar position, saved sets, appearance,
- * the help and inserter toggles) that `core/preferences` persists under the
+ * editor preferences (pinned tools and their custom names, descriptions and
+ * icons, toolbar position, saved sets, appearance, the help and inserter
+ * toggles) that `core/preferences` persists under the
  * `toolrail` scope of core's OWN user-meta row, `{blog prefix}persisted_preferences`
  * (wp-includes/script-loader.php builds that key with $wpdb->get_blog_prefix()).
  * That row is one PHP-serialized array per user which also holds core's
