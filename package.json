@@ -8,7 +8,11 @@
     "test:e2e": "npx playwright test --config=tests/e2e/playwright.config.js",
     "test": "npm run test:php && npm run test:e2e",
     "check-versions": "node scripts/check-versions.js",
-    "package": "node scripts/check-versions.js && node scripts/package.js"
+    "package": "node scripts/check-versions.js && node scripts/package.js",
+    "playground": "node scripts/playground.js local",
+    "playground:build": "node scripts/playground.js build",
+    "playground:check": "node scripts/playground.js check",
+    "playground:url": "node scripts/playground.js url"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

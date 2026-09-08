@@ -88,6 +88,9 @@ jobs:
       # The four version sources (plugin header, TOOLRAIL_VERSION, readme
       # Stable tag, package.json) must always agree - fail fast if not.
       - run: node scripts/check-versions.js
+      # The wp.org Live Preview blueprint is generated from
+      # scripts/playground/; a hand edit or a forgotten rebuild fails here.
+      - run: node scripts/playground.js check
       - run: npm run package
       # On manual runs, keep the zip as an artifact (7 days) so a test
       # build of any branch is one click away.

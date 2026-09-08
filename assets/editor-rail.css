@@ -348,14 +348,14 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
 .toolrail-region[data-dock="right"] .toolrail-scrollbtn[data-dir="prev"]::before,
 .toolrail-region[data-dock="float"] .toolrail-scrollbtn[data-dir="prev"]::before {
     border-top-width: 0;
-    border-bottom-color: currentColor;
+    border-bottom-color: currentcolor;
 }
 
 .toolrail-region[data-dock="left"] .toolrail-scrollbtn[data-dir="next"]::before,
 .toolrail-region[data-dock="right"] .toolrail-scrollbtn[data-dir="next"]::before,
 .toolrail-region[data-dock="float"] .toolrail-scrollbtn[data-dir="next"]::before {
     border-bottom-width: 0;
-    border-top-color: currentColor;
+    border-top-color: currentcolor;
 }
 
 .toolrail-region[data-dock="top"] .toolrail-scrollbtn,
@@ -367,13 +367,13 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
 .toolrail-region[data-dock="top"] .toolrail-scrollbtn[data-dir="prev"]::before,
 .toolrail-region[data-dock="bottom"] .toolrail-scrollbtn[data-dir="prev"]::before {
     border-left-width: 0;
-    border-right-color: currentColor;
+    border-right-color: currentcolor;
 }
 
 .toolrail-region[data-dock="top"] .toolrail-scrollbtn[data-dir="next"]::before,
 .toolrail-region[data-dock="bottom"] .toolrail-scrollbtn[data-dir="next"]::before {
     border-right-width: 0;
-    border-left-color: currentColor;
+    border-left-color: currentcolor;
 }
 
 .toolrail-region[data-dock="left"] #toolrail-rail {
@@ -404,7 +404,7 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
     flex: 0 0 auto;
     cursor: grab;
     border-radius: 3px;
-    background-image: radial-gradient(currentColor 1px, transparent 1px);
+    background-image: radial-gradient(currentcolor 1px, transparent 1px);
     background-size: 4px 4px;
     color: var(--toolrail-grip);
     opacity: 0.9;
@@ -469,7 +469,7 @@ body.toolrail-dragging * {
 }
 
 .toolrail-tool svg {
-    fill: currentColor;
+    fill: currentcolor;
 }
 
 /* Core block icons (@wordpress/icons) ship viewBox-only SVGs with NO
@@ -665,7 +665,7 @@ body.toolrail-dragging * {
     width: 0;
     height: 0;
     border-left: 5px solid transparent;
-    border-bottom: 5px solid currentColor;
+    border-bottom: 5px solid currentcolor;
 }
 
 .toolrail-region[data-dock="left"][data-wide] .toolrail-flyout-glyph,
@@ -674,7 +674,7 @@ body.toolrail-dragging * {
     position: static;
     flex: 0 0 auto;
     margin-left: auto;
-    border-left: 5px solid currentColor;
+    border-left: 5px solid currentcolor;
     border-top: 5px solid transparent;
     border-bottom: 5px solid transparent;
 }
@@ -745,7 +745,7 @@ body.toolrail-dragging * {
 }
 
 .toolrail-flyout-icon svg {
-    fill: currentColor;
+    fill: currentcolor;
 }
 
 /* Pinned quick slots carry no on-rail removal affordance: the hover × and
@@ -1695,4 +1695,177 @@ body.toolrail-ov-dragging * {
 body.toolrail-hides-inserter .block-editor-block-popover__inbetween .block-editor-block-list__insertion-point.is-with-inserter,
 body.toolrail-hides-inserter .block-editor-block-list__block-side-inserter-popover {
     display: none !important;
+}
+
+/* --- Pin metadata (1.0.1): the inline Edit form under a pinned row, and
+   the author-chosen text glyph on a tool button. --- */
+
+/* The form is a full-width child of the flex row, so the row wraps. */
+.toolrail-settings-pinnedrow {
+    flex-wrap: wrap;
+}
+
+.toolrail-settings-editform {
+    flex: 1 1 100%;
+    margin: 6px 0 4px;
+}
+
+.toolrail-settings-editfields {
+    margin: 0;
+    padding: 8px 10px 10px;
+    border: 1px solid var(--toolrail-field-border);
+    border-radius: 3px;
+    min-width: 0;
+}
+
+.toolrail-settings-editfields legend {
+    padding: 0 4px;
+}
+
+.toolrail-settings-editfields .toolrail-settings-label {
+    margin-top: 8px;
+}
+
+.toolrail-settings-editfields .toolrail-settings-empty {
+    margin: 4px 0 0;
+}
+
+.toolrail-settings-textarea {
+    resize: vertical;
+    font: inherit;
+    line-height: 1.4;
+}
+
+.toolrail-settings-editfields .toolrail-settings-helprow {
+    margin-top: 10px;
+}
+
+/* An invalid icon value: the field's border joins the text explanation
+   under it (never color alone — see the status line the form renders).
+   Specificity (0,3,1) on purpose: it must outrank the scoped text-field
+   rule further down, which is (0,2,1) and once silently took this border
+   away (PR review 2026-09-05, finding 1). */
+.toolrail-settings .toolrail-settings-editfields input.toolrail-settings-search[aria-invalid="true"],
+.toolrail-settings .toolrail-settings-editfields textarea.toolrail-settings-search[aria-invalid="true"] {
+    border-color: var(--toolrail-status);
+}
+
+/* Up to three characters in the 24px icon box, sized so "Aa" and a single
+   emoji both fit; currentcolor so every appearance preset applies. */
+.toolrail-tool-glyph {
+    display: inline-block;
+    max-width: 28px;
+    overflow: hidden;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 24px;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+    text-overflow: clip;
+    color: currentcolor;
+}
+
+/* Inside a wrapping row the name must never force the buttons onto a
+   second line: basis 0 (it is overflow:hidden, so its automatic minimum
+   is 0 too) lets it take what is left instead of asking for its text. */
+.toolrail-settings-pinnedrow > .toolrail-settings-pinnedname {
+    flex-basis: 0;
+    min-width: 0;
+}
+
+/* Text fields in both dialogs, at a specificity that beats wp-admin's
+   forms.css. Its `input[type="text"]` rule (0,1,1) painted the Name and
+   Icon inputs white on the Dark preset while the bare `textarea` rule
+   (0,0,1) lost to .toolrail-settings-search, so the Description field
+   was dark and its neighbors were not (owner report 2026-09-05). One
+   rule for every field, and no wp-admin focus glow on top of our ring. */
+.toolrail-settings input.toolrail-settings-search,
+.toolrail-settings textarea.toolrail-settings-search {
+    background: var(--toolrail-field-bg);
+    color: var(--toolrail-fg-strong);
+    border: 1px solid var(--toolrail-field-border);
+    box-shadow: none;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.toolrail-settings input.toolrail-settings-search:focus,
+.toolrail-settings textarea.toolrail-settings-search:focus {
+    border-color: var(--toolrail-field-border);
+    box-shadow: none;
+}
+
+/* --- The Icon field's row and its Dashicon browser (1.0.1) --- */
+
+.toolrail-settings-iconrow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.toolrail-settings-iconrow .toolrail-settings-search {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+/* Live preview of the typed value, drawn the way the tool button draws it. */
+.toolrail-settings-iconpreview {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--toolrail-field-border);
+    border-radius: 3px;
+    color: var(--toolrail-fg-strong);
+}
+
+.toolrail-settings-iconpreview .toolrail-tool-glyph {
+    line-height: 30px;
+}
+
+.toolrail-settings-iconbrowser {
+    margin-top: 8px;
+    padding: 8px;
+    border: 1px solid var(--toolrail-field-border);
+    border-radius: 3px;
+}
+
+.toolrail-settings-iconbrowser .toolrail-settings-label {
+    margin-top: 0;
+}
+
+/* The results: icon + name chips that wrap, in a scrollable box. Every
+   chip is a button, so the box is reachable by keyboard without a
+   tabindex of its own. */
+.toolrail-settings-icongrid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    max-height: 220px;
+    overflow-y: auto;
+    margin-top: 6px;
+}
+
+.toolrail-settings-iconresult {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 4px 8px;
+    font-size: 11px;
+}
+
+.toolrail-settings-iconresult .dashicons {
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+}
+
+/* The chip for the value already in the field: a filled marker plus the
+   pressed state for AT, never color alone. */
+.toolrail-settings-iconresult[aria-pressed="true"] {
+    background: var(--toolrail-fg-strong);
+    color: var(--toolrail-bg);
+    border-color: var(--toolrail-fg-strong);
 }
