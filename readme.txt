@@ -1,4 +1,4 @@
-=== Editrail ===
+=== EditRail ===
 Contributors: matthewneilcowan
 Tags: block editor, toolbar, tools
 Requires at least: 6.5
@@ -12,7 +12,7 @@ A movable, graphics-editor-style toolbar for the block editor. Click a tool, the
 
 == Description ==
 
-Editrail adds a toolbar to the post editor, docked to the left edge by default, movable to any edge or floating as a palette. Selecting a tool arms it: the next click in the canvas inserts that tool's block at the click point, then the rail returns to Select (Shift-click keeps the tool armed).
+EditRail adds a toolbar to the post editor, docked to the left edge by default, movable to any edge or floating as a palette. Selecting a tool arms it: the next click in the canvas inserts that tool's block at the click point, then the rail returns to Select (Shift-click keeps the tool armed).
 
 Everything the rail inserts is an ordinary core block. Deactivating this plugin changes nothing about how authored content renders or stays editable.
 
@@ -47,15 +47,25 @@ Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a 
 
 Its own preferences, and nothing else. The plugin stores no options and writes nothing into posts. Deleting it from the Plugins screen removes the pinned tools, toolbar position, saved sets and colors from every user account on the site. Deactivating it keeps them, so the toolbar comes back as you left it when you activate the plugin again. In rare cases a browser holds an older local copy of the pins, the toolbar position or the saved sets (from a session where the browser's storage failed, or from a version before 0.1.6). If you install the plugin again in that browser, that copy comes back one time. Unpin what you do not want; it does not return again.
 
+== Screenshots ==
+
+1. The toolbar docked at the left of the canvas. The Heading tool is armed and waits for a click.
+2. Toolbar settings: the pinned tools, and a search that adds any block or pattern to the toolbar.
+3. Section overview: the whole page zoomed out, with an outline and a name tag for each section.
+4. Tool names on, in the Light appearance. The toolbar widens to show a label beside each icon.
+5. The toolbar docked at the top of the editor as a horizontal bar.
+6. Edit a pinned tool: give it your own name, description and icon. Browse icons lists every Dashicon.
+7. Toolbar help: what each tool does, and every keyboard shortcut.
+
 == Upgrade Notice ==
 
 = 1.0.1 =
-The plugin folder is now editrail. After a zip upgrade, delete the old toolrail folder so two copies do not load. After a git deploy, activate Editrail again once in the Plugins screen. Pinned tools and saved sets are kept.
+The plugin folder is now editrail. After a zip upgrade, delete the old toolrail folder so two copies do not load. After a git deploy, activate EditRail again once in the Plugins screen. Pinned tools and saved sets are kept.
 
 == Changelog ==
 
 = 1.0.1 =
-* Renamed the plugin to Editrail. The slug and the text domain are now `editrail`. The stored preferences, the JavaScript API and the PHP filter keep their names, so pinned tools, saved sets and extensions are not affected.
+* Renamed the plugin to EditRail. The slug and the text domain are now `editrail`. The stored preferences, the JavaScript API and the PHP filter keep their names, so pinned tools, saved sets and extensions are not affected.
 * Edit a pinned tool's name, description and icon from Toolbar settings. Pick the icon from a searchable list of Dashicons, or type up to three characters. Saved sets keep these, and set files carry them along.
 * Plugins can keep their own settings on a pinned tool. The settings are removed when the tool is unpinned, and travel in saved sets.
 

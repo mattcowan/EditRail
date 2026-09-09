@@ -17,7 +17,7 @@
  * The provider registers its own script (with `toolrail-editor-rail` as a
  * dependency, on `enqueue_block_editor_assets` at default priority — the rail
  * registers its handle at priority 1 so it exists by then); that script calls
- * `window.toolrail.registerTool()` on load. Editrail enqueues the declared
+ * `window.toolrail.registerTool()` on load. EditRail enqueues the declared
  * handles on post-editor screens at priority 20, after providers have
  * registered them.
  *

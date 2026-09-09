@@ -1,4 +1,4 @@
-# Editrail
+# EditRail
 
 A movable, graphics-editor-style toolbar for the WordPress block editor. Click a tool, then click the canvas to insert a core block at that point.
 
@@ -6,7 +6,7 @@ This file is for developers and for people who read the repository. The user gui
 
 ## Why it exists
 
-The block editor's inserter is a menu: open it, find the block, and it lands where the cursor is. A graphics editor works the other way. You pick a tool, and the next click puts the thing where you clicked. Editrail brings that model to the block editor.
+The block editor's inserter is a menu: open it, find the block, and it lands where the cursor is. A graphics editor works the other way. You pick a tool, and the next click puts the thing where you clicked. EditRail brings that model to the block editor.
 
 Two things set it apart from other toolbar plugins:
 
@@ -27,7 +27,7 @@ The PHP files use no feature above 7.4. The JavaScript is ES5 with no build step
 **From WordPress.org**
 
 1. Open Plugins > Add New in wp-admin.
-2. Search for "Editrail".
+2. Search for "EditRail".
 3. Install and activate it.
 
 **From a GitHub release**

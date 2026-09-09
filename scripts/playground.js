@@ -81,8 +81,8 @@ function blueprint(pluginStep) {
     landingPage: `/wp-admin/post.php?post=${DEMO_POST_ID}&action=edit`,
     preferredVersions: { php: '8.2', wp: 'latest' },
     steps: [
-      // Twenty Twenty-Five ships the Vollkorn font files the demo post
-      // uses; installing it by slug keeps the demo the same whatever the
+      // Twenty Twenty-Five is the look the demo post was designed on;
+      // installing it by slug keeps the demo the same whatever the
       // current default theme is.
       {
         step: 'installTheme',
@@ -109,7 +109,7 @@ function blueprint(pluginStep) {
 
 const wporgStep = {
   step: 'installPlugin',
-  pluginData: { resource: 'wordpress.org/plugins', slug: 'toolrail' },
+  pluginData: { resource: 'wordpress.org/plugins', slug: 'editrail' },
   options: { activate: true },
 };
 

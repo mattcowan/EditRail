@@ -1,5 +1,5 @@
 /**
- * Editrail — a graphics-editor-style left toolbar for the block editor.
+ * EditRail — a graphics-editor-style left toolbar for the block editor.
  *
  * Unlike a launcher rail, tools here ARM: selecting a tool means the next
  * click in the canvas inserts that tool's block at the click point, then the
@@ -3700,7 +3700,7 @@ var DASHICON_NAMES = [
    */
   function importConfigPayload(parsed) {
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.blocks)) {
-      return { ok: false, error: __('Not an Editrail set file — expected JSON with a "blocks" array.', 'editrail') };
+      return { ok: false, error: __('Not an EditRail set file — expected JSON with a "blocks" array.', 'editrail') };
     }
     var valid = parsed.blocks.filter(function (n) {
       return typeof n === 'string' && (BLOCK_NAME_PATTERN.test(n) || PATTERN_SLOT_PATTERN.test(n));

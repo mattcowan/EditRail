@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EditRail wordmark</title>
+<!--
+  Source of the WordPress.org icon and banner. scripts/wordmark.js renders
+  this page with Playwright:
+    ?view=banner  at 1544x500 (and 772x250 with zoom 0.5)
+    ?view=icon    at 256x256  (and 128x128 with zoom 0.5)
+  Colors are the plugin's Dark appearance preset (assets/editor-rail.css).
+  The icon is the same drawing as .wordpress-org/icon.svg.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #1e1e1e;
+    --fg: #e0e0e0;
+    --strong: #fff;
+    --muted: #b0b0b0;
+    --edge: #2f2f2f;
+    --border: #3f3f3f;
+    --pressed: #3858e9;
+    --pressed-edge: #7b90ff;
+  }
+  html, body { margin: 0; background: var(--bg); }
+  body { font-family: Inter, "Segoe UI", system-ui, sans-serif; color: var(--fg); }
+
+  /* ---- banner: designed at 1544x500 ---- */
+  .banner {
+    width: 1544px; height: 500px; position: relative; overflow: hidden;
+    display: flex; align-items: center; gap: 72px; padding: 0 140px; box-sizing: border-box;
+  }
+  .banner .glyph { width: 220px; height: 220px; flex: none; }
+  .banner .text { display: flex; flex-direction: column; gap: 22px; }
+  .wordmark { font-size: 148px; line-height: 1; letter-spacing: -0.03em; white-space: nowrap; }
+  .wordmark .edit { font-weight: 400; color: var(--fg); }
+  .wordmark .rail { font-weight: 800; color: var(--strong); }
+  .tagline { font-size: 38px; font-weight: 500; color: var(--muted); letter-spacing: -0.01em; }
+  /* a faint canvas edge on the right, like the editor beside the rail */
+  .banner::after {
+    content: ""; position: absolute; top: 0; bottom: 0; right: 0; width: 260px;
+    background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.04) 100%);
+  }
+
+  /* ---- icon: designed at 256x256 ---- */
+  .icon { width: 256px; height: 256px; }
+  .icon svg { display: block; width: 256px; height: 256px; }
+</style>
+</head>
+<body>
+  <template id="glyph">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" aria-hidden="true">
+      <rect width="256" height="256" fill="#1e1e1e"/>
+      <rect x="86" y="34" width="84" height="188" rx="18" fill="#2f2f2f" stroke="#3f3f3f" stroke-width="2"/>
+      <rect x="110" y="46" width="36" height="36" rx="7" fill="#b0b0b0"/>
+      <rect x="110" y="90" width="36" height="36" rx="7" fill="#3858e9" stroke="#7b90ff" stroke-width="3"/>
+      <rect x="110" y="134" width="36" height="36" rx="7" fill="#b0b0b0"/>
+      <rect x="110" y="178" width="36" height="36" rx="7" fill="#b0b0b0"/>
+    </svg>
+  </template>
+
+  <div id="root"></div>
+
+  <script>
+    const view = new URLSearchParams(location.search).get('view') || 'banner';
+    const zoom = Number(new URLSearchParams(location.search).get('zoom') || 1);
+    const glyph = document.getElementById('glyph').content.firstElementChild;
+    const root = document.getElementById('root');
+    root.style.zoom = String(zoom);
+    if (view === 'icon') {
+      const box = document.createElement('div');
+      box.className = 'icon';
+      box.appendChild(glyph.cloneNode(true));
+      root.appendChild(box);
+    } else {
+      root.innerHTML =
+        '<div class="banner">' +
+        '  <div class="glyph"></div>' +
+        '  <div class="text">' +
+        '    <div class="wordmark"><span class="edit">Edit</span><span class="rail">Rail</span></div>' +
+        '    <div class="tagline">A graphics-editor toolbar for the block editor</div>' +
+        '  </div>' +
+        '</div>';
+      root.querySelector('.glyph').appendChild(glyph.cloneNode(true));
+      root.querySelector('.glyph svg').setAttribute('width', '220');
+      root.querySelector('.glyph svg').setAttribute('height', '220');
+    }
+  </script>
+</body>
+</html>

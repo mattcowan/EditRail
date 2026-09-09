@@ -1,0 +1,35 @@
+# Sync readme.txt and .wordpress-org/ assets to WordPress.org WITHOUT a
+# release. Use it to bump "Tested up to" after a WordPress core release,
+# to fix readme text, or to swap screenshots, banners or icons.
+#
+# The 10up asset-update action updates trunk's readme.txt, the current
+# stable tag's readme.txt, and syncs .wordpress-org/ -> SVN assets/ WITH
+# deletion: a file removed from .wordpress-org/ disappears from wp.org too.
+#
+# MANUAL-ONLY (Actions -> "WP.org Readme/Assets Sync" -> Run workflow), on
+# purpose. Releases do not need it: release.yml already ships readme.txt
+# (trunk + the tag) and syncs .wordpress-org/ -> assets/ on every stable
+# release. A push trigger on readme.txt would also fire during release
+# prep, when the bumped readme reaches main BEFORE the release is
+# published, and wp.org's trunk readme would advertise a Stable tag that
+# does not exist in SVN yet.
+name: WP.org Readme/Assets Sync
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: Sync readme and assets to wp.org
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: 10up/action-wordpress-plugin-asset-update@stable
+        env:
+          SVN_USERNAME: ${{ secrets.SVN_USERNAME }}
+          SVN_PASSWORD: ${{ secrets.SVN_PASSWORD }}
+          SLUG: editrail
+          # Commit ONLY readme.txt + .wordpress-org assets and ignore every
+          # other difference between the repo and SVN trunk. Trunk code is
+          # only ever updated by release.yml.
+          IGNORE_OTHER_FILES: true

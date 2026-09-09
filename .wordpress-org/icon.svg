@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="EditRail">
+  <!-- The rail glyph: a docked tool strip with one armed tool. Colors are the
+       plugin's Dark appearance preset (assets/editor-rail.css). -->
+  <rect width="256" height="256" fill="#1e1e1e"/>
+  <rect x="86" y="34" width="84" height="188" rx="18" fill="#2f2f2f" stroke="#3f3f3f" stroke-width="2"/>
+  <rect x="110" y="46" width="36" height="36" rx="7" fill="#b0b0b0"/>
+  <rect x="110" y="90" width="36" height="36" rx="7" fill="#3858e9" stroke="#7b90ff" stroke-width="3"/>
+  <rect x="110" y="134" width="36" height="36" rx="7" fill="#b0b0b0"/>
+  <rect x="110" y="178" width="36" height="36" rx="7" fill="#b0b0b0"/>
+</svg>

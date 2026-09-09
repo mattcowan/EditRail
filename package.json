@@ -2,7 +2,7 @@
   "name": "editrail",
   "version": "1.0.1",
   "private": true,
-  "description": "Editrail — a graphics-editor-style left toolbar for the WordPress block editor.",
+  "description": "EditRail — a graphics-editor-style left toolbar for the WordPress block editor.",
   "scripts": {
     "test:php": "vendor/bin/phpunit",
     "test:e2e": "npx playwright test --config=tests/e2e/playwright.config.js",
