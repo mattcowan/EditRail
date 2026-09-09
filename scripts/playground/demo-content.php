@@ -227,7 +227,9 @@ function toolrail_demo_list(array $items) {
  * outline and step into), a separator. Structure and copy owner-edited
  * 2026-09-09: the Section overview and the extension API come before
  * the pinning instructions, so the toolbar reads as more than a block
- * inserter.
+ * inserter; and wherever the copy describes what the toolbar inserts,
+ * it says core blocks, theme and plugin blocks, and patterns, never
+ * "core blocks" alone, because pinning custom blocks is the point.
  *
  * @return string Post content.
  */
@@ -283,7 +285,7 @@ function toolrail_demo_content() {
 
     $blocks[] = $heading('More than a block inserter');
     $blocks[] = toolrail_demo_paragraph(
-        'The tools at the top of the toolbar are pinned blocks. They work the way a drawing tool does: select one, then click or drag in the canvas where the block should go. The block lands at that point and the toolbar returns to Select. Hold Shift while you click to keep the tool armed. Below the pins sit tools that are not blocks at all: the Section overview, and any tool another plugin adds.'
+        'The tools at the top of the toolbar are pins: blocks and patterns you chose, from core, from your theme, or from any plugin. They work the way a drawing tool does: select one, then click or drag in the canvas where it should go. It lands at that point and the toolbar returns to Select. Hold Shift while you click to keep the tool armed. Below the pins sit tools that are not blocks at all: the Section overview, and any tool another plugin adds.'
     );
 
     $blocks[] = $heading('The Section overview');
@@ -301,9 +303,15 @@ function toolrail_demo_content() {
         . '</div>' . "\n"
         . '<!-- /wp:group -->';
 
+    $blocks[] = $heading('Pin your own tools');
+    $blocks[] = toolrail_demo_paragraph(
+        'Pin anything the editor can drag: core blocks, your theme&#8217;s blocks, blocks from any plugin, and patterns, your own or the theme&#8217;s. Drag it onto the toolbar from the editor&#8217;s own inserter (the <strong>+</strong> at the top left), from the List View, or from the canvas, or search for it in Toolbar settings. A block dragged from the canvas can also be saved as a pattern, with its settings and contents, and pinned as that.'
+    );
+
     // Pull quote, italic: swash capitals on every capital, and ss01 sets
     // the lowercase in the italic's petite capitals, a title-page
-    // pairing the two features were drawn for.
+    // pairing the two features were drawn for. Sits right under the
+    // pinning paragraph it sums up (owner call, 2026-09-09).
     $blocks[] = '<!-- wp:quote -->' . "\n"
         . '<blockquote class="wp-block-quote">'
         . toolrail_demo_typost('Any Block Can Be Added To The Toolbar', 'p', array('swsh', 'ss01'), array(
@@ -316,11 +324,6 @@ function toolrail_demo_content() {
         ))
         . '</blockquote>' . "\n"
         . '<!-- /wp:quote -->';
-
-    $blocks[] = $heading('Pin your own tools');
-    $blocks[] = toolrail_demo_paragraph(
-        'Drag any block onto the toolbar to pin it: from the editor&#8217;s own inserter (the <strong>+</strong> at the top left), from the List View, or from the canvas. Patterns pin the same way, and a block dragged from the canvas can be saved as a pattern, with its settings and contents, and pinned as that. Core blocks, theme blocks and plugin blocks are all the same to the toolbar.'
-    );
     $blocks[] = toolrail_demo_paragraph(
         'A pinned tool can carry your own name, description and icon. Open <strong>Toolbar settings</strong> from the gear at the end of the toolbar, find the tool under <strong>Pinned tools</strong>, and choose <strong>Edit</strong>. Empty fields use the block&#8217;s own. Only your toolbar changes.'
     );
@@ -330,14 +333,14 @@ function toolrail_demo_content() {
 
     $blocks[] = $heading('Built to be extended');
     $blocks[] = toolrail_demo_paragraph(
-        'Other plugins can put their own tools on the toolbar. One PHP filter declares a plugin as a provider, and a small JavaScript API registers each tool: its icon, its flyout, and what happens when it is armed, including tools that are modes rather than blocks, such as picking a block on the canvas. A plugin can also keep its own settings on a pinned tool; they travel with saved sets and go when the tool is unpinned. Whatever an extension inserts is still an ordinary block, so the promise above holds for every tool.'
+        'Other plugins can put their own tools on the toolbar. One PHP filter declares a plugin as a provider, and a small JavaScript API registers each tool: its icon, its flyout, and what happens when it is armed, including tools that are modes rather than blocks, such as picking a block on the canvas. A plugin can also keep its own settings on a pinned tool; they travel with saved sets and go when the tool is unpinned. Whatever a tool inserts, from any plugin, is saved the way that block or pattern is always saved, so the post never depends on the toolbar.'
     );
 
     $blocks[] = $heading('Try it now');
     $blocks[] = toolrail_demo_list(array(
         'Click <strong>Text</strong> on the toolbar, then click below this list. A paragraph appears where you clicked.',
         'Drag a tool from the toolbar into the canvas. The editor&#8217;s own drop line shows where it will land.',
-        'Open the editor&#8217;s block inserter (the <strong>+</strong> button at the top left), then drag any block from that list onto the toolbar. It is pinned as a new tool.',
+        'Open the editor&#8217;s block inserter (the <strong>+</strong> button at the top left), then drag any block or pattern from that list onto the toolbar. It is pinned as a new tool.',
         'Drag a block from the canvas onto the toolbar to pin its type, or to save it as a pattern and pin that.',
         'Open the <strong>Section overview</strong> and drag this list above the heading before it.',
         'Press Escape at any time to return to Select.',

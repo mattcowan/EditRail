@@ -49,7 +49,7 @@ There is no build step. The plugin ships its source JS and CSS unchanged.
 | `screenshot-1.png` … | The screenshots. Their captions are the numbered list under `== Screenshots ==` in `readme.txt`; the numbers must match. |
 | `blueprints/blueprint.json` | The Live Preview blueprint. Generated; see below. |
 
-`node scripts/screenshots.js` regenerates the screenshots against a local site (defaults to `http://typographystylist.local`; see the script header for the variables). `node scripts/wordmark.js` regenerates the icon and banner from `scripts/wordmark/wordmark.html`. Removing a file from `.wordpress-org/` removes it from WordPress.org on the next sync.
+`node scripts/screenshots.js` regenerates the screenshots against a local site (defaults to `http://typographystylist.local`; see the script header for the variables). `node scripts/wordmark.js` regenerates the icon and banner from `scripts/wordmark/wordmark.html`. `scripts/wordmark/banner.svg` is the same banner as an editable vector with live text in Inter, for a vector editor; it is a source, not a listing asset. Removing a file from `.wordpress-org/` removes it from WordPress.org on the next sync.
 
 ## Run the e2e tests against wp-env locally
 
