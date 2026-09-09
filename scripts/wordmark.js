@@ -13,7 +13,10 @@
  */
 const path = require('path');
 const fs = require('fs');
-const { chromium } = require('playwright');
+const { pathToFileURL } = require('url');
+// @playwright/test is the declared dependency; `playwright` only happens to
+// be hoisted next to it, and a stricter package manager would not hoist it.
+const { chromium } = require('@playwright/test');
 
 const rootDir = path.resolve(__dirname, '..');
 const htmlFile = path.join(__dirname, 'wordmark', 'wordmark.html');
@@ -39,8 +42,11 @@ const JOBS = [
         viewport: { width: job.width, height: job.height },
         deviceScaleFactor: 1,
       });
-      const url = 'file:///' + htmlFile.split(path.sep).join('/') + `?view=${job.view}&zoom=${job.zoom}`;
-      await page.goto(url);
+      // pathToFileURL escapes characters a hand-built file: URL would treat
+      // as delimiters (# and ? in a path) and handles the drive letter.
+      const url = pathToFileURL(htmlFile);
+      url.search = `view=${job.view}&zoom=${job.zoom}`;
+      await page.goto(url.href);
       // Let the web font arrive; fall back to the system stack if it does not.
       await page.evaluate(() => document.fonts.ready);
       await page.waitForTimeout(300);

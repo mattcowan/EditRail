@@ -196,10 +196,23 @@ function toolrail_demo_typost($content, $tag, array $features, array $args) {
         . '<!-- /wp:typost/block -->';
 }
 
+/**
+ * A core paragraph block.
+ *
+ * @param string $html Inner HTML.
+ * @return string Block markup.
+ */
 function toolrail_demo_paragraph($html) {
     return "<!-- wp:paragraph -->\n<p>" . $html . "</p>\n<!-- /wp:paragraph -->";
 }
 
+/**
+ * A core heading block; level 2 is the block default and gets no attribute.
+ *
+ * @param int    $level 1–6.
+ * @param string $text  Inner HTML.
+ * @return string Block markup.
+ */
 function toolrail_demo_heading($level, $text) {
     $tag = 'h' . (int) $level;
     $attrs = 2 === (int) $level ? '' : ' ' . toolrail_demo_attrs(array('level' => (int) $level));
@@ -208,6 +221,12 @@ function toolrail_demo_heading($level, $text) {
         . '<!-- /wp:heading -->';
 }
 
+/**
+ * A core list block with one list-item block per entry.
+ *
+ * @param string[] $items Inner HTML of each item.
+ * @return string Block markup.
+ */
 function toolrail_demo_list(array $items) {
     $out = "<!-- wp:list -->\n<ul class=\"wp-block-list\">";
     foreach ($items as $item) {

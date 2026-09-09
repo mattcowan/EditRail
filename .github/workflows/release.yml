@@ -70,7 +70,11 @@ jobs:
       - name: Deploy to WordPress.org
         if: ${{ !github.event.release.prerelease }}
         id: wporg
-        uses: 10up/action-wordpress-plugin-deploy@stable
+        # Pinned to a reviewed commit, not the mutable `stable` branch: this
+        # step holds the SVN credentials and publishes plugin code. The SHA
+        # is release 2.3.0 (what `stable` pointed at on 2026-09-09). Bump it
+        # on purpose, after reading the action's changelog.
+        uses: 10up/action-wordpress-plugin-deploy@54bd289b8525fd23a5c365ec369185f2966529c2 # 2.3.0
         with:
           generate-zip: true
         env:

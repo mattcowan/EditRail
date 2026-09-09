@@ -31,6 +31,7 @@ const fs = require('fs');
 const path = require('path');
 
 const rootDir = path.join(__dirname, '..');
+/** A repo file's text, by path relative to the repo root. */
 const read = (f) => fs.readFileSync(path.join(rootDir, f), 'utf8');
 
 const args = process.argv.slice(2);
@@ -49,6 +50,10 @@ function compareVersions(a, b) {
   return 0;
 }
 
+/**
+ * The first capture of `pattern` in `text`, or exit 1 naming what was
+ * expected and in which file.
+ */
 function extract(pattern, text, label, file) {
   const m = text.match(pattern);
   if (!m) {
@@ -74,6 +79,10 @@ const versions = {
   'packages[""].version (package-lock.json)': String((lock.packages && lock.packages[''] && lock.packages[''].version) || ''),
 };
 
+/**
+ * Print every version source aligned in a column; with `expectedByKey`,
+ * mark the ones that do not match.
+ */
 function table(expectedByKey) {
   const width = Math.max(...Object.keys(versions).map((k) => k.length));
   for (const [key, value] of Object.entries(versions)) {

@@ -113,16 +113,22 @@ const wporgStep = {
   options: { activate: true },
 };
 
+/** The blueprint as committed: two-space JSON with a trailing newline. */
 function render(bp) {
   return JSON.stringify(bp, null, 2) + '\n';
 }
 
+/** Write .wordpress-org/blueprints/blueprint.json from the sources. */
 function build() {
   fs.mkdirSync(path.dirname(blueprintFile), { recursive: true });
   fs.writeFileSync(blueprintFile, render(blueprint(wporgStep)));
   console.log(`Wrote ${path.relative(rootDir, blueprintFile)}`);
 }
 
+/**
+ * Fail (exit 1) when the committed blueprint differs from what build()
+ * would write, so a hand edit or a forgotten rebuild cannot ship.
+ */
 function check() {
   const expected = render(blueprint(wporgStep));
   const actual = fs.existsSync(blueprintFile) ? fs.readFileSync(blueprintFile, 'utf8').replace(/\r\n/g, '\n') : '';
@@ -133,6 +139,11 @@ function check() {
   console.log('ok  blueprint.json matches its sources');
 }
 
+/**
+ * Run the demo against this checkout in the Playground CLI: write a local
+ * blueprint variant that activates the mounted plugin, then start the
+ * server on --port (default 9400) and print its URL.
+ */
 function local() {
   // The port is the one value from the command line that reaches the
   // shell (npx is a .cmd on Windows, so spawnSync runs through cmd.exe,
@@ -169,6 +180,11 @@ function local() {
   process.exit(result.status === null ? 1 : result.status);
 }
 
+/**
+ * Print a playground.wordpress.net link that carries the blueprint and
+ * installs the plugin from a public zip (--zip, default: the latest
+ * GitHub Release).
+ */
 function url() {
   const zip = flags.zip || RELEASE_ZIP;
   const bp = blueprint({

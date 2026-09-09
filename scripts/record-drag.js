@@ -48,7 +48,9 @@
  *     -lavfi "scale=960:600:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle"
  *     -r 15 -loop 0 editrail-drag-to-pin.gif
  */
-const { chromium } = require('playwright');
+// @playwright/test is the declared dependency; `playwright` only happens to
+// be hoisted next to it, and a stricter package manager would not hoist it.
+const { chromium } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
 
@@ -148,6 +150,12 @@ const CURSOR_SCRIPT = () => {
   }, 400);
 };
 
+/**
+ * Record the clip: log in, open the demo post, unpin the block, drag it
+ * from the inserter onto the toolbar, then drag the new tool into the
+ * canvas. Writes the raw webm and record-drag.json (trim numbers) to the
+ * output directory; the conversions are in the header.
+ */
 async function main() {
   fs.rmSync(VIDEO_DIR, { recursive: true, force: true });
   fs.mkdirSync(VIDEO_DIR, { recursive: true });
@@ -186,6 +194,7 @@ async function main() {
   // the canvas makes core draw its own "+" insertion line in frame one.
   const cursor = { x: 620, y: 63 };
 
+  /** Show the fake pointer pressed (button down) or released. */
   async function press(on) {
     await page.evaluate((v) => window.__curPress(v), on);
   }
@@ -206,6 +215,10 @@ async function main() {
     cursor.y = y;
   }
 
+  /**
+   * A full drag with the real mouse: press, glide to (x, y) in eased
+   * steps, hold, release. opts: steps, gap (ms per step), hold (ms).
+   */
   async function dragTo(x, y, opts) {
     await press(true);
     await page.mouse.down();
@@ -236,128 +249,160 @@ async function main() {
   }
 
   // Start with the tool NOT on the toolbar. Unpinning also clears the
-  // slot's author metadata (title, description, icon), so keep a copy and
-  // put it back once the clip is in the can — the site this runs against
-  // renames the slot for its own demo, and a re-run must not eat that.
-  const savedMeta = await page.evaluate(
-    (name) => window.toolrail.getPinMeta(name),
-    BLOCK
-  );
+  // slot's author metadata (title, description, icon) AND any extension
+  // data stored on the pin, so keep a copy of the whole entry and put it
+  // back in the `finally` below — whether the clip made it or a wait
+  // threw halfway. The site this runs against renames the slot for its
+  // own demo, and a failed run must not eat that.
+  const savedPin = await page.evaluate((name) => {
+    const meta = window.toolrail.getPinMeta(name);
+    // setPinMeta keeps only title/description/icon; extension data lives
+    // under `ext` in the raw preference and is restored with setPinData.
+    let ext = null;
+    try {
+      const raw = window.wp.data.select('core/preferences').get('toolrail', 'toolrail-pin-meta');
+      const map = raw ? JSON.parse(raw) : {};
+      ext = map[name] && map[name].ext ? map[name].ext : null;
+    } catch (err) {
+      ext = null;
+    }
+    return { meta: meta || null, ext };
+  }, BLOCK);
   await page.evaluate((name) => window.toolrail.unpinBlock(name), BLOCK);
   await page.waitForSelector('#toolrail-rail [data-tool="pin:' + BLOCK + '"]', { state: 'detached' });
 
-  // Top of the document, so the display headline leads the shot.
-  await page
-    .frameLocator('iframe[name="editor-canvas"]')
-    .locator('body')
-    .evaluate((body) => {
-      body.ownerDocument.documentElement.scrollTop = 0;
+  let names = [];
+  let tStart = 0;
+  let tEnd = 0;
+  try {
+
+    // Top of the document, so the display headline leads the shot.
+    await page
+      .frameLocator('iframe[name="editor-canvas"]')
+      .locator('body')
+      .evaluate((body) => {
+        body.ownerDocument.documentElement.scrollTop = 0;
+      });
+
+    await page.evaluate(CURSOR_SCRIPT);
+    await page.mouse.move(cursor.x, cursor.y);
+    await page.waitForTimeout(600);
+
+    tStart = Date.now();
+
+    // ---------------------------------------------------------------
+    // 1. Open the inserter and search.
+    // ---------------------------------------------------------------
+    const inserterToggle = page.locator('button.editor-document-tools__inserter-toggle');
+    const tb = await inserterToggle.boundingBox();
+    await glide(tb.x + tb.width / 2, tb.y + tb.height / 2, { steps: 30, gap: 14 });
+    await page.waitForTimeout(220);
+    await press(true);
+    await inserterToggle.click();
+    await page.waitForTimeout(140);
+    await press(false);
+    await page.waitForTimeout(550);
+
+    const search = page.locator('.block-editor-inserter__menu input[type="search"], .block-editor-inserter__menu input[placeholder]').first();
+    await search.waitFor({ timeout: 15000 });
+    const sb = await search.boundingBox();
+    await glide(sb.x + 40, sb.y + sb.height / 2, { steps: 22, gap: 13 });
+    await press(true);
+    await search.click();
+    await page.waitForTimeout(120);
+    await press(false);
+    await search.type(SEARCH_TERM, { delay: 65 });
+
+    const item = page
+      .locator('.block-editor-block-types-list__item.editor-block-list-item-typost-block')
+      .first();
+    await item.waitFor({ timeout: 15000 });
+    // The unfiltered list stays on screen for a moment after the last
+    // keystroke, so measure only once the query has settled to one result.
+    await page.waitForFunction(
+      () => document.querySelectorAll('.block-editor-block-types-list__item').length === 1,
+      null,
+      { timeout: 15000 }
+    );
+    await page.waitForTimeout(450);
+
+    // ---------------------------------------------------------------
+    // 2. Drag it out of the inserter and drop it on the toolbar.
+    // ---------------------------------------------------------------
+    const ib = await item.boundingBox();
+    await glide(ib.x + ib.width / 2, ib.y + ib.height / 2, { steps: 26, gap: 14 });
+    await page.waitForTimeout(150);
+
+    const region = await page.locator('#toolrail-region').boundingBox();
+    const lastPin = await page.locator('#toolrail-rail [data-tool^="pin:"]').last().boundingBox();
+    await dragTo(region.x + region.width / 2, lastPin.y + lastPin.height + 26, {
+      steps: 58,
+      gap: 17,
+      hold: 520,
     });
 
-  await page.evaluate(CURSOR_SCRIPT);
-  await page.mouse.move(cursor.x, cursor.y);
-  await page.waitForTimeout(600);
+    const newTool = page.locator('#toolrail-rail [data-tool="pin:' + BLOCK + '"]');
+    await newTool.waitFor({ timeout: 15000 });
+    await page.waitForTimeout(550);
 
-  const tStart = Date.now();
+    // Close the inserter so the whole toolbar and the new tool are seen.
+    await glide(tb.x + tb.width / 2, tb.y + tb.height / 2, { steps: 26, gap: 13 });
+    await press(true);
+    await inserterToggle.click();
+    await page.waitForTimeout(140);
+    await press(false);
+    await page.waitForTimeout(600);
 
-  // ---------------------------------------------------------------
-  // 1. Open the inserter and search.
-  // ---------------------------------------------------------------
-  const inserterToggle = page.locator('button.editor-document-tools__inserter-toggle');
-  const tb = await inserterToggle.boundingBox();
-  await glide(tb.x + tb.width / 2, tb.y + tb.height / 2, { steps: 30, gap: 14 });
-  await page.waitForTimeout(220);
-  await press(true);
-  await inserterToggle.click();
-  await page.waitForTimeout(140);
-  await press(false);
-  await page.waitForTimeout(550);
+    // Rest on the new tool for a beat. The arrow is drawn DOWN and RIGHT of
+    // its tip, so putting the tip below and right of the icon center keeps
+    // the new tool readable under the pointer.
+    const nb = await newTool.boundingBox();
+    await glide(nb.x + nb.width * 0.68, nb.y + nb.height * 0.72, { steps: 22, gap: 14 });
+    await page.waitForTimeout(850);
 
-  const search = page.locator('.block-editor-inserter__menu input[type="search"], .block-editor-inserter__menu input[placeholder]').first();
-  await search.waitFor({ timeout: 15000 });
-  const sb = await search.boundingBox();
-  await glide(sb.x + 40, sb.y + sb.height / 2, { steps: 22, gap: 13 });
-  await press(true);
-  await search.click();
-  await page.waitForTimeout(120);
-  await press(false);
-  await search.type(SEARCH_TERM, { delay: 65 });
+    // ---------------------------------------------------------------
+    // 3. Drag the new tool into the canvas, between two blocks.
+    // ---------------------------------------------------------------
+    const canvas = page.frameLocator('iframe[name="editor-canvas"]');
+    const target = canvas.locator('[data-type="' + BLOCK + '"]').first();
+    const tgb = await target.boundingBox();
+    await dragTo(tgb.x + tgb.width / 2, tgb.y + tgb.height * 0.88, {
+      steps: 62,
+      gap: 17,
+      hold: 620,
+    });
 
-  const item = page
-    .locator('.block-editor-block-types-list__item.editor-block-list-item-typost-block')
-    .first();
-  await item.waitFor({ timeout: 15000 });
-  // The unfiltered list stays on screen for a moment after the last
-  // keystroke, so measure only once the query has settled to one result.
-  await page.waitForFunction(
-    () => document.querySelectorAll('.block-editor-block-types-list__item').length === 1,
-    null,
-    { timeout: 15000 }
-  );
-  await page.waitForTimeout(450);
+    await page.waitForTimeout(1300);
 
-  // ---------------------------------------------------------------
-  // 2. Drag it out of the inserter and drop it on the toolbar.
-  // ---------------------------------------------------------------
-  const ib = await item.boundingBox();
-  await glide(ib.x + ib.width / 2, ib.y + ib.height / 2, { steps: 26, gap: 14 });
-  await page.waitForTimeout(150);
-
-  const region = await page.locator('#toolrail-region').boundingBox();
-  const lastPin = await page.locator('#toolrail-rail [data-tool^="pin:"]').last().boundingBox();
-  await dragTo(region.x + region.width / 2, lastPin.y + lastPin.height + 26, {
-    steps: 58,
-    gap: 17,
-    hold: 520,
-  });
-
-  const newTool = page.locator('#toolrail-rail [data-tool="pin:' + BLOCK + '"]');
-  await newTool.waitFor({ timeout: 15000 });
-  await page.waitForTimeout(550);
-
-  // Close the inserter so the whole toolbar and the new tool are seen.
-  await glide(tb.x + tb.width / 2, tb.y + tb.height / 2, { steps: 26, gap: 13 });
-  await press(true);
-  await inserterToggle.click();
-  await page.waitForTimeout(140);
-  await press(false);
-  await page.waitForTimeout(600);
-
-  // Rest on the new tool for a beat. The arrow is drawn DOWN and RIGHT of
-  // its tip, so putting the tip below and right of the icon center keeps
-  // the new tool readable under the pointer.
-  const nb = await newTool.boundingBox();
-  await glide(nb.x + nb.width * 0.68, nb.y + nb.height * 0.72, { steps: 22, gap: 14 });
-  await page.waitForTimeout(850);
-
-  // ---------------------------------------------------------------
-  // 3. Drag the new tool into the canvas, between two blocks.
-  // ---------------------------------------------------------------
-  const canvas = page.frameLocator('iframe[name="editor-canvas"]');
-  const target = canvas.locator('[data-type="' + BLOCK + '"]').first();
-  const tgb = await target.boundingBox();
-  await dragTo(tgb.x + tgb.width / 2, tgb.y + tgb.height * 0.88, {
-    steps: 62,
-    gap: 17,
-    hold: 620,
-  });
-
-  await page.waitForTimeout(1300);
-
-  const names = await page.evaluate(() =>
-    window.wp.data.select('core/block-editor').getBlocks().map((b) => b.name)
-  );
-  const tEnd = Date.now();
-
-  // After the last frame that matters: the rerender it causes is past the
-  // trim point, so it never reaches the clip.
-  if (savedMeta) {
-    await page.evaluate(
-      (args) => window.toolrail.setPinMeta(args[0], args[1]),
-      [BLOCK, savedMeta]
+    names = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlocks().map((b) => b.name)
     );
-    // Let the preferences store's debounced REST write land.
-    await page.waitForTimeout(2500);
+    tEnd = Date.now();
+  } finally {
+    // After the last frame that matters (or after a failure): the rerender
+    // it causes is past the trim point, so it never reaches the clip. The
+    // pin has to exist before its metadata can be written back, and a
+    // restore error must not mask the error that got us here.
+    if (savedPin && (savedPin.meta || savedPin.ext)) {
+      await page
+        .evaluate((args) => {
+          const [name, saved] = args;
+          if (!window.toolrail.isPinned(name)) {
+            window.toolrail.pinBlock(name);
+          }
+          if (saved.meta) {
+            window.toolrail.setPinMeta(name, saved.meta);
+          }
+          if (saved.ext && typeof window.toolrail.setPinData === 'function') {
+            Object.keys(saved.ext).forEach((ns) => {
+              window.toolrail.setPinData(name, ns, saved.ext[ns]);
+            });
+          }
+        }, [BLOCK, savedPin])
+        .catch(() => {});
+      // Let the preferences store's debounced REST write land.
+      await page.waitForTimeout(2500).catch(() => {});
+    }
   }
 
   await context.close();

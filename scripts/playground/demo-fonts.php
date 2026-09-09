@@ -96,6 +96,8 @@ add_filter('wp_theme_json_data_theme', function ($theme_json) {
     ));
 });
 
+// The same two faces as an inline @font-face for the editor canvas and
+// the front end (registration 2 in the header).
 add_action('enqueue_block_assets', function () {
     $css = '';
     foreach (toolrail_demo_font_faces() as $face) {

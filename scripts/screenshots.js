@@ -121,6 +121,8 @@ const CORE_PREFS = [
 const SIDEBAR_SCOPES = ['core', 'core/edit-post'];
 
 const blockedWrites = [];
+/** Shots that threw, so a run that left old PNGs in place cannot exit 0. */
+const failedShots = [];
 
 /**
  * The account's rail preferences as they were found, filled in before
@@ -132,6 +134,7 @@ const blockedWrites = [];
  */
 let BASELINE = null;
 
+/** One line to stdout; every message this script prints goes through here. */
 function log(msg) {
   process.stdout.write(`${msg}\n`);
 }
@@ -655,12 +658,14 @@ async function seedBlocks(page, shape) {
 const tool = (id) => `#toolrail-rail [data-tool="${id}"]`;
 const SETTINGS = '.toolrail-settings';
 
+/** Open Toolbar settings from the gear and wait for the dialog. */
 async function openSettings(page) {
   await page.click(tool('settings'));
   await page.waitForSelector(SETTINGS, { state: 'visible', timeout: 10000 });
   await page.waitForTimeout(400);
 }
 
+/** Close Toolbar settings with Escape, if it is open. */
 async function closeSettings(page) {
   if (await page.locator(SETTINGS).count()) {
     await page.keyboard.press('Escape');
@@ -869,6 +874,7 @@ async function main() {
         }
       } catch (e) {
         log(`  screenshot-${i + 1}.png FAILED — ${e.message}`);
+        failedShots.push(`screenshot-${i + 1}.png: ${e.message}`);
       } finally {
         await context.close();
       }
@@ -896,7 +902,14 @@ async function main() {
   } else {
     log('No post write was even attempted.');
   }
-  process.exit(restore.ok ? 0 : 1);
+  if (failedShots.length) {
+    // The old file for each of these is still in .wordpress-org/, so a
+    // caller that only checks the exit code must not treat the set as
+    // regenerated.
+    log(`${failedShots.length} screenshot(s) FAILED — the old files are still in place:`);
+    failedShots.forEach((f) => log(`  ${f}`));
+  }
+  process.exit(restore.ok && !failedShots.length ? 0 : 1);
 }
 
 main().catch((e) => {

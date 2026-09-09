@@ -164,6 +164,14 @@
     }
   }
 
+  /**
+   * The core/preferences dispatcher, or null when the data module or the
+   * store is not present. Wrapped in try/catch for the same reason
+   * prefsSelect is: an editor context without wp.data throws here rather
+   * than returning undefined.
+   *
+   * @return {Object|null} The dispatch object, or null.
+   */
   function prefsDispatch() {
     try {
       return wp.data && wp.data.dispatch ? (wp.data.dispatch('core/preferences') || null) : null;
@@ -175,6 +183,14 @@
   var storageBroken = false;
   var memoryStore = Object.create(null);
 
+  /**
+   * Read a key from localStorage, falling back to the in-memory mirror.
+   * Every successful read is mirrored, not just writes — once
+   * storageBroken latches, the mirror is the only copy the session has.
+   *
+   * @param {string} key Storage key.
+   * @return {string|null} The stored string, or null when absent.
+   */
   function readLocalKey(key) {
     if (!storageBroken) {
       try {
@@ -192,6 +208,16 @@
     return key in memoryStore ? memoryStore[key] : null;
   }
 
+  /**
+   * Write a key to the in-memory mirror first, then to localStorage. The
+   * mirror is updated even when Storage is broken, so the session stays
+   * coherent for its lifetime; the first throw latches storageBroken so a
+   * hard-failing browser is not re-probed on every write.
+   *
+   * @param {string} key   Storage key.
+   * @param {string} value Value to store.
+   * @return {void}
+   */
   function writeLocalKey(key, value) {
     memoryStore[key] = value;
     if (storageBroken) {
@@ -204,6 +230,12 @@
     }
   }
 
+  /**
+   * Delete a key from both the in-memory mirror and localStorage.
+   *
+   * @param {string} key Storage key.
+   * @return {void}
+   */
   function removeLocalKey(key) {
     delete memoryStore[key];
     if (storageBroken) {
@@ -226,6 +258,15 @@
   // orphan everything else already saved there this session.
   var brokenPrefKeys = Object.create(null);
 
+  /**
+   * Read one preference. The account store wins unless THIS key has
+   * already proven unreliable (see writeKey), in which case the local
+   * fallback holds the authoritative value and the store would keep
+   * returning the stale pre-write one.
+   *
+   * @param {string} key Preference key, within PREFS_SCOPE.
+   * @return {string|null} The value as a string, or null when never written.
+   */
   function readKey(key) {
     if (!brokenPrefKeys[key]) {
       var sel = prefsSelect();
@@ -237,6 +278,18 @@
     return readLocalKey(key);
   }
 
+  /**
+   * Write one preference to the account store, falling back to local
+   * storage for a key the store has failed on. The catch is load-bearing:
+   * core writes its localStorage cache synchronously inside the reducer,
+   * so a browser whose Storage throws aborts the whole dispatch and the
+   * in-session value never updates either. Swallowing that would drop the
+   * write silently.
+   *
+   * @param {string} key   Preference key, within PREFS_SCOPE.
+   * @param {string} value Value to store.
+   * @return {void}
+   */
   function writeKey(key, value) {
     if (!brokenPrefKeys[key]) {
       var disp = prefsDispatch();
@@ -304,6 +357,11 @@
     }
   }
 
+  /**
+   * Settle the preference-readiness contract: resolve the one-shot Promise
+   * the first time, and fire the event EVERY time — a repair after the
+   * first settle is also a "re-read me" signal for an extension.
+   */
   function markPrefsReady() {
     if (!prefsReady) {
       prefsReady = true;
@@ -401,6 +459,14 @@
     float: __('Floating', 'editrail')
   };
 
+  /**
+   * Read the stored dock and floating offsets, validating every field
+   * before it is trusted: an unknown dock, a non-finite coordinate or
+   * unparseable JSON all fall back to the left dock at 24/24 rather than
+   * leaving the rail somewhere it cannot be reached.
+   *
+   * @return {{dock: string, x: number, y: number}} The position.
+   */
   function loadPosition() {
     var pos = { dock: DEFAULT_DOCK, x: 24, y: 24 };
     try {
@@ -428,6 +494,9 @@
   // consumes `position` before mount anyway.
   var position = { dock: DEFAULT_DOCK, x: 24, y: 24 };
 
+  /**
+   * Persist the current dock and floating offsets.
+   */
   function savePosition() {
     writeKey(POSITION_KEY, JSON.stringify(position));
   }
@@ -437,10 +506,22 @@
     return position.dock !== 'top' && position.dock !== 'bottom';
   }
 
+  /**
+   * The editor skeleton's body — the flex row holding the canvas and the
+   * settings sidebar. Null before the editor chrome renders.
+   *
+   * @return {HTMLElement|null} The body element, or null.
+   */
   function skeletonBody() {
     return document.querySelector('.interface-interface-skeleton__body');
   }
 
+  /**
+   * The editor skeleton's editor column, which stacks the body under the
+   * header. Null before the editor chrome renders.
+   *
+   * @return {HTMLElement|null} The editor element, or null.
+   */
   function skeletonEditor() {
     return document.querySelector('.interface-interface-skeleton__editor');
   }
@@ -468,6 +549,14 @@
     }
   }
 
+  /**
+   * Whether the region already sits where dockPlacement() wants it, so
+   * mount() can skip a needless move on every observer pass.
+   *
+   * @param {HTMLElement} region The rail region.
+   * @param {Object}      place  A dockPlacement() result.
+   * @return {boolean} True when no move is needed.
+   */
   function isPlacedCorrectly(region, place) {
     if (region.parentNode !== place.parent) {
       return false;
@@ -508,6 +597,12 @@
   // previous generation before creating the next.
   var railScrollObserver = null;
 
+  /**
+   * Unmount every React root from the previous rail generation. A
+   * discarded root keeps its fiber tree alive, so leaving these behind
+   * leaks one tree per rebuild — and the settings dialog rebuilds the rail
+   * on each reorder click.
+   */
   function disposeIconRoots() {
     iconRoots.forEach(function (root) {
       try {
@@ -588,6 +683,13 @@
     return readKey(WIDE_TOGGLE_KEY) === '1';
   }
 
+  /**
+   * Turn wide (labeled) mode on or off: persist it, reflect it on the
+   * region, and re-clamp a floating palette, whose width just changed.
+   *
+   * @param {boolean} on Whether tool names show.
+   * @return {void}
+   */
   function setWide(on) {
     writeKey(WIDE_KEY, on ? '1' : '0');
     var region = document.getElementById('toolrail-region');
@@ -676,6 +778,13 @@
     }
   };
 
+  /**
+   * Parse a 3- or 6-digit hex color. Returns null for anything else, which
+   * is how every caller tests an author-supplied value for validity.
+   *
+   * @param {*} hex Candidate color string.
+   * @return {Array<number>|null} [r, g, b] in 0-255, or null.
+   */
   function hexToRgb(hex) {
     if (typeof hex !== 'string') {
       return null;
@@ -695,6 +804,14 @@
     ];
   }
 
+  /**
+   * Serialize an RGB triple back to a 6-digit hex string, rounding and
+   * clamping each channel — the derived tokens come out of mixes and can
+   * land fractionally or slightly outside the range.
+   *
+   * @param {Array<number>} rgb [r, g, b].
+   * @return {string} A '#rrggbb' string.
+   */
   function rgbToHex(rgb) {
     return '#' + rgb.map(function (v) {
       var s = Math.round(Math.min(255, Math.max(0, v))).toString(16);
@@ -702,6 +819,14 @@
     }).join('');
   }
 
+  /**
+   * Linear interpolation between two RGB triples.
+   *
+   * @param {Array<number>} a Start color.
+   * @param {Array<number>} b End color.
+   * @param {number}        t Position, 0 = a, 1 = b.
+   * @return {Array<number>} The mixed triple, channels unrounded.
+   */
   function mixRgb(a, b, t) {
     return [0, 1, 2].map(function (i) {
       return a[i] + (b[i] - a[i]) * t;
@@ -717,6 +842,13 @@
     return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
   }
 
+  /**
+   * WCAG contrast ratio between two RGB triples, 1 to 21. Order-free.
+   *
+   * @param {Array<number>} a First color.
+   * @param {Array<number>} b Second color.
+   * @return {number} The ratio.
+   */
   function contrastRatio(a, b) {
     var l1 = relativeLuminance(a);
     var l2 = relativeLuminance(b);
@@ -815,6 +947,14 @@
     };
   }
 
+  /**
+   * Read the stored appearance. The custom pair is kept even while a
+   * preset is selected, so switching back to Custom restores the author's
+   * own colors; an unknown mode or an unparseable color falls back to the
+   * dark default.
+   *
+   * @return {{mode: string, bg: string, fg: string}} The appearance.
+   */
   function loadAppearance() {
     var out = { mode: 'dark', bg: '#1e1e1e', fg: '#e0e0e0' };
     try {
@@ -839,10 +979,25 @@
     return out;
   }
 
+  /**
+   * Persist the appearance mode and the custom color pair.
+   *
+   * @param {Object} appearance A loadAppearance()-shaped object.
+   * @return {void}
+   */
   function saveAppearance(appearance) {
     writeKey(APPEARANCE_KEY, JSON.stringify(appearance));
   }
 
+  /**
+   * The token set for an appearance: a hand-tuned preset, or the pair
+   * derived from the author's colors. Returns null for dark — the
+   * stylesheet's own defaults ARE dark, so applyAppearance() clears the
+   * inline properties instead of restating them.
+   *
+   * @param {Object} appearance A loadAppearance()-shaped object.
+   * @return {Object|null} Token name to color, or null to use the defaults.
+   */
   function appearanceTokens(appearance) {
     if (Object.prototype.hasOwnProperty.call(APPEARANCE_PRESETS, appearance.mode)) {
       return APPEARANCE_PRESETS[appearance.mode];
@@ -988,6 +1143,13 @@
 
   var registered = [];
 
+  /**
+   * Console warning for a registration or API misuse, prefixed so the
+   * source is obvious in a console full of other editor noise.
+   *
+   * @param {string} msg The message.
+   * @return {void}
+   */
   function warn(msg) {
     if (window.console && console.warn) {
       console.warn('[toolrail] ' + msg);
@@ -1010,10 +1172,24 @@
     return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   }
 
+  /**
+   * An attribute selector matching one tool's button anywhere in the rail.
+   *
+   * @param {string} id Tool id.
+   * @return {string} The selector.
+   */
   function toolSelector(id) {
     return '[data-tool="' + attrValue(id) + '"]';
   }
 
+  /**
+   * Every id already claimed — the rail's own chrome buttons, the built-in
+   * tools and their children, and everything registered. Registration
+   * checks against this so a new tool cannot collide with an existing one
+   * and hijack its [data-tool="…"] sweeps.
+   *
+   * @return {Array<string>} The claimed ids.
+   */
   function allToolIds() {
     // The rail's own chrome buttons are not tools, but they carry
     // data-tool ids the [data-tool="…"] sweeps can reach — a registered
@@ -1248,14 +1424,35 @@
     }
   }
 
+  /**
+   * Persist the pinned slots, normalized on the way out so a caller can
+   * hand over a list from a saved set or an imported file without cleaning
+   * it first.
+   *
+   * @param {Array} slots Slot names, in rail order.
+   * @return {void}
+   */
   function saveSlots(slots) {
     writeKey(SLOTS_KEY, JSON.stringify(normalizeSlots(slots)));
   }
 
+  /**
+   * Whether a slot name is currently pinned to the rail.
+   *
+   * @param {string} blockName Block type or pattern slot name.
+   * @return {boolean} True when pinned.
+   */
   function isPinned(blockName) {
     return loadSlots().indexOf(blockName) !== -1;
   }
 
+  /**
+   * Pin a slot to the end of the rail, then rebuild. A no-op for an empty
+   * name or one already pinned.
+   *
+   * @param {string} blockName Block type or pattern slot name.
+   * @return {boolean} True when the rail changed.
+   */
   function pinBlock(blockName) {
     if (typeof blockName !== 'string' || blockName === '') {
       return false;
@@ -1271,6 +1468,13 @@
     return true;
   }
 
+  /**
+   * Unpin a slot and rebuild. The author's metadata and any extension data
+   * go with it, so a later re-pin starts clean.
+   *
+   * @param {string} blockName Block type or pattern slot name.
+   * @return {boolean} True when the rail changed.
+   */
   function unpinBlock(blockName) {
     var slots = loadSlots();
     var idx = slots.indexOf(blockName);
@@ -1379,6 +1583,14 @@
     return JSON.parse(json);
   }
 
+  /**
+   * Tell extensions one slot's entry changed. Fired for every writer — the
+   * public API, the Edit form, unpinning, and a set load — so a listener
+   * needs only this one event to stay current.
+   *
+   * @param {string} slot The slot name.
+   * @return {void}
+   */
   function announcePinMetaChange(slot) {
     window.dispatchEvent(new CustomEvent('toolrail:pin-meta-changed', { detail: { slot: slot } }));
   }
@@ -1452,6 +1664,14 @@ var DASHICON_NAMES = [
     'whatsapp', 'wordpress', 'wordpress-alt', 'xing', 'yes', 'yes-alt', 'youtube'
   ];
 
+  /**
+   * Whether a string names a Dashicon the platform actually ships. The
+   * pattern alone is not enough: an unknown name passes it and then paints
+   * an empty box on the toolbar.
+   *
+   * @param {string} value Candidate icon value.
+   * @return {boolean} True when the icon exists.
+   */
   function isDashiconName(value) {
     return DASHICON_PATTERN.test(value) && DASHICON_NAMES.indexOf(value.slice('dashicons-'.length)) !== -1;
   }
@@ -1541,6 +1761,13 @@ var DASHICON_NAMES = [
     return !!entry && !!(entry.title || entry.description || entry.icon);
   }
 
+  /**
+   * Read every pinned slot's entry, each one normalized and anything
+   * unrecognized dropped. The map is prototype-less for the same reason
+   * the set map is: a slot named '__proto__' must be an ordinary key.
+   *
+   * @return {Object} Slot name to entry.
+   */
   function loadPinMeta() {
     var out = Object.create(null);
     try {
@@ -1560,6 +1787,13 @@ var DASHICON_NAMES = [
     return out;
   }
 
+  /**
+   * Write the whole pin-metadata map back. Callers mutate a loaded copy
+   * and persist once, so a multi-slot change is one write.
+   *
+   * @param {Object} map Slot name to entry.
+   * @return {void}
+   */
   function persistPinMeta(map) {
     writeKey(PIN_META_KEY, JSON.stringify(map));
   }
@@ -1756,6 +1990,12 @@ var DASHICON_NAMES = [
     return Object.keys(out).length ? out : null;
   }
 
+  /**
+   * Write the whole set-metadata map back: set name to its label snapshot.
+   *
+   * @param {Object} map Set name to slot-label map.
+   * @return {void}
+   */
   function persistConfigMeta(map) {
     writeKey(SET_META_KEY, JSON.stringify(map));
   }
@@ -1798,10 +2038,24 @@ var DASHICON_NAMES = [
     return out;
   }
 
+  /**
+   * Write the whole saved-set map back: set name to its list of slots.
+   *
+   * @param {Object} map Set name to slot names.
+   * @return {void}
+   */
   function persistConfigs(map) {
     writeKey(CONFIGS_KEY, JSON.stringify(map));
   }
 
+  /**
+   * Save the rail's current pins as a named set, together with a snapshot
+   * of the labels those pins carry right now — so restoring the set later
+   * restores what the author saw, not just which blocks were on the rail.
+   *
+   * @param {string} name Set name; trimmed, and refused when empty.
+   * @return {boolean} True when saved.
+   */
   function saveConfig(name) {
     if (typeof name !== 'string' || name.trim() === '') {
       return false;
@@ -1815,6 +2069,15 @@ var DASHICON_NAMES = [
     return true;
   }
 
+  /**
+   * Restore a saved set: its slots become the rail, every slot the set
+   * does not name is unpinned and loses its entry, and the set's label
+   * snapshot lands on the pins it names. Extension data merges per
+   * namespace so a namespace added since the set was saved survives.
+   *
+   * @param {string} name Set name.
+   * @return {boolean} True when the set existed and was applied.
+   */
   function loadConfig(name) {
     var map = loadConfigs();
     if (!Object.prototype.hasOwnProperty.call(map, name) || !Array.isArray(map[name])) {
@@ -1878,6 +2141,12 @@ var DASHICON_NAMES = [
     return true;
   }
 
+  /**
+   * Delete a saved set and its label snapshot.
+   *
+   * @param {string} name Set name.
+   * @return {boolean} True when the set existed.
+   */
   function deleteConfig(name) {
     var map = loadConfigs();
     if (!Object.prototype.hasOwnProperty.call(map, name)) {
@@ -1911,10 +2180,25 @@ var DASHICON_NAMES = [
   /** Slot grammar for a pattern: user:<digits>, or namespace/name. */
   var PATTERN_SLOT_PATTERN = /^pattern:(user:[0-9]+|[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*)$/i;
 
+  /**
+   * Whether a slot names a pattern rather than a block type. A cheap
+   * prefix test for the hot paths; PATTERN_SLOT_PATTERN is the grammar
+   * check for anything arriving from outside.
+   *
+   * @param {*} name Candidate slot name.
+   * @return {boolean} True for a 'pattern:…' slot.
+   */
   function isPatternSlot(name) {
     return typeof name === 'string' && name.indexOf(PATTERN_SLOT_PREFIX) === 0;
   }
 
+  /**
+   * The core-data store, or null when the data module is not present.
+   * Every pattern read goes through it, so the whole catalog degrades to
+   * empty rather than throwing in a context without wp.data.
+   *
+   * @return {Object|null} The store selectors, or null.
+   */
   function coreSelect() {
     try {
       return wp.data && wp.data.select ? (wp.data.select('core') || null) : null;
@@ -1948,6 +2232,13 @@ var DASHICON_NAMES = [
    */
   var sessionUserPatterns = [];
 
+  /**
+   * The author's own patterns (wp_block posts) from the core store, with
+   * anything saved this session merged in and deduped by id — a fresh save
+   * lands in the item table before the query cache these read from.
+   *
+   * @return {Array<Object>} The records, possibly empty.
+   */
   function userPatternRecords() {
     var sel = coreSelect();
     var list = [];
@@ -1999,6 +2290,15 @@ var DASHICON_NAMES = [
     };
   }
 
+  /**
+   * One registered (core, theme or plugin) pattern as a catalog
+   * descriptor, in the same shape a user pattern takes so every consumer
+   * handles one kind of object. Registered patterns are never synced: they
+   * insert as a fresh parse of their markup.
+   *
+   * @param {Object} p A core getBlockPatterns() entry.
+   * @return {Object} The descriptor.
+   */
   function registeredPatternDescriptor(p) {
     return {
       id: PATTERN_SLOT_PREFIX + p.name,
@@ -2070,12 +2370,29 @@ var DASHICON_NAMES = [
   var patternCatalogStarted = false;
   var patternSignature = '';
 
+  /**
+   * A cheap fingerprint of both pattern lists — the registered count, plus
+   * each user pattern's id, sync status and title. Deliberately ids and
+   * titles only: this is re-derived on every core store change, which
+   * includes each keystroke of a post edit, so hashing content would be a
+   * real cost for no gain.
+   *
+   * @return {string} The signature.
+   */
   function patternCatalogSignature() {
     return registeredPatterns().length + '|' + userPatternRecords().map(function (r) {
       return r.id + ':' + (r.wp_pattern_sync_status || '') + ':' + recordText(r.title);
     }).join(',');
   }
 
+  /**
+   * Start the pattern catalog: fetch both lists once, kick off the
+   * create-pattern capability check so a dialog rarely has to wait for it,
+   * then subscribe to the core store and rebuild when the signature moves.
+   * The rebuild is skipped unless a pattern is pinned or the settings
+   * dialog is open — a rebuild for nothing still moves focus out of the
+   * rail. Idempotent; boot() and the dialogs all call it.
+   */
   function watchPatternCatalog() {
     if (patternCatalogStarted) {
       return;
@@ -2221,6 +2538,14 @@ var DASHICON_NAMES = [
     section: 'core/group'
   };
 
+  /**
+   * Resolve a registered tool's `parent` to a pinned slot, accepting a
+   * legacy alias, a block name, or the full slot id.
+   *
+   * @param {Array<Object>} slots  The rail model's slot entries.
+   * @param {string}        parent The declared parent.
+   * @return {Object|null} The slot to nest under, or null.
+   */
   function slotForParent(slots, parent) {
     var wanted = Object.prototype.hasOwnProperty.call(PARENT_SLOT_ALIASES, parent)
       ? PARENT_SLOT_ALIASES[parent]
@@ -2301,6 +2626,13 @@ var DASHICON_NAMES = [
     return { tools: topLevel, slots: slots };
   }
 
+  /**
+   * One tool by id, searched across top-level tools, pinned slots and
+   * every flyout child.
+   *
+   * @param {string} id Tool id.
+   * @return {Object|null} The model entry, or null when no such tool.
+   */
   function findTool(id) {
     var found = null;
     var model = railModel();
@@ -2323,6 +2655,15 @@ var DASHICON_NAMES = [
 
   var activeTool = 'select';
 
+  /**
+   * Whether selecting this tool ARMS the rail — the next canvas click
+   * inserts its block. The arm-then-click behavior is the rail's whole
+   * point, so this test gates the cursor, the announcement and the
+   * canvas handlers.
+   *
+   * @param {Object} tool A railModel() entry or a flyout child.
+   * @return {boolean}
+   */
   function isArmingTool(tool) {
     return !!(tool && (tool.insertBlock || tool.createBlock));
   }
@@ -2369,6 +2710,14 @@ var DASHICON_NAMES = [
     return overviewOpen ? 'overview' : 'edit';
   }
 
+  /**
+   * Whether a mode takes the canvas for itself, which is what makes every
+   * canvas tool unavailable while it runs. Kept separate from railMode()
+   * so a future mode declares this fact once.
+   *
+   * @param {string} mode A railMode() value.
+   * @return {boolean}
+   */
   function modeCapturesCanvas(mode) {
     return mode === 'overview';
   }
@@ -2407,12 +2756,23 @@ var DASHICON_NAMES = [
     return !!(tool.children && tool.children.some(toolAvailable));
   }
 
+  /**
+   * Tell extensions the mode changed, so a provider can re-read
+   * availability without knowing how the rail decides it.
+   */
   function announceModeChange() {
     window.dispatchEvent(new CustomEvent('toolrail:mode-changed', {
       detail: { mode: railMode() }
     }));
   }
 
+  /**
+   * Make one tool current: record it, move the pressed state onto its
+   * button, and put the canvas into (or out of) the armed cursor state.
+   *
+   * @param {string} id Tool id.
+   * @return {void}
+   */
   function setActiveTool(id) {
     activeTool = id;
     syncPressed(true);
@@ -2627,6 +2987,14 @@ var DASHICON_NAMES = [
    */
   var gestureGeneration = 0;
 
+  /**
+   * Snapshot the canvas before the browser reacts to the gesture, so the
+   * stray-block sweep can tell what core appends during this click from
+   * what the author already had. The generation bump comes first and
+   * unconditionally: a Select gesture still has to invalidate a sweep left
+   * pending by the previous armed click, because core's append IS the
+   * author's intent under Select.
+   */
   function handleCanvasPointerdown() {
     // Bump FIRST and unconditionally: a gesture with Select active still
     // has to invalidate a pending sweep from the previous armed click,
@@ -2644,6 +3012,17 @@ var DASHICON_NAMES = [
     preGestureIds = ids;
   }
 
+  /**
+   * The armed click: build the tool's blocks, find an insertion point that
+   * will accept them, insert, then reclaim the empty paragraph core
+   * appended on the way past. Shift keeps the tool armed; anything else
+   * returns the rail to Select. When no parent up the tree accepts the
+   * block the rail says so and STAYS armed — a silent disarm reads as the
+   * tool having done nothing.
+   *
+   * @param {MouseEvent} e The canvas click.
+   * @return {void}
+   */
   function handleCanvasClick(e) {
     if (activeTool === 'select') {
       return;
@@ -2788,6 +3167,13 @@ var DASHICON_NAMES = [
     window.setTimeout(run, 80);
   }
 
+  /**
+   * Escape disarms from inside the canvas, so the author never has to go
+   * back to the rail to put a tool down.
+   *
+   * @param {KeyboardEvent} e The canvas keydown.
+   * @return {void}
+   */
   function handleCanvasKeydown(e) {
     if (e.key === 'Escape' && activeTool !== 'select') {
       setActiveTool('select');
@@ -2803,6 +3189,13 @@ var DASHICON_NAMES = [
    */
   var boundDoc = null;
 
+  /**
+   * The document the canvas actually lives in: the editor iframe's, or the
+   * content region's for a non-iframed editor. Null while the iframe has
+   * no document, or when it is cross-origin.
+   *
+   * @return {Document|null} The canvas document, or null.
+   */
   function canvasDoc() {
     var iframe = document.querySelector('iframe[name="editor-canvas"]');
     if (iframe) {
@@ -2816,6 +3209,14 @@ var DASHICON_NAMES = [
     return content ? content.ownerDocument : null;
   }
 
+  /**
+   * Bind the canvas handlers, and inject the armed-cursor style into the
+   * canvas document (a style in the editor document cannot reach inside
+   * the iframe). Re-run from the mount observer and cheap to repeat: it
+   * returns at once unless the document IDENTITY changed, which is the
+   * case that matters, because the editor replaces the iframe's document
+   * after the element is inserted.
+   */
   function bindCanvas() {
     var doc = canvasDoc();
     if (!doc || doc === boundDoc) {
@@ -2842,6 +3243,14 @@ var DASHICON_NAMES = [
     return readKey(HIDE_CORE_INSERTER_KEY) !== '0';
   }
 
+  /**
+   * Reflect the armed state where CSS can see it: the crosshair cursor on
+   * the canvas document, and — unless the author turned it off — a body
+   * class that hides core's between-block "+". That "+" is a popover in
+   * the EDITOR document sitting on top of the iframe, so without this an
+   * armed click in the gap between two blocks lands on core's inserter and
+   * the tool never fires.
+   */
   function markCanvasArmed() {
     var armed = activeTool !== 'select';
     var doc = boundDoc || canvasDoc();
@@ -2872,6 +3281,15 @@ var DASHICON_NAMES = [
 
   var openFlyout = null;
 
+  /**
+   * Close the open flyout, release its three document listeners, and reset
+   * the parent button's expanded state.
+   *
+   * @param {boolean} refocusParent Return focus to the parent button —
+   *                                true for a keyboard dismissal, false
+   *                                when focus has already moved elsewhere.
+   * @return {void}
+   */
   function closeFlyout(refocusParent) {
     if (!openFlyout) {
       return;
@@ -2889,6 +3307,13 @@ var DASHICON_NAMES = [
     }
   }
 
+  /**
+   * Dismiss the flyout on a press outside it. Without refocus: the press
+   * is taking focus somewhere itself.
+   *
+   * @param {MouseEvent} e The document mousedown.
+   * @return {void}
+   */
   function onDocMousedown(e) {
     if (openFlyout && !openFlyout.node.contains(e.target) && e.target !== openFlyout.parentBtn) {
       closeFlyout(false);
@@ -2909,6 +3334,14 @@ var DASHICON_NAMES = [
     closeFlyout(true);
   }
 
+  /**
+   * Close the flyout once focus leaves it — the Tab case the Escape
+   * listener above cannot catch, since a menu item is tabIndex -1 and Tab
+   * walks straight out of the menu.
+   *
+   * @param {FocusEvent} e The document focusin.
+   * @return {void}
+   */
   function onFlyoutFocusin(e) {
     if (!openFlyout) {
       return;
@@ -2919,6 +3352,14 @@ var DASHICON_NAMES = [
     closeFlyout(false);
   }
 
+  /**
+   * Activate a flyout item: run its action, or arm it. A dimmed item is
+   * inert here only — it keeps its place in the arrow order and still
+   * announces, so the menu never changes shape under a screen reader.
+   *
+   * @param {Object} child A flyout child descriptor.
+   * @return {void}
+   */
   function activateChild(child) {
     if (!toolAvailable(child)) {
       // Dimmed (aria-disabled) items stay in the menu's arrow order and
@@ -2988,6 +3429,16 @@ var DASHICON_NAMES = [
     }
   }
 
+  /**
+   * Open a tool's flyout menu beside the rail and move focus into it. The
+   * menu is built fresh per open, placed by placeSurface(), and holds
+   * document-level listeners for the whole time it is up.
+   *
+   * @param {HTMLElement} btn     The parent tool button.
+   * @param {Object}      tool    Its railModel() entry.
+   * @param {HTMLElement} wrapper The positioned region the menu lives in.
+   * @return {void}
+   */
   function openFlyoutFor(btn, tool, wrapper) {
     closeFlyout(false);
     if (!tool.children.length) {
@@ -3098,6 +3549,14 @@ var DASHICON_NAMES = [
   // the author to narrow the search.
   var ICON_BROWSER_LIMIT = 72;
 
+  /**
+   * Every block type the author may pin. Parent-restricted types are left
+   * out: armed insertion lands at the document root, where a block like a
+   * column cannot go, so pinning one would only produce a tool that always
+   * refuses.
+   *
+   * @return {Array<Object>} Block type objects.
+   */
   function insertableBlockTypes() {
     return wp.blocks.getBlockTypes().filter(function (t) {
       // Parent-restricted blocks (core/column etc.) can't insert at the
@@ -3106,10 +3565,21 @@ var DASHICON_NAMES = [
     });
   }
 
+  /**
+   * The open settings dialog, or null when it is closed.
+   *
+   * @return {HTMLElement|null} The dialog node, or null.
+   */
   function settingsNode() {
     return document.querySelector('.toolrail-settings');
   }
 
+  /**
+   * The rail's settings button — the dialog's anchor and its focus-return
+   * target. Null before the rail is built.
+   *
+   * @return {HTMLElement|null} The button, or null.
+   */
   function gearButton() {
     var rail = document.getElementById('toolrail-rail');
     return rail ? rail.querySelector('[data-tool="settings"]') : null;
@@ -3124,6 +3594,17 @@ var DASHICON_NAMES = [
     }
   }
 
+  /**
+   * Close the settings dialog and unwind everything it owns: the inline
+   * Edit form, the icon browser, the three document listeners, the tools
+   * subscription, and every transient status message. The messages are
+   * dropped deliberately — an in-flight file read that resolved after the
+   * dialog closed used to surface its message, out of context, the next
+   * time settings opened.
+   *
+   * @param {boolean} refocusGear Return focus to the gear button.
+   * @return {void}
+   */
   function closeSettings(refocusGear) {
     var node = settingsNode();
     if (node) {
@@ -3155,6 +3636,12 @@ var DASHICON_NAMES = [
     }
   }
 
+  /**
+   * Dismiss the dialog on a press outside it and outside the gear.
+   *
+   * @param {MouseEvent} e The document mousedown.
+   * @return {void}
+   */
   function onSettingsMousedown(e) {
     var node = settingsNode();
     var gear = gearButton();
@@ -3174,6 +3661,15 @@ var DASHICON_NAMES = [
   // it. Both listeners now sit on the document for the dialog's lifetime.
   var refreshingSettings = false;
 
+  /**
+   * Escape unwinds ONE level per press, the way nested disclosures are
+   * expected to: the icon browser first, then the Edit form, then the
+   * dialog. Bound to the DOCUMENT rather than the dialog node, because a
+   * single Tab can put focus in the canvas and Escape still has to reach.
+   *
+   * @param {KeyboardEvent} e The document keydown.
+   * @return {void}
+   */
   function onSettingsKeydown(e) {
     if (e.key !== 'Escape' || !settingsOpen) {
       return;
@@ -3219,10 +3715,28 @@ var DASHICON_NAMES = [
     refreshSettings(focusSelector || '.toolrail-settings-iconbrowse');
   }
 
+  /**
+   * A selector prefix for one pinned row in the dialog, used to aim focus
+   * at a control inside that row after a rebuild. The trailing space is
+   * load-bearing — callers append a descendant class.
+   *
+   * @param {string} name The slot name.
+   * @return {string} The selector prefix.
+   */
   function pinnedRowSelector(name) {
     return '.toolrail-settings-pinnedrow[data-block="' + attrValue(name) + '"] ';
   }
 
+  /**
+   * Close the dialog once focus genuinely leaves it — the Tab case the
+   * outside-press listener cannot see. Focus is NOT pulled back: the
+   * author is going somewhere on purpose. The rebuild guard matters,
+   * because refreshSettings empties and refills the body and that focus
+   * churn is the rail's own, not the author leaving.
+   *
+   * @param {FocusEvent} e The document focusin.
+   * @return {void}
+   */
   function onSettingsFocusin(e) {
     // refreshSettings empties and rebuilds the body; the focus churn in
     // between is ours, not the author leaving.
@@ -3239,6 +3753,14 @@ var DASHICON_NAMES = [
     closeSettings(false);
   }
 
+  /**
+   * A bare element with an optional class — the dialog builds a lot of
+   * these, and the helper keeps each section readable.
+   *
+   * @param {string} tag       Element name.
+   * @param {string} className Optional class.
+   * @return {HTMLElement} The element.
+   */
   function settingsRow(tag, className) {
     var el = document.createElement(tag);
     if (className) {
@@ -3247,6 +3769,15 @@ var DASHICON_NAMES = [
     return el;
   }
 
+  /**
+   * A dialog push button. type="button" is explicit: these live inside a
+   * form element, where the default would submit it.
+   *
+   * @param {string}   label     Visible text, which is also the name.
+   * @param {Function} onClick   Click handler.
+   * @param {string}   className Optional extra class.
+   * @return {HTMLButtonElement} The button.
+   */
   function settingsButton(label, onClick, className) {
     var btn = document.createElement('button');
     btn.type = 'button';
@@ -3655,6 +4186,15 @@ var DASHICON_NAMES = [
     }).length;
   }
 
+  /**
+   * Write one saved set out as a JSON download. The set's label snapshot
+   * rides along keyed by slot name, so a set moved to another site keeps
+   * its labels; the key is ABSENT when the set has none, which keeps a
+   * plain set file byte-for-byte what it was before 1.0.1.
+   *
+   * @param {string} name Set name.
+   * @return {boolean} True when the set existed and the download started.
+   */
   function exportConfig(name) {
     var map = loadConfigs();
     if (!Object.prototype.hasOwnProperty.call(map, name)) {
@@ -3751,6 +4291,16 @@ var DASHICON_NAMES = [
     };
   }
 
+  /**
+   * One sentence per thing the author needs to know about an import: what
+   * came in, what this site cannot render yet, what was collapsed or
+   * ignored, and whether labels came with the file. Assembled from whole
+   * translatable sentences rather than fragments, so each one can be
+   * translated with its own plural rules.
+   *
+   * @param {Object} result An importConfigPayload() success result.
+   * @return {string} The message.
+   */
   function importStatusMessage(result) {
     var msg = sprintf(
       /* translators: 1: set name, 2: block count. */
@@ -3843,6 +4393,18 @@ var DASHICON_NAMES = [
     help.textContent = __('Give this tool your own name, description and icon. Empty fields use the block\'s own. Only your toolbar changes.', 'editrail');
     fieldset.appendChild(help);
 
+    /**
+     * Append a labeled control to the fieldset and return it, so the caller
+     * can go on to set the type and value. Every field is explicitly
+     * labeled and has autocomplete off — these are toolbar settings, not
+     * anything a form filler should offer to complete.
+     *
+     * @param {string}      id          Control id, tied to its label.
+     * @param {string}      labelText   Visible label.
+     * @param {HTMLElement} control     The input or textarea.
+     * @param {string}      describedBy Optional aria-describedby ids.
+     * @return {HTMLElement} The control.
+     */
     function field(id, labelText, control, describedBy) {
       var lbl = settingsRow('label', 'toolrail-settings-label');
       lbl.setAttribute('for', id);
@@ -3889,6 +4451,11 @@ var DASHICON_NAMES = [
     var preview = settingsRow('span', 'toolrail-settings-iconpreview');
     preview.setAttribute('aria-hidden', 'true');
     iconRow.appendChild(preview);
+    /**
+     * Redraw the icon preview from the field's current text. Decorative:
+     * aria-hidden, because the field's own text IS the value for assistive
+     * technology. An invalid value simply draws nothing.
+     */
     function renderPreview() {
       preview.className = 'toolrail-settings-iconpreview';
       preview.textContent = '';
@@ -4060,6 +4627,15 @@ var DASHICON_NAMES = [
     var grid = settingsRow('div', 'toolrail-settings-icongrid');
     panel.appendChild(grid);
 
+    /**
+     * Dashicon names matching the search. The 'dashicons-' prefix is
+     * stripped from the QUERY, because the Icon field shows a full
+     * 'dashicons-star-filled' value and pasting that back must still find
+     * the icon; dashes also match spaces, so "star filled" works.
+     *
+     * @param {string} query The raw search text.
+     * @return {Array<string>} Matching names, unprefixed.
+     */
     function matches(query) {
       // The field shows 'dashicons-star-filled'; pasting that back into
       // the search must find star-filled, so the prefix is not part of
@@ -4073,6 +4649,13 @@ var DASHICON_NAMES = [
       });
     }
 
+    /**
+     * Draw the icon grid and its count line for the current query, capped at
+     * ICON_BROWSER_LIMIT chips — all 349 icons are cheap to build but not to
+     * read, so past the cap the count line asks the author to narrow the
+     * search instead. Each chip carries a pressed state for the icon the
+     * field currently holds.
+     */
     function render() {
       var hits = matches(iconBrowserQuery);
       var shown = hits.slice(0, ICON_BROWSER_LIMIT);
@@ -4142,6 +4725,18 @@ var DASHICON_NAMES = [
     return panel;
   }
 
+  /**
+   * Fill the settings dialog: the heading, the position, wide-mode and
+   * appearance sections, then pinned tools and the add-a-block search,
+   * then saved sets. Called for the first open and again for every
+   * refresh, so it must be able to rebuild from stored state alone —
+   * the search text is passed back in because it is the one thing that
+   * lives only in the DOM.
+   *
+   * @param {HTMLElement} node        The dialog body, already emptied.
+   * @param {string}      searchValue The search text to restore.
+   * @return {void}
+   */
   function buildSettingsContent(node, searchValue) {
     var head = settingsRow('div', 'toolrail-settings-head');
     var title = settingsRow('h2', 'toolrail-settings-title');
@@ -4359,6 +4954,11 @@ var DASHICON_NAMES = [
     results.id = 'toolrail-settings-results';
     node.appendChild(results);
 
+    /**
+     * Draw the add-a-block results for the current search: up to 12 block
+     * types, then up to 12 patterns, with anything already pinned left out.
+     * An empty search shows the prompt rather than the whole catalog.
+     */
     function renderResults() {
       results.textContent = '';
       var term = search.value.trim().toLowerCase();
@@ -4689,15 +5289,32 @@ var DASHICON_NAMES = [
 
   var helpOpen = false;
 
+  /**
+   * The open help panel, or null when it is closed.
+   *
+   * @return {HTMLElement|null} The panel node, or null.
+   */
   function helpNode() {
     return document.querySelector('.toolrail-help');
   }
 
+  /**
+   * The rail's "?" button. Null when the author has hidden it, or before
+   * the rail is built.
+   *
+   * @return {HTMLElement|null} The button, or null.
+   */
   function helpButton() {
     var rail = document.getElementById('toolrail-rail');
     return rail ? rail.querySelector('[data-tool="help"]') : null;
   }
 
+  /**
+   * Whether the author has taken the "?" tool off the rail. The panel is
+   * still reachable from Toolbar settings when it is hidden.
+   *
+   * @return {boolean} True when hidden.
+   */
   function isHelpHidden() {
     return readKey(HELP_HIDDEN_KEY) === '1';
   }
@@ -4709,6 +5326,13 @@ var DASHICON_NAMES = [
     return helpButton() || gearButton();
   }
 
+  /**
+   * Close the help panel and release its three document listeners.
+   *
+   * @param {boolean} refocusOpener Return focus to the "?" tool, or to the
+   *                                gear when the "?" is hidden.
+   * @return {void}
+   */
   function closeHelp(refocusOpener) {
     var node = helpNode();
     if (node) {
@@ -4731,6 +5355,12 @@ var DASHICON_NAMES = [
     }
   }
 
+  /**
+   * Dismiss the panel on a press outside it and outside its button.
+   *
+   * @param {MouseEvent} e The document mousedown.
+   * @return {void}
+   */
   function onHelpMousedown(e) {
     var node = helpNode();
     var btn = helpButton();
@@ -4739,6 +5369,16 @@ var DASHICON_NAMES = [
     }
   }
 
+  /**
+   * Escape closes the panel — but it only CLAIMS the key when focus is
+   * actually in the panel or on its button. The auto-opened panel never
+   * takes focus, so an Escape pressed then belongs to whatever the author
+   * is really in; swallowing it left the inserter open and teleported the
+   * caret.
+   *
+   * @param {KeyboardEvent} e The document keydown.
+   * @return {void}
+   */
   function onHelpKeydown(e) {
     if (e.key !== 'Escape' || !helpOpen) {
       return;
@@ -4764,6 +5404,12 @@ var DASHICON_NAMES = [
     }
   }
 
+  /**
+   * Close the panel once focus leaves it, without pulling focus back.
+   *
+   * @param {FocusEvent} e The document focusin.
+   * @return {void}
+   */
   function onHelpFocusin(e) {
     if (!helpOpen) {
       return;
@@ -4776,6 +5422,14 @@ var DASHICON_NAMES = [
     closeHelp(false);
   }
 
+  /**
+   * The panel's copy, as titled sections of paragraphs. Built on each open
+   * rather than held as a constant so the strings are translated after the
+   * editor's locale data has loaded, and so a section can key off state
+   * (the last one names whichever button the author can actually see).
+   *
+   * @return {Array<{title: string, body: Array<string>}>} The sections.
+   */
   function helpSections() {
     return [
       {
@@ -5035,10 +5689,21 @@ var DASHICON_NAMES = [
   var overviewFadeTimer = null;
   var overviewClosingFrame = null;
 
+  /**
+   * The editor skeleton's content region — the box holding the canvas, and
+   * the positioning context the overview overlay lives in.
+   *
+   * @return {HTMLElement|null} The region, or null.
+   */
   function contentRegion() {
     return document.querySelector('.interface-interface-skeleton__content');
   }
 
+  /**
+   * The editor canvas iframe, or null in a non-iframed editor.
+   *
+   * @return {HTMLIFrameElement|null} The iframe, or null.
+   */
   function canvasFrame() {
     return document.querySelector('iframe[name="editor-canvas"]');
   }
@@ -5092,10 +5757,20 @@ var DASHICON_NAMES = [
     return Math.max(0, content.clientHeight - overviewCanvasTop() - 24);
   }
 
+  /**
+   * The open overview overlay, or null when it is closed.
+   *
+   * @return {HTMLElement|null} The overlay, or null.
+   */
   function overviewNode() {
     return document.getElementById('toolrail-overview');
   }
 
+  /**
+   * The rail's Section overview toggle. Null before the rail is built.
+   *
+   * @return {HTMLElement|null} The button, or null.
+   */
   function overviewButton() {
     var rail = document.getElementById('toolrail-rail');
     return rail ? rail.querySelector('[data-tool="overview"]') : null;
@@ -5125,6 +5800,14 @@ var DASHICON_NAMES = [
     return sel ? sel.getBlockOrder(overviewRoot) : [];
   }
 
+  /**
+   * A fingerprint of what the overview is showing: the current root plus
+   * its child order. The store subscription compares this rather than
+   * rebuilding on every editor change, so typing inside a block does not
+   * tear down and rebuild the boxes.
+   *
+   * @return {string} The signature.
+   */
   function overviewCurrentSignature() {
     return overviewRoot + '|' + overviewOrder().join(',');
   }
@@ -5378,6 +6061,15 @@ var DASHICON_NAMES = [
       root below this on-screen height — the content-derived floor. */
   var OVERVIEW_MIN_BLOCK_PX = 48;
 
+  /**
+   * Set the author's zoom, clamped between OVERVIEW_MIN_SCALE and 1:1, and
+   * repaint. The announcement is opt-in because a wheel or slider gesture
+   * produces a burst of these and only the gesture's end is worth saying.
+   *
+   * @param {number}  nextK      Requested scale.
+   * @param {boolean} announceIt Speak the resulting percentage.
+   * @return {void}
+   */
   function setOverviewZoom(nextK, announceIt) {
     overviewUserScale = Math.min(1, Math.max(OVERVIEW_MIN_SCALE, nextK));
     applyOverviewScale();
@@ -5391,6 +6083,11 @@ var DASHICON_NAMES = [
     }
   }
 
+  /**
+   * Repaint the zoom percentage in the overview bar. Reads the EFFECTIVE
+   * scale, not the author's requested one — the fit can hold it below what
+   * was asked for.
+   */
   function updateOverviewZoomLabel() {
     var label = document.querySelector('#toolrail-overview .toolrail-ov-zoomlabel');
     if (label) {
@@ -5398,6 +6095,13 @@ var DASHICON_NAMES = [
     }
   }
 
+  /**
+   * Take the canvas out of scaled mode: drop every scale custom property,
+   * then sweep EVERY scale host off the page. A sweep rather than the
+   * current frame's parent, because the editor can have replaced the
+   * iframe and its wrapper while the overview was open, which would strand
+   * the class on a detached node's replacement.
+   */
   function clearOverviewScale() {
     var style = document.body.style;
     style.removeProperty('--toolrail-overview-scale');
@@ -5515,6 +6219,13 @@ var DASHICON_NAMES = [
     });
   }
 
+  /**
+   * The overlay box for one block, or null when it is not on screen — a
+   * block at another root, or one whose box has not been built yet.
+   *
+   * @param {string} clientId The block's client id.
+   * @return {HTMLElement|null} The box, or null.
+   */
   function overviewBoxFor(clientId) {
     var overlay = overviewNode();
     return overlay
@@ -5587,6 +6298,15 @@ var DASHICON_NAMES = [
     ]);
   }
 
+  /**
+   * Close the active box's disclosure. Rebuilds rather than repaints for
+   * the same reason selecting does: the controls strip's content is baked
+   * per build and has to track the selection.
+   *
+   * @param {boolean} refocusPick Put focus back on that box's pick button;
+   *                              otherwise the rebuild re-derives it.
+   * @return {void}
+   */
   function deselectOverviewBox(refocusPick) {
     if (!overviewSelected) {
       return;
@@ -5662,6 +6382,14 @@ var DASHICON_NAMES = [
     setOverviewSelection(order.slice(Math.min(a, b), Math.max(a, b) + 1), toId);
   }
 
+  /**
+   * Add or remove one box from the multi-selection. Toggling onto a lone
+   * PICKED box adds to it rather than replacing it: the pick was a
+   * selection of one, and the modifier means "and this one too".
+   *
+   * @param {string} clientId The block's client id.
+   * @return {void}
+   */
   function toggleOverviewSelectionId(clientId) {
     if (overviewSelectedIds.indexOf(clientId) !== -1) {
       removeOverviewSelectionId(clientId);
@@ -5702,6 +6430,10 @@ var DASHICON_NAMES = [
     setOverviewSelection(ids, nextActive);
   }
 
+  /**
+   * Drop the multi-selection and its anchor, then repaint. The ACTIVE box
+   * is left alone — clearing a group does not close the disclosure.
+   */
   function clearOverviewMultiSelection() {
     overviewSelectedIds = [];
     overviewAnchor = '';
@@ -5775,6 +6507,15 @@ var DASHICON_NAMES = [
     document.addEventListener('mouseup', onOverviewDragEnd, true);
   }
 
+  /**
+   * Track a press into a drag: nothing happens until it passes a 5px
+   * threshold, which is what keeps an ordinary click on a box working as
+   * the controls disclosure. Once active it dims every box the release
+   * would move and repaints the drop line.
+   *
+   * @param {MouseEvent} e The document mousemove.
+   * @return {void}
+   */
   function onOverviewDragMove(e) {
     if (!overviewDrag) {
       return;
@@ -6026,6 +6767,11 @@ var DASHICON_NAMES = [
     document.addEventListener('mousedown', overviewCancelLatchUp, true);
   }
 
+  /**
+   * Release the click-swallowing latch a canceled drag left armed. Left
+   * in place it stayed armed for the rest of the overview session and ate
+   * the next real click.
+   */
   function clearOverviewCancelLatch() {
     if (overviewCancelLatchUp) {
       document.removeEventListener('mouseup', overviewCancelLatchUp, true);
@@ -6034,6 +6780,11 @@ var DASHICON_NAMES = [
     }
   }
 
+  /**
+   * Tear the drag down: remove the drop line, undim the boxes, release the
+   * document listeners, and forget the drag. Shared by the completed and
+   * canceled paths, so neither can leave half of it behind.
+   */
   function finishOverviewDrag() {
     if (!overviewDrag) {
       return;
@@ -6052,6 +6803,16 @@ var DASHICON_NAMES = [
     overviewDrag = null;
   }
 
+  /**
+   * Complete a drag: dispatch the move the drop line was showing, for the
+   * group or the single block. A release that never passed the drag
+   * threshold is left alone as an ordinary click. A real drag latches the
+   * click the browser is about to fire on the button under the pointer, so
+   * the release cannot also toggle that box's controls.
+   *
+   * @param {MouseEvent} e The document mouseup.
+   * @return {void}
+   */
   function onOverviewDragEnd(e) {
     if (!overviewDrag) {
       return;
@@ -6664,6 +7425,15 @@ var DASHICON_NAMES = [
     ));
   }
 
+  /**
+   * Move one block up (-1) or down (+1) among its siblings — what the
+   * box's arrow controls call. The index work, the permission check and
+   * the announcement all live in moveOverviewBlockTo.
+   *
+   * @param {string} clientId The block's client id.
+   * @param {number} delta    -1 or +1.
+   * @return {void}
+   */
   function moveOverviewBlock(clientId, delta) {
     var idx = overviewOrder().indexOf(clientId);
     if (idx === -1) {
@@ -6972,6 +7742,16 @@ var DASHICON_NAMES = [
     }
   }
 
+  /**
+   * Draw the marquee rectangle and paint the selection it touches, live,
+   * so the author sees the group build. Any positive overlap on both axes
+   * counts as a hit; the announcement waits for the release, because a
+   * gesture deserves one message, not one per frame. Nothing happens until
+   * the press passes a 5px threshold.
+   *
+   * @param {MouseEvent} e The document mousemove.
+   * @return {void}
+   */
   function onOverviewMarqueeMove(e) {
     if (!overviewMarquee) {
       return;
@@ -7024,6 +7804,15 @@ var DASHICON_NAMES = [
     setOverviewSelection(overviewMarquee.additive ? overviewMarquee.baseIds.concat(hits) : hits, '');
   }
 
+  /**
+   * Complete a marquee: make its first member the active box, rebuild so
+   * that member's strip becomes the group's, and announce the selection
+   * once. A press that never became a marquee is the plain empty-space
+   * click it has always been — collapse the controls and clear the group.
+   *
+   * @param {MouseEvent} e The document mouseup.
+   * @return {void}
+   */
   function onOverviewMarqueeEnd(e) {
     var m = overviewMarquee;
     cancelOverviewMarquee(false);
@@ -7303,6 +8092,17 @@ var DASHICON_NAMES = [
     scheduleOverviewSettle();
   }
 
+  /**
+   * Build the overview overlay and wire the three gestures the MODE owns:
+   * the wheel pans, an empty-space press starts a marquee (or, if it never
+   * moves, collapses the controls), and focusing a box pans it into view —
+   * the keyboard's only route to off-screen content. The overlay captures
+   * every pointer event over the canvas, which is what stops a click from
+   * falling through and editing the zoomed-out document underneath.
+   *
+   * @param {HTMLElement} body The editor skeleton's body.
+   * @return {HTMLElement} The overlay.
+   */
   function createOverviewOverlay(body) {
     var overlay = document.createElement('div');
     overlay.id = 'toolrail-overview';
@@ -7361,6 +8161,15 @@ var DASHICON_NAMES = [
     return overlay;
   }
 
+  /**
+   * Leave the mode when the viewport drops below the admin small-screen
+   * breakpoint. Both the rail and the overlay are display:none there, so
+   * staying open would strand the author in a scaled canvas with no
+   * surface left to close it from.
+   *
+   * @param {MediaQueryListEvent} e The breakpoint change.
+   * @return {void}
+   */
   function onOverviewMediaChange(e) {
     // Below the admin small-screen breakpoint the rail AND the overlay
     // are display:none — without this, the author would be stranded in
@@ -7371,6 +8180,10 @@ var DASHICON_NAMES = [
     }
   }
 
+  /**
+   * Open or close the Section overview — what the rail's toggle calls.
+   * Closing from the toggle returns focus to it.
+   */
   function toggleOverview() {
     if (overviewOpen) {
       closeOverview(true);
@@ -7379,6 +8192,13 @@ var DASHICON_NAMES = [
     }
   }
 
+  /**
+   * Enter the Section overview: reset the mode's state, scale the canvas
+   * down, and build the overlay over it. Refuses below the small-screen
+   * breakpoint, where the overlay cannot render and there would be no way
+   * back out. Disarms any armed tool first — a canvas insertion must never
+   * stay live under the overlay.
+   */
   function openOverview() {
     if (overviewOpen) {
       return;
@@ -7632,6 +8452,15 @@ var DASHICON_NAMES = [
     return true;
   }
 
+  /**
+   * Leave the Section overview: unscale the canvas, tear the overlay down,
+   * and scroll the editor to the block the author last picked, moved or
+   * drilled into — captured BEFORE the mode state resets. Nothing touched
+   * means the entry scroll and the prior selection are restored instead.
+   *
+   * @param {boolean} refocus Return focus to the overview toggle.
+   * @return {void}
+   */
   function closeOverview(refocus) {
     if (!overviewOpen) {
       return;
@@ -7932,6 +8761,14 @@ var DASHICON_NAMES = [
     };
   }
 
+  /**
+   * Paint a floating palette's offsets, clamped inside its host's padding
+   * box so it can never be dragged (or resized, or widened) out of reach.
+   * The height cap is applied BEFORE the clamp measures: a rail carrying a
+   * dozen provider tools is taller than the usable area, and offsetHeight
+   * has to already reflect the cap for the clamp to be right. A no-op for
+   * every docked position, which clears the inline styles instead.
+   */
   function applyFloatPosition() {
     var region = document.getElementById('toolrail-region');
     if (!region) {
@@ -8098,6 +8935,14 @@ var DASHICON_NAMES = [
 
   var drag = null;
 
+  /**
+   * Begin a rail drag from the grip: close every open surface, record the
+   * grab offset and the dock to return to on Escape, then listen for the
+   * move, the release and the cancel.
+   *
+   * @param {MouseEvent} e The grip mousedown.
+   * @return {void}
+   */
   function startDrag(e) {
     if (e.button !== 0) {
       return;
@@ -8129,6 +8974,14 @@ var DASHICON_NAMES = [
     document.addEventListener('keydown', onDragKey, true);
   }
 
+  /**
+   * Follow the pointer, tearing a DOCKED rail off on the first movement so
+   * it moves the way a docked palette in a graphics editor does, then show
+   * the snap preview for whichever edge the pointer is near.
+   *
+   * @param {MouseEvent} e The document mousemove.
+   * @return {void}
+   */
   function onDragMove(e) {
     if (!drag) {
       return;
@@ -8159,6 +9012,11 @@ var DASHICON_NAMES = [
     showSnapPreview(drag.candidate);
   }
 
+  /**
+   * Tear the drag down: clear the snap preview and the dragging class, and
+   * release all three document listeners. Shared by the release and the
+   * Escape path, so neither can leave the rail stuck in drag state.
+   */
   function finishDrag() {
     showSnapPreview('float');
     document.body.classList.remove('toolrail-dragging');
@@ -8169,6 +9027,10 @@ var DASHICON_NAMES = [
     syncLayer();
   }
 
+  /**
+   * Release the rail into the dock the snap preview was showing, or leave
+   * it floating at the position it was dragged to.
+   */
   function onDragEnd() {
     if (!drag) {
       return;
@@ -8209,6 +9071,18 @@ var DASHICON_NAMES = [
     return tool.hint ? tool.label + ' — ' + tool.hint : tool.label;
   }
 
+  /**
+   * Build one tool button. The accessible NAME is the label alone — the
+   * how-to hint rides the pointer tooltip only, because baking hints into
+   * aria-label made screen-reader users hear the same wall of instruction
+   * a dozen times down the rail. An arming tool is also draggable into the
+   * canvas, carrying the payload core's own inserter sends so core's drop
+   * zone owns the rest; the keyboard path stays arm-then-click.
+   *
+   * @param {Object}      tool    A railModel() entry.
+   * @param {HTMLElement} wrapper The positioned region, for flyout placing.
+   * @return {HTMLButtonElement} The button.
+   */
   function buildToolButton(tool, wrapper) {
     var btn = document.createElement('button');
     btn.type = 'button';
@@ -8319,6 +9193,11 @@ var DASHICON_NAMES = [
     return btn;
   }
 
+  /**
+   * A separator between groups of rail buttons.
+   *
+   * @return {HTMLElement} The separator.
+   */
   function buildSeparator() {
     var sep = document.createElement('div');
     sep.className = 'toolrail-separator';
@@ -8341,6 +9220,16 @@ var DASHICON_NAMES = [
     return grip;
   }
 
+  /**
+   * Build the whole toolbar: the head (grip and optional expander), the
+   * scrolling tools section with its step buttons, and the always-visible
+   * tail (help and settings). Owns the roving tabindex — one stop for the
+   * toolbar, arrows within — and disposes the previous generation's icon
+   * roots and scroll observer, since it is their only producer.
+   *
+   * @param {HTMLElement} wrapper The positioned region.
+   * @return {HTMLElement} The rail.
+   */
   function buildRail(wrapper) {
     // The previous generation of pinned-icon React roots belongs to the
     // rail this one replaces — and so does its scroll observer.
@@ -8507,6 +9396,12 @@ var DASHICON_NAMES = [
     var scrollPrev = buildScrollStep('prev');
     var scrollNext = buildScrollStep('next');
 
+    /**
+     * Show each scroll step button only when there is something that way.
+     * Distance is read as an absolute, because a right-to-left rail reports
+     * scrollLeft as 0 down to -max and the buttons care about the distance
+     * from the start on either side.
+     */
     function syncScrollSteps() {
       var vertical = isVertical();
       // abs() because RTL reports scrollLeft as 0..-max; the distance
@@ -8646,6 +9541,14 @@ var DASHICON_NAMES = [
     return rail;
   }
 
+  /**
+   * Build the positioned region the rail lives in: the dock and wide-mode
+   * stamps every style keys off, the appearance tokens, and the drop
+   * target. It joins the editor's region-navigation cycle, so the rail is
+   * reachable by that shortcut like any other editor region.
+   *
+   * @return {HTMLElement} The region.
+   */
   function buildWrapper() {
     var wrapper = document.createElement('div');
     wrapper.id = 'toolrail-region';
@@ -8734,6 +9637,16 @@ var DASHICON_NAMES = [
     railDragActive = false;
   }, true);
 
+  /**
+   * Start dragging a tool into the canvas, with the payload core's
+   * inserter sends so core's own drop zone does the insert. Refuses a tool
+   * that is unavailable or cannot build anything, and marks the drag as
+   * the rail's own so the rail refuses its own drop.
+   *
+   * @param {DragEvent} e    The dragstart.
+   * @param {Object}    tool The tool's model entry.
+   * @return {void}
+   */
   function onToolDragStart(e, tool) {
     if (!e.dataTransfer || !toolAvailable(tool)) {
       e.preventDefault();
@@ -8791,6 +9704,15 @@ var DASHICON_NAMES = [
     return (h >>> 0).toString(36);
   }
 
+  /**
+   * One pattern's own markup, round-tripped through the parser and cached.
+   * The key carries a hash of the content, not just its length: a user
+   * pattern edited to the same byte length would otherwise keep its stale
+   * parse and miss the drop match this exists to make.
+   *
+   * @param {Object} p A pattern descriptor.
+   * @return {string} Normalized markup, or '' when it cannot be parsed.
+   */
   function patternMarkup(p) {
     var content = p.content || '';
     var key = p.id + '#' + content.length + '#' + contentHash(content);
@@ -8916,6 +9838,11 @@ var DASHICON_NAMES = [
 
   var addDialogOpen = false;
 
+  /**
+   * The open add-to-toolbar dialog, or null when it is closed.
+   *
+   * @return {HTMLElement|null} The dialog node, or null.
+   */
   function addDialogNode() {
     return document.querySelector('.toolrail-adddialog');
   }
@@ -8944,6 +9871,13 @@ var DASHICON_NAMES = [
     }
   }
 
+  /**
+   * Dismiss the dialog on a press outside it, leaving focus where the
+   * press puts it.
+   *
+   * @param {MouseEvent} e The document mousedown.
+   * @return {void}
+   */
   function onAddDialogMousedown(e) {
     var node = addDialogNode();
     if (node && !node.contains(e.target)) {
@@ -8951,6 +9885,16 @@ var DASHICON_NAMES = [
     }
   }
 
+  /**
+   * Escape closes the dialog. It only CLAIMS the key when focus is inside
+   * — the same rule the help panel learned: this dialog can open from a
+   * canvas drop without taking focus, and an Escape pressed then belongs
+   * to whatever the author is really in. Closing from inside hands focus
+   * back to the block the dialog came from.
+   *
+   * @param {KeyboardEvent} e The document keydown.
+   * @return {void}
+   */
   function onAddDialogKeydown(e) {
     if (e.key !== 'Escape' || !addDialogOpen) {
       return;
@@ -8967,6 +9911,12 @@ var DASHICON_NAMES = [
     closeAddDialog('');
   }
 
+  /**
+   * Close the dialog once focus leaves it, without pulling focus back.
+   *
+   * @param {FocusEvent} e The document focusin.
+   * @return {void}
+   */
   function onAddDialogFocusin(e) {
     if (!addDialogOpen) {
       return;
@@ -9235,6 +10185,15 @@ var DASHICON_NAMES = [
 
   var lastPaintedSignature = false;
 
+  /**
+   * Everything the pressed/availability paint depends on, as one string:
+   * the armed tool, the overview toggle, the rail's mode, and each
+   * registered tool's own reported state. The store subscription fires on
+   * every keystroke, so this is what lets syncPressed bail before touching
+   * the DOM.
+   *
+   * @return {string} The signature.
+   */
   function pressedSignature() {
     // The Section overview toggle is pressed state too — include it so
     // the change guard never suppresses (or stales) its repaint. The
@@ -9253,6 +10212,17 @@ var DASHICON_NAMES = [
     return parts.join('|');
   }
 
+  /**
+   * Paint pressed state, availability and tooltips across the rail, and
+   * bail early when the signature has not moved. Unavailable buttons get
+   * aria-disabled, never the disabled attribute: a natively disabled
+   * button drops out of the roving tabindex and the arrow order and stops
+   * announcing its name, where a dimmed one stays reachable and announced.
+   *
+   * @param {boolean} force Repaint even when nothing changed — a rebuild
+   *                       hands over fresh buttons carrying default state.
+   * @return {void}
+   */
   function syncPressed(force) {
     var rail = document.getElementById('toolrail-rail');
     if (!rail) {
@@ -9385,6 +10355,13 @@ var DASHICON_NAMES = [
     }
   }
 
+  /**
+   * Bring the rail up: poll for the editor chrome until mount() succeeds
+   * (or 10 seconds pass), then hand over to the mutation observer, and
+   * subscribe to the store for pressed-state repaints. The subscriber is
+   * wrapped rather than passed by reference, so a store argument can never
+   * read as syncPressed's `force` and defeat the change guard.
+   */
   function start() {
     var tries = 0;
     var timer = window.setInterval(function () {
@@ -9402,6 +10379,13 @@ var DASHICON_NAMES = [
     }
   }
 
+  /**
+   * Re-mount the rail across the editor's React re-renders. The rail lives
+   * outside the React tree it watches, so nothing else would put it back
+   * after a re-render removes its host — the code-editor round trip
+   * unmounts the whole visual editor. Debounced to 100ms: the editor
+   * mutates constantly and each pass does real DOM work.
+   */
   function observe() {
     if (!window.MutationObserver) {
       return;
@@ -9687,6 +10671,15 @@ var DASHICON_NAMES = [
     return readKey(MIGRATED_KEY) !== null && readKey(GROUP_SEEDED_KEY) !== null;
   }
 
+  /**
+   * Watch for the preferences persistence layer's late attach and repair
+   * what it wiped: re-run both migrations, re-read the position, and
+   * re-mount. See the note above for why a dispatch that leaves either
+   * stamp missing is the reliable signal. Unsubscribes once both stamps
+   * have survived a dispatch, and settles the readiness contract on every
+   * exit — including the localStorage-fallback browser, which has nothing
+   * to wait for and must not leave an extension awaiting `ready` hanging.
+   */
   function watchPersistenceAttach() {
     if (!wp.data || typeof wp.data.subscribe !== 'function' || !prefsSelect()) {
       // Nothing to wait for — this browser is on the localStorage

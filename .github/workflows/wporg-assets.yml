@@ -24,7 +24,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: 10up/action-wordpress-plugin-asset-update@stable
+      # Pinned to a reviewed commit, not the mutable `stable` branch: this
+      # step holds the SVN credentials. The SHA is release 2.2.0 (what
+      # `stable` pointed at on 2026-09-09). Bump it on purpose.
+      - uses: 10up/action-wordpress-plugin-asset-update@2480306f6f693672726d08b5917ea114cb2825f7 # 2.2.0
         env:
           SVN_USERNAME: ${{ secrets.SVN_USERNAME }}
           SVN_PASSWORD: ${{ secrets.SVN_PASSWORD }}
