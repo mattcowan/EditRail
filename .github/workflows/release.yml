@@ -35,6 +35,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Do not leave the GitHub token in .git/config for the
+          # credentialed third-party deploy step. The release upload
+          # authenticates through GH_TOKEN in its own env, not git.
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 20

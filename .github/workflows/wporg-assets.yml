@@ -22,8 +22,16 @@ jobs:
   sync:
     name: Sync readme and assets to wp.org
     runs-on: ubuntu-latest
+    # The job needs nothing from GitHub beyond the checkout; the only
+    # credentials the action uses are the SVN secrets.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Do not leave the GitHub token in .git/config for the
+          # credentialed third-party step that runs next.
+          persist-credentials: false
       # Pinned to a reviewed commit, not the mutable `stable` branch: this
       # step holds the SVN credentials. The SHA is release 2.2.0 (what
       # `stable` pointed at on 2026-09-09). Bump it on purpose.
