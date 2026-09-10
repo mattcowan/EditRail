@@ -1,0 +1,46 @@
+# Sync readme.txt and .wordpress-org/ assets to WordPress.org WITHOUT a
+# release. Use it to bump "Tested up to" after a WordPress core release,
+# to fix readme text, or to swap screenshots, banners or icons.
+#
+# The 10up asset-update action updates trunk's readme.txt, the current
+# stable tag's readme.txt, and syncs .wordpress-org/ -> SVN assets/ WITH
+# deletion: a file removed from .wordpress-org/ disappears from wp.org too.
+#
+# MANUAL-ONLY (Actions -> "WP.org Readme/Assets Sync" -> Run workflow), on
+# purpose. Releases do not need it: release.yml already ships readme.txt
+# (trunk + the tag) and syncs .wordpress-org/ -> assets/ on every stable
+# release. A push trigger on readme.txt would also fire during release
+# prep, when the bumped readme reaches main BEFORE the release is
+# published, and wp.org's trunk readme would advertise a Stable tag that
+# does not exist in SVN yet.
+name: WP.org Readme/Assets Sync
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: Sync readme and assets to wp.org
+    runs-on: ubuntu-latest
+    # The job needs nothing from GitHub beyond the checkout; the only
+    # credentials the action uses are the SVN secrets.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Do not leave the GitHub token in .git/config for the
+          # credentialed third-party step that runs next.
+          persist-credentials: false
+      # Pinned to a reviewed commit, not the mutable `stable` branch: this
+      # step holds the SVN credentials. The SHA is release 2.2.0 (what
+      # `stable` pointed at on 2026-09-09). Bump it on purpose.
+      - uses: 10up/action-wordpress-plugin-asset-update@2480306f6f693672726d08b5917ea114cb2825f7 # 2.2.0
+        env:
+          SVN_USERNAME: ${{ secrets.SVN_USERNAME }}
+          SVN_PASSWORD: ${{ secrets.SVN_PASSWORD }}
+          SLUG: editrail
+          # Commit ONLY readme.txt + .wordpress-org assets and ignore every
+          # other difference between the repo and SVN trunk. Trunk code is
+          # only ever updated by release.yml.
+          IGNORE_OTHER_FILES: true

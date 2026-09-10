@@ -1,15 +1,24 @@
 # Release: runs when a GitHub Release is PUBLISHED (not on tag push -
 # publishing through the Releases UI forces human-written release notes,
-# and a stray `git push --tags` can never publish anything by accident).
+# and a stray `git push --tags` can never deploy anything by accident).
 #
-#   Any release (tag vX.Y.Z, or vX.Y.Z-beta.N with "pre-release" checked):
-#     version guard -> package -> attach toolrail.zip to the GitHub Release.
+#   Stable release (tag vX.Y.Z, "pre-release" unchecked):
+#     version guard -> deploy to WordPress.org SVN (trunk + tags/X.Y.Z +
+#     assets/ from .wordpress-org/) -> attach the deployed zip to the
+#     GitHub Release.
 #
-# WordPress.org is NOT touched by this workflow. The plugin is not listed
-# yet; when it is, add the 10up/action-wordpress-plugin-deploy step here
-# (the Typography Stylist repo's release-deploy.yml is the shape to copy)
-# and the SVN_USERNAME / SVN_PASSWORD secrets. Until then, GitHub Releases
-# are the only distribution channel.
+#   Pre-release / beta (tag vX.Y.Z-beta.N, "pre-release" CHECKED):
+#     version guard -> package -> attach editrail.zip to the GitHub
+#     Release only. WordPress.org is never touched; betas live on GitHub
+#     by design.
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#   SVN_USERNAME - wordpress.org username
+#   SVN_PASSWORD - wordpress.org SVN password (docs/releasing.md, one-time setup)
+#
+# The deploy action reads .distignore, so what reaches SVN trunk is exactly
+# what `npm run package` puts in the zip. There is no build step here: the
+# plugin ships its source JS and CSS unchanged.
 name: Release
 
 on:
@@ -21,18 +30,23 @@ permissions:
   contents: write
 
 jobs:
-  package:
-    name: Package and attach
+  release:
+    name: Deploy or package
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Do not leave the GitHub token in .git/config for the
+          # credentialed third-party deploy step. The release upload
+          # authenticates through GH_TOKEN in its own env, not git.
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
       - run: npm ci
 
-      # Fail BEFORE packaging if the plugin header, TOOLRAIL_VERSION,
+      # Fail BEFORE touching SVN if the plugin header, TOOLRAIL_VERSION,
       # readme Stable tag and package.json do not match the release tag.
       # The tag name goes through env, never straight into the script:
       # ${{ }} is substituted before the shell parses the line, and git
@@ -49,10 +63,46 @@ jobs:
         env:
           TAG: ${{ github.event.release.tag_name }}
 
-      - run: npm run package
+      # The committed blueprint must match its sources; it ships to
+      # wp.org as assets/blueprints/blueprint.json with this deploy.
+      - run: node scripts/playground.js check
 
-      - name: Attach zip to the GitHub Release
-        run: gh release upload "$TAG" toolrail.zip --clobber
+      # ----- Stable releases: deploy to WordPress.org -----
+      # SLUG is explicit and critical: the action defaults to the GitHub
+      # repository name, which is NOT the wp.org slug. The action rsyncs
+      # the checkout minus .distignore into SVN trunk, copies trunk to
+      # tags/X.Y.Z, and syncs .wordpress-org/ into assets/.
+      - name: Deploy to WordPress.org
+        if: ${{ !github.event.release.prerelease }}
+        id: wporg
+        # Pinned to a reviewed commit, not the mutable `stable` branch: this
+        # step holds the SVN credentials and publishes plugin code. The SHA
+        # is release 2.3.0 (what `stable` pointed at on 2026-09-09). Bump it
+        # on purpose, after reading the action's changelog.
+        uses: 10up/action-wordpress-plugin-deploy@54bd289b8525fd23a5c365ec369185f2966529c2 # 2.3.0
+        with:
+          generate-zip: true
+        env:
+          SVN_USERNAME: ${{ secrets.SVN_USERNAME }}
+          SVN_PASSWORD: ${{ secrets.SVN_PASSWORD }}
+          SLUG: editrail
+
+      - name: Attach deployed zip to the GitHub Release
+        if: ${{ !github.event.release.prerelease }}
+        run: gh release upload "$TAG" "$ZIP" --clobber
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          ZIP: ${{ steps.wporg.outputs.zip-path }}
+          GH_TOKEN: ${{ github.token }}
+
+      # ----- Pre-releases (beta): zip only, wp.org untouched -----
+      - name: Package beta zip
+        if: ${{ github.event.release.prerelease }}
+        run: npm run package
+
+      - name: Attach beta zip to the GitHub Release
+        if: ${{ github.event.release.prerelease }}
+        run: gh release upload "$TAG" editrail.zip --clobber
         env:
           TAG: ${{ github.event.release.tag_name }}
           GH_TOKEN: ${{ github.token }}

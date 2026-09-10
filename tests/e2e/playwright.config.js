@@ -1,5 +1,5 @@
 /**
- * Playwright E2E config for Editor Tool Rail.
+ * Playwright E2E config for EditRail.
  *
  * Set TOOLRAIL_URL to a local WordPress site with the plugin ACTIVE
  * (BGCANDY_URL is honored as a fallback so this suite slots into the same

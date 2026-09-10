@@ -1,5 +1,5 @@
 /**
- * Build the distributable plugin zip: toolrail.zip
+ * Build the distributable plugin zip: editrail.zip
  *
  * The file set is driven ENTIRELY by .distignore (gitignore syntax): every
  * file not excluded there is shipped. A WordPress.org deploy action reads
@@ -8,7 +8,7 @@
  *
  * Usage:
  *   node scripts/package.js          # build zip, remove the staging dir
- *   node scripts/package.js --keep   # keep build/toolrail/ for inspection
+ *   node scripts/package.js --keep   # keep build/editrail/ for inspection
  *
  * There is no build step: the plugin ships its source JS/CSS as-is (no
  * minification, no bundling), so a clean checkout is already packageable.
@@ -18,7 +18,7 @@ const path = require('path');
 const archiver = require('archiver');
 const ignore = require('ignore');
 
-const pluginSlug = 'toolrail';
+const pluginSlug = 'editrail';
 const rootDir = path.join(__dirname, '..');
 const buildDir = path.join(rootDir, 'build');
 const distDir = path.join(buildDir, pluginSlug);
@@ -36,7 +36,7 @@ const ig = ignore().add(fs.readFileSync(distignorePath, 'utf8'));
 // includes, and enqueues the two assets — a zip without any of these
 // fatals on activation or mounts nothing.
 const requiredFiles = [
-  'toolrail.php',
+  'editrail.php',
   'readme.txt',
   'includes/providers.php',
   'includes/rail.php',
@@ -94,7 +94,7 @@ archive.pipe(output);
 // Top-level folder inside the zip = the plugin slug, like wp.org zips.
 // Modes are set per entry: an options-object `mode` applies 0755 to every
 // FILE too, and an admin unzipping by hand on Linux would get a
-// world-executable toolrail.php. Explicit rather than inherited from the
+// world-executable editrail.php. Explicit rather than inherited from the
 // host, so a zip built on Windows (which reports 0666/0777) matches CI's.
 archive.directory(distDir, pluginSlug, (entry) => {
   entry.mode = entry.stats && entry.stats.isDirectory() ? 0o755 : 0o644;

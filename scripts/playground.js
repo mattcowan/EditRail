@@ -47,7 +47,7 @@ const demoFontsFile = path.join(__dirname, 'playground', 'demo-fonts.php');
 
 // Must match TOOLRAIL_DEMO_POST_ID in demo-content.php.
 const DEMO_POST_ID = 2026;
-const RELEASE_ZIP = 'https://github.com/mattcowan/editor-tool-rail/releases/latest/download/toolrail.zip';
+const RELEASE_ZIP = 'https://github.com/mattcowan/editor-tool-rail/releases/latest/download/editrail.zip';
 
 const [command = 'build', ...rest] = process.argv.slice(2);
 const flags = Object.fromEntries(
@@ -81,8 +81,8 @@ function blueprint(pluginStep) {
     landingPage: `/wp-admin/post.php?post=${DEMO_POST_ID}&action=edit`,
     preferredVersions: { php: '8.2', wp: 'latest' },
     steps: [
-      // Twenty Twenty-Five ships the Vollkorn font files the demo post
-      // uses; installing it by slug keeps the demo the same whatever the
+      // Twenty Twenty-Five is the look the demo post was designed on;
+      // installing it by slug keeps the demo the same whatever the
       // current default theme is.
       {
         step: 'installTheme',
@@ -109,20 +109,26 @@ function blueprint(pluginStep) {
 
 const wporgStep = {
   step: 'installPlugin',
-  pluginData: { resource: 'wordpress.org/plugins', slug: 'toolrail' },
+  pluginData: { resource: 'wordpress.org/plugins', slug: 'editrail' },
   options: { activate: true },
 };
 
+/** The blueprint as committed: two-space JSON with a trailing newline. */
 function render(bp) {
   return JSON.stringify(bp, null, 2) + '\n';
 }
 
+/** Write .wordpress-org/blueprints/blueprint.json from the sources. */
 function build() {
   fs.mkdirSync(path.dirname(blueprintFile), { recursive: true });
   fs.writeFileSync(blueprintFile, render(blueprint(wporgStep)));
   console.log(`Wrote ${path.relative(rootDir, blueprintFile)}`);
 }
 
+/**
+ * Fail (exit 1) when the committed blueprint differs from what build()
+ * would write, so a hand edit or a forgotten rebuild cannot ship.
+ */
 function check() {
   const expected = render(blueprint(wporgStep));
   const actual = fs.existsSync(blueprintFile) ? fs.readFileSync(blueprintFile, 'utf8').replace(/\r\n/g, '\n') : '';
@@ -133,6 +139,11 @@ function check() {
   console.log('ok  blueprint.json matches its sources');
 }
 
+/**
+ * Run the demo against this checkout in the Playground CLI: write a local
+ * blueprint variant that activates the mounted plugin, then start the
+ * server on --port (default 9400) and print its URL.
+ */
 function local() {
   // The port is the one value from the command line that reaches the
   // shell (npx is a .cmd on Windows, so spawnSync runs through cmd.exe,
@@ -142,7 +153,7 @@ function local() {
     console.error('x --port must be a whole number from 1 to 65535.');
     process.exit(1);
   }
-  const bp = blueprint({ step: 'activatePlugin', pluginPath: 'toolrail/toolrail.php' });
+  const bp = blueprint({ step: 'activatePlugin', pluginPath: 'editrail/editrail.php' });
   const outDir = path.join(rootDir, 'build', 'playground');
   fs.mkdirSync(outDir, { recursive: true });
   const localFile = path.join(outDir, 'blueprint.local.json');
@@ -157,7 +168,7 @@ function local() {
     '@wp-playground/cli@latest',
     'server',
     `--blueprint=${path.relative(rootDir, localFile).split(path.sep).join('/')}`,
-    '--mount=.:/wordpress/wp-content/plugins/toolrail',
+    '--mount=.:/wordpress/wp-content/plugins/editrail',
     `--port=${port}`,
   ];
   console.log('npx ' + args.join(' '));
@@ -169,6 +180,11 @@ function local() {
   process.exit(result.status === null ? 1 : result.status);
 }
 
+/**
+ * Print a playground.wordpress.net link that carries the blueprint and
+ * installs the plugin from a public zip (--zip, default: the latest
+ * GitHub Release).
+ */
 function url() {
   const zip = flags.zip || RELEASE_ZIP;
   const bp = blueprint({

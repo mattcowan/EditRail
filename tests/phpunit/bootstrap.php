@@ -20,12 +20,13 @@ if (!defined('TOOLRAIL_PLUGIN_DIR')) {
     define('TOOLRAIL_PLUGIN_DIR', dirname(dirname(__DIR__)) . '/');
 }
 if (!defined('TOOLRAIL_PLUGIN_URL')) {
-    define('TOOLRAIL_PLUGIN_URL', 'http://example.test/wp-content/plugins/toolrail/');
+    define('TOOLRAIL_PLUGIN_URL', 'http://example.test/wp-content/plugins/editrail/');
 }
 
 $GLOBALS['toolrail_test_filters'] = [];
 
 if (!function_exists('add_filter')) {
+    /** Record a filter callback; priority and argument count are ignored. */
     function add_filter($tag, $callback, $priority = 10, $accepted_args = 1) {
         $GLOBALS['toolrail_test_filters'][$tag][] = $callback;
         return true;
@@ -33,12 +34,14 @@ if (!function_exists('add_filter')) {
 }
 
 if (!function_exists('add_action')) {
+    /** Same as add_filter(): the tests never distinguish the two. */
     function add_action($tag, $callback, $priority = 10, $accepted_args = 1) {
         return add_filter($tag, $callback, $priority, $accepted_args);
     }
 }
 
 if (!function_exists('apply_filters')) {
+    /** Run the recorded callbacks for a tag in the order they were added. */
     function apply_filters($tag, $value, ...$args) {
         if (empty($GLOBALS['toolrail_test_filters'][$tag])) {
             return $value;
@@ -51,6 +54,7 @@ if (!function_exists('apply_filters')) {
 }
 
 if (!function_exists('remove_all_filters')) {
+    /** Forget every callback recorded for a tag. */
     function remove_all_filters($tag) {
         unset($GLOBALS['toolrail_test_filters'][$tag]);
         return true;
@@ -58,6 +62,7 @@ if (!function_exists('remove_all_filters')) {
 }
 
 if (!function_exists('sanitize_key')) {
+    /** Lowercase and strip to [a-z0-9_-], like core. */
     function sanitize_key($key) {
         $key = strtolower((string) $key);
         return preg_replace('/[^a-z0-9_\-]/', '', $key);
@@ -65,6 +70,7 @@ if (!function_exists('sanitize_key')) {
 }
 
 if (!function_exists('wp_list_pluck')) {
+    /** One field from every array or object in a list, like core. */
     function wp_list_pluck($input_list, $field) {
         $out = [];
         foreach ((array) $input_list as $item) {
@@ -79,6 +85,7 @@ if (!function_exists('wp_list_pluck')) {
 }
 
 if (!function_exists('__')) {
+    /** Return the string untranslated. */
     function __($text, $domain = 'default') {
         return $text;
     }
@@ -103,18 +110,21 @@ $GLOBALS['toolrail_test_site_ids']      = [1];
 $GLOBALS['toolrail_test_before_update'] = null;
 
 if (!function_exists('wp_cache_delete')) {
+    /** No cache in the tests; always true. */
     function wp_cache_delete($key, $group = '') {
         return true;
     }
 }
 
 if (!function_exists('is_multisite')) {
+    /** Whether the test pretends to be a network install. */
     function is_multisite() {
         return !empty($GLOBALS['toolrail_test_multisite']);
     }
 }
 
 if (!function_exists('get_sites')) {
+    /** The test's site IDs; the query is recorded for assertions. */
     function get_sites($args = []) {
         $GLOBALS['toolrail_test_last_site_query'] = $args;
         return $GLOBALS['toolrail_test_site_ids'];
@@ -122,6 +132,7 @@ if (!function_exists('get_sites')) {
 }
 
 if (!function_exists('get_users')) {
+    /** IDs of test users that have the requested meta key; the query is recorded. */
     function get_users($args = []) {
         $GLOBALS['toolrail_test_last_user_query'] = $args;
         $ids = [];
@@ -136,6 +147,7 @@ if (!function_exists('get_users')) {
 }
 
 if (!function_exists('get_user_meta')) {
+    /** Read the in-memory user meta store, single or all rows. */
     function get_user_meta($user_id, $key = '', $single = false) {
         $meta = $GLOBALS['toolrail_test_user_meta'][$user_id] ?? [];
         if (empty($meta[$key])) {
@@ -146,6 +158,7 @@ if (!function_exists('get_user_meta')) {
 }
 
 if (!function_exists('update_user_meta')) {
+    /** Write the in-memory user meta store the way core does, including the previous-value match and the false return when nothing matched. */
     function update_user_meta($user_id, $key, $value, $prev_value = '') {
         if (is_callable($GLOBALS['toolrail_test_before_update'])) {
             call_user_func($GLOBALS['toolrail_test_before_update'], $user_id, $key);
@@ -173,6 +186,7 @@ if (!function_exists('update_user_meta')) {
 
 if (!class_exists('Toolrail_Test_WPDB')) {
     class Toolrail_Test_WPDB {
+        /** wp_ for site 1, wp_N_ for any other site, like core. */
         public function get_blog_prefix($blog_id = null) {
             return ($blog_id === null || (int) $blog_id === 1) ? 'wp_' : 'wp_' . (int) $blog_id . '_';
         }

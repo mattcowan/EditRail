@@ -1,6 +1,6 @@
 {
-    "name": "mnc4/toolrail",
-    "description": "Editor Tool Rail — a graphics-editor-style left toolbar for the WordPress block editor.",
+    "name": "mnc4/editrail",
+    "description": "EditRail — a graphics-editor-style left toolbar for the WordPress block editor.",
     "type": "wordpress-plugin",
     "license": "GPL-2.0-or-later",
     "require": {

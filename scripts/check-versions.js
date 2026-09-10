@@ -2,8 +2,8 @@
  * Version-consistency guard. Zero dependencies.
  *
  * The plugin's version lives in SIX places that must always agree:
- *   1. toolrail.php  — plugin header `Version:`
- *   2. toolrail.php  — `define('TOOLRAIL_VERSION', '...')`
+ *   1. editrail.php  — plugin header `Version:`
+ *   2. editrail.php  — `define('TOOLRAIL_VERSION', '...')`
  *   3. readme.txt    — `Stable tag:`
  *   4. package.json  — `version`
  *   5+6. package-lock.json — root `version` and `packages[""].version`
@@ -31,6 +31,7 @@ const fs = require('fs');
 const path = require('path');
 
 const rootDir = path.join(__dirname, '..');
+/** A repo file's text, by path relative to the repo root. */
 const read = (f) => fs.readFileSync(path.join(rootDir, f), 'utf8');
 
 const args = process.argv.slice(2);
@@ -49,6 +50,10 @@ function compareVersions(a, b) {
   return 0;
 }
 
+/**
+ * The first capture of `pattern` in `text`, or exit 1 naming what was
+ * expected and in which file.
+ */
 function extract(pattern, text, label, file) {
   const m = text.match(pattern);
   if (!m) {
@@ -58,14 +63,14 @@ function extract(pattern, text, label, file) {
   return m[1].trim();
 }
 
-const mainPhp = read('toolrail.php');
+const mainPhp = read('editrail.php');
 const readmeTxt = read('readme.txt');
 const pkg = JSON.parse(read('package.json'));
 const lock = JSON.parse(read('package-lock.json'));
 
 const versions = {
-  'plugin header (toolrail.php)': extract(/^\s*\*\s*Version:\s*(.+)$/m, mainPhp, 'plugin header Version', 'toolrail.php'),
-  'TOOLRAIL_VERSION (toolrail.php)': extract(/define\(\s*'TOOLRAIL_VERSION'\s*,\s*'([^']+)'/, mainPhp, 'TOOLRAIL_VERSION', 'toolrail.php'),
+  'plugin header (editrail.php)': extract(/^\s*\*\s*Version:\s*(.+)$/m, mainPhp, 'plugin header Version', 'editrail.php'),
+  'TOOLRAIL_VERSION (editrail.php)': extract(/define\(\s*'TOOLRAIL_VERSION'\s*,\s*'([^']+)'/, mainPhp, 'TOOLRAIL_VERSION', 'editrail.php'),
   'Stable tag (readme.txt)': extract(/^Stable tag:\s*(.+)$/m, readmeTxt, 'Stable tag', 'readme.txt'),
   'version (package.json)': String(pkg.version || ''),
   // The lockfile carries the root version twice; npm does not fail on a
@@ -74,6 +79,10 @@ const versions = {
   'packages[""].version (package-lock.json)': String((lock.packages && lock.packages[''] && lock.packages[''].version) || ''),
 };
 
+/**
+ * Print every version source aligned in a column; with `expectedByKey`,
+ * mark the ones that do not match.
+ */
 function table(expectedByKey) {
   const width = Math.max(...Object.keys(versions).map((k) => k.length));
   for (const [key, value] of Object.entries(versions)) {

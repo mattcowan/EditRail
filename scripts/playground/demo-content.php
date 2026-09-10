@@ -1,6 +1,6 @@
 <?php
 /**
- * Playground demo content for Editor Tool Rail.
+ * Playground demo content for EditRail.
  *
  * This file is the SOURCE of the blueprint's `runPHP` step. `node
  * scripts/playground.js build` embeds it, verbatim, into
@@ -19,20 +19,29 @@
  *      Stylist block pinned, and that pin carrying a custom name and
  *      description (the 1.0.1 pin-metadata feature) — so the toolbar
  *      itself says the tool was added by the demo.
- *   2. Publishes one demo post, with a fixed ID the blueprint's
- *      landingPage points at: a Typography Stylist headline and tagline
- *      in Vollkorn (Twenty Twenty-Five ships the font files; the
- *      companion mu-plugin declares the @font-face), then a dozen core
- *      blocks that explain the toolbar and give the Section overview
+ *   2. Registers EB Garamond in the WordPress Font Library (the
+ *      companion mu-plugin adds it to theme.json) and ADOPTS it through
+ *      Typography Stylist's own Font Library bridge, so the font has a
+ *      real font_id and shows as the selected font in the block's
+ *      picker, the way a font an author picked would.
+ *   3. Publishes one demo post, with a fixed ID the blueprint's
+ *      landingPage points at: Typography Stylist blocks for the
+ *      headline, the tagline, every section heading and two pull
+ *      quotes, all in EB Garamond by that font_id, then core blocks
+ *      that explain the toolbar and give the Section overview
  *      something to outline. If the post cannot be created, the script
  *      FAILS (an uncaught exception), so the blueprint step fails
  *      instead of landing on "Invalid post ID".
  *
- * Every OpenType claim in the copy was checked against the font's GSUB
- * table (scripts/playground/README.md): "Editor Tool Rail" contains no
- * ligature pairs in Vollkorn, so the headline shows its stylistic-set
- * alternate "a" (ss01) and the TAGLINE carries the discretionary
- * ligatures — Th, ch, ct, st — plus the standard fi.
+ * Every OpenType claim in the copy was checked against the fonts' GSUB
+ * tables (scripts/playground/README.md). The italic's swash feature
+ * (swsh) substitutes every capital A–Z, so the HEADLINE and the PULL
+ * QUOTES are set in the italic with swashes on their capitals; the
+ * first pull quote adds ss01, which sets the lowercase in petite
+ * capitals, and the second adds the italic's discretionary ligatures
+ * (ck, ch). The TAGLINE and the section headings are upright with the
+ * standard ligatures only; the upright's discretionary ct and st
+ * ligatures were tried on the tagline and read as a distraction.
  *
  * @package Toolrail
  */
@@ -83,27 +92,33 @@ function toolrail_demo_js_number($value) {
 
 /**
  * One typost/block, serialized exactly as the block's save() renders it
- * (Typography Stylist 2.2.x), with the font given as a family string.
+ * (Typography Stylist 2.2.3), with the font given by its font_id: the
+ * shape the block's own picker writes, so the editor shows the font as
+ * selected and the plugin's --font-N variable carries the family.
  *
  * Style order is save.js buildStyle()'s: features, font-family,
- * font-weight, line-height, font-size. React joins "prop:value" pairs
- * with ";" and no trailing ";".
+ * font-weight, font-style, line-height, font-size, text-align. React
+ * joins "prop:value" pairs with ";" and no trailing ";".
  *
  * @param string $content  Inner HTML of the visual heading.
  * @param string $tag      h1–h6 or p.
  * @param array  $features OpenType feature tags to turn on.
- * @param array  $args     fontFamily, fontWeight, lineHeight,
- *                         fontSizeMin/Preferred/Max, textAlign, className.
+ * @param array  $args     fontId (required), fontFamily (the adopted
+ *                         entry's font_family; default EB Garamond),
+ *                         fontStyle ('italic'), fontWeight, lineHeight,
+ *                         fontSizeMin/Preferred/Max, textAlign.
  * @return string Block markup.
  */
 function toolrail_demo_typost($content, $tag, array $features, array $args) {
-    $family = $args['fontFamily'];
-    $weight = isset($args['fontWeight']) ? (string) $args['fontWeight'] : '400';
-    $line   = isset($args['lineHeight']) ? (float) $args['lineHeight'] : 0;
-    $min    = (int) $args['fontSizeMin'];
-    $pref   = (int) $args['fontSizePreferred'];
-    $max    = (int) $args['fontSizeMax'];
-    $align  = isset($args['textAlign']) ? $args['textAlign'] : '';
+    $font_id = (int) $args['fontId'];
+    $family  = isset($args['fontFamily']) ? $args['fontFamily'] : '"EB Garamond", serif';
+    $style   = isset($args['fontStyle']) ? $args['fontStyle'] : '';
+    $weight  = isset($args['fontWeight']) ? (string) $args['fontWeight'] : '400';
+    $line    = isset($args['lineHeight']) ? (float) $args['lineHeight'] : 0;
+    $min     = (int) $args['fontSizeMin'];
+    $pref    = (int) $args['fontSizePreferred'];
+    $max     = (int) $args['fontSizeMax'];
+    $align   = isset($args['textAlign']) ? $args['textAlign'] : '';
 
     $css = array();
     if ($features) {
@@ -118,8 +133,11 @@ function toolrail_demo_typost($content, $tag, array $features, array $args) {
             $features
         ));
     }
-    $css[] = 'font-family:' . $family;
+    $css[] = 'font-family:var(--font-' . $font_id . ')';
     $css[] = 'font-weight:' . $weight;
+    if ($style) {
+        $css[] = 'font-style:' . $style;
+    }
     if ($line) {
         $css[] = 'line-height:' . toolrail_demo_js_number($line);
     }
@@ -141,7 +159,16 @@ function toolrail_demo_typost($content, $tag, array $features, array $args) {
     if ($features) {
         $attrs['features'] = array_values($features);
     }
-    $attrs['fontFamily']        = $family;
+    // Both the id and the family string, the way the picker writes them
+    // when an author chooses a Library font. The released block's edit
+    // view gates its font-family on the string (fixed in the plugin's
+    // source since); save() prefers the id either way, so the saved
+    // markup is identical apart from the data-font attribute.
+    $attrs['fontId']     = $font_id;
+    $attrs['fontFamily'] = $family;
+    if ($style) {
+        $attrs['fontStyle'] = $style;
+    }
     $attrs['fontSize']          = 'responsive';
     $attrs['fontSizeMin']       = $min;
     $attrs['fontSizePreferred'] = $pref;
@@ -164,15 +191,28 @@ function toolrail_demo_typost($content, $tag, array $features, array $args) {
     return '<!-- wp:typost/block ' . toolrail_demo_attrs($attrs) . ' -->' . "\n"
         . '<div class="wp-block-typost">'
         . '<' . $tag . ' class="visually-hidden">' . $clean . '</' . $tag . '>'
-        . '<' . $tag . ' style="' . implode(';', $css) . '" class="typost-styled" aria-hidden="true" data-font="' . esc_attr($family) . '">' . $content . '</' . $tag . '>'
+        . '<' . $tag . ' style="' . implode(';', $css) . '" class="typost-styled" aria-hidden="true" data-font="' . esc_attr($family) . '" data-font-id="' . $font_id . '">' . $content . '</' . $tag . '>'
         . '</div>' . "\n"
         . '<!-- /wp:typost/block -->';
 }
 
+/**
+ * A core paragraph block.
+ *
+ * @param string $html Inner HTML.
+ * @return string Block markup.
+ */
 function toolrail_demo_paragraph($html) {
     return "<!-- wp:paragraph -->\n<p>" . $html . "</p>\n<!-- /wp:paragraph -->";
 }
 
+/**
+ * A core heading block; level 2 is the block default and gets no attribute.
+ *
+ * @param int    $level 1–6.
+ * @param string $text  Inner HTML.
+ * @return string Block markup.
+ */
 function toolrail_demo_heading($level, $text) {
     $tag = 'h' . (int) $level;
     $attrs = 2 === (int) $level ? '' : ' ' . toolrail_demo_attrs(array('level' => (int) $level));
@@ -181,6 +221,12 @@ function toolrail_demo_heading($level, $text) {
         . '<!-- /wp:heading -->';
 }
 
+/**
+ * A core list block with one list-item block per entry.
+ *
+ * @param string[] $items Inner HTML of each item.
+ * @return string Block markup.
+ */
 function toolrail_demo_list(array $items) {
     $out = "<!-- wp:list -->\n<ul class=\"wp-block-list\">";
     foreach ($items as $item) {
@@ -190,37 +236,58 @@ function toolrail_demo_list(array $items) {
 }
 
 /**
- * The demo post's blocks. Fourteen top-level blocks, so the Section
- * overview has an outline to work with, and a Group with children for
- * "Reorder inside".
+ * The demo post's blocks.
+ *
+ * Typography Stylist blocks carry the headline, the tagline, every
+ * section heading and the two pull quotes, all in EB Garamond by the
+ * adopted font_id; the headline and the quotes are the italic with its
+ * swash capitals. The rest is core: paragraphs, a list, a group with a
+ * heading and two paragraphs (so the Section overview has something to
+ * outline and step into), a separator. Structure and copy owner-edited
+ * 2026-09-09: the Section overview and the extension API come before
+ * the pinning instructions, so the toolbar reads as more than a block
+ * inserter; and wherever the copy describes what the toolbar inserts,
+ * it says core blocks, theme and plugin blocks, and patterns, never
+ * "core blocks" alone, because pinning custom blocks is the point.
  *
  * @return string Post content.
  */
 function toolrail_demo_content() {
-    $vollkorn = 'Vollkorn, serif';
+    $id = toolrail_demo_font_id();
     $blocks = array();
 
-    // Headline: Vollkorn's stylistic set 1 swaps the "a" (in "Rail") for
-    // its alternate. Contextual alternates (calt, on by default) draw the
-    // "R" with its alternate too.
-    $blocks[] = toolrail_demo_typost('Editor Tool Rail', 'h2', array('ss01'), array(
-        'fontFamily'        => $vollkorn,
-        'fontWeight'        => '700',
+    // Section headings: upright, standard ligatures only.
+    $heading = static function ($text) use ($id) {
+        return toolrail_demo_typost($text, 'h2', array('liga'), array(
+            'fontId'            => $id,
+            'lineHeight'        => 1.3,
+            'fontSizeMin'       => 20,
+            'fontSizePreferred' => 28,
+            'fontSizeMax'       => 40,
+        ));
+    };
+
+    // Headline: the italic's swash capitals (swsh substitutes every
+    // capital A–Z) draw the E and the R with their flourished forms.
+    $blocks[] = toolrail_demo_typost('EditRail', 'h2', array('swsh'), array(
+        'fontId'            => $id,
+        'fontStyle'         => 'italic',
+        'fontWeight'        => '500',
         'lineHeight'        => 1.05,
-        'fontSizeMin'       => 40,
-        'fontSizePreferred' => 64,
-        'fontSizeMax'       => 96,
+        'fontSizeMin'       => 48,
+        'fontSizePreferred' => 80,
+        'fontSizeMax'       => 120,
     ));
 
-    // Tagline: discretionary ligatures fire on Th (The), ch and ct
-    // (architect's), st (first, stays); the standard fi (first) is on
-    // anyway. Every pair is in Vollkorn's dlig/liga tables.
+    // Tagline, upright, standard ligatures only: the upright's
+    // discretionary ligatures (ct, st) were tried and read as a
+    // distraction at this size (owner call, 2026-09-09).
     $blocks[] = toolrail_demo_typost(
-        'The architect&#8217;s toolbar. Pick a tool first, then click the canvas; every block stays a core block.',
+        'A graphics-editor-style toolbar for rapid content creation.',
         'p',
-        array('dlig', 'liga'),
+        array('liga'),
         array(
-            'fontFamily'        => $vollkorn,
+            'fontId'            => $id,
             'lineHeight'        => 1.3,
             'fontSizeMin'       => 20,
             'fontSizePreferred' => 28,
@@ -229,32 +296,20 @@ function toolrail_demo_content() {
     );
 
     $blocks[] = toolrail_demo_paragraph(
-        'Editor Tool Rail puts a graphics-editor toolbar in the block editor. It sits on the left edge, and it works the way a drawing tool does: select a tool, then click in the canvas where you want its block. The block lands at the click point and the toolbar returns to Select. Hold Shift while you click to keep the tool armed.'
+        'EditRail puts a graphics-editor toolbar in the block editor. It docks to the left edge by default, and it can be dragged to any edge or floated as a palette. Every setting is per user, so each author keeps the arrangement that suits them.'
     );
     $blocks[] = toolrail_demo_paragraph(
-        'Everything the toolbar inserts is an ordinary core block. Deactivate the plugin and this post reads and edits exactly as before. The toolbar is a way of working, not a format.'
-    );
-
-    $blocks[] = toolrail_demo_heading(2, 'Try it now');
-    $blocks[] = toolrail_demo_list(array(
-        'Click <strong>Text</strong> on the toolbar, then click below this list. A paragraph appears where you clicked.',
-        'Drag a tool from the toolbar into the canvas. The editor&#8217;s own drop line shows where it will land.',
-        'Open the editor&#8217;s block inserter (the <strong>+</strong> button at the top left), then drag any block from that list onto the toolbar. It is pinned as a new tool.',
-        'Drag a block from the canvas onto the toolbar to pin its type, or to save it as a pattern and pin that.',
-        'Press Escape at any time to return to Select.',
-    ));
-
-    $blocks[] = toolrail_demo_heading(2, 'A tool this demo added');
-    $blocks[] = toolrail_demo_paragraph(
-        'The Typography Stylist block is pinned to the toolbar as <strong>Typography Stylist (added by this demo)</strong>. That name, and the description in its tooltip, are not the block&#8217;s own: this demo set them. You can do the same for any pinned tool. Open <strong>Toolbar settings</strong> from the gear at the end of the toolbar, find the tool under <strong>Pinned tools</strong>, and choose <strong>Edit</strong>. Give it your own name, a description, and an icon of up to three characters or a Dashicon name. Empty fields use the block&#8217;s own. Only your toolbar changes.'
-    );
-    $blocks[] = toolrail_demo_paragraph(
-        'Click that pinned tool, then click in the canvas, to insert a Typography Stylist block of your own. The two blocks at the top of this post are Typography Stylist blocks: the headline uses Vollkorn&#8217;s alternate letterforms, and the tagline turns on its discretionary ligatures.'
+        'The toolbar adds nothing of its own to a post. What it inserts is whatever you pinned: a core block, a block from your theme or from any plugin, or a pattern, saved exactly as the editor&#8217;s own inserter would save it. Deactivate the plugin and this post reads and edits exactly as before. The toolbar is a way of working, not a format.'
     );
 
-    $blocks[] = toolrail_demo_heading(2, 'Section overview');
+    $blocks[] = $heading('More than a block inserter');
     $blocks[] = toolrail_demo_paragraph(
-        'The <strong>Section overview</strong> tool zooms the canvas out and outlines every top-level block, with a name tag in the corner. Drag an outline to reorder it, or click it for arrow buttons. <strong>Reorder inside</strong> steps into a section, such as the group below, and reorders its blocks the same way. Every move works by keyboard and is announced to screen readers.'
+        'The tools at the top of the toolbar are pins: blocks and patterns you chose, from core, from your theme, or from any plugin. They work the way a drawing tool does: select one, then click or drag in the canvas where it should go. It lands at that point and the toolbar returns to Select. Hold Shift while you click to keep the tool armed. Below the pins sit tools that are not blocks at all: the Section overview, and any tool another plugin adds.'
+    );
+
+    $blocks[] = $heading('The Section overview');
+    $blocks[] = toolrail_demo_paragraph(
+        'The <strong>Section overview</strong> zooms the canvas out and outlines every top-level block, with a name tag in the corner: a way to find your place in a long document and to reorganize it. Drag an outline to move it, or click it for arrow buttons. <strong>Reorder inside</strong> steps into one section, such as the group below, and reorders its blocks the same way. Every move works by keyboard and is announced to screen readers.'
     );
 
     $blocks[] = '<!-- wp:group ' . toolrail_demo_attrs(array('layout' => array('type' => 'constrained'))) . ' -->' . "\n"
@@ -267,9 +322,61 @@ function toolrail_demo_content() {
         . '</div>' . "\n"
         . '<!-- /wp:group -->';
 
+    $blocks[] = $heading('Pin your own tools');
+    $blocks[] = toolrail_demo_paragraph(
+        'Pin anything the editor can drag: core blocks, your theme&#8217;s blocks, blocks from any plugin, and patterns, your own or the theme&#8217;s. Drag it onto the toolbar from the editor&#8217;s own inserter (the <strong>+</strong> at the top left), from the List View, or from the canvas, or search for it in Toolbar settings. A block dragged from the canvas can also be saved as a pattern, with its settings and contents, and pinned as that.'
+    );
+
+    // Pull quote, italic: swash capitals on every capital, and ss01 sets
+    // the lowercase in the italic's petite capitals, a title-page
+    // pairing the two features were drawn for. Sits right under the
+    // pinning paragraph it sums up (owner call, 2026-09-09).
     $blocks[] = '<!-- wp:quote -->' . "\n"
         . '<blockquote class="wp-block-quote">'
-        . toolrail_demo_paragraph('Pin what you reach for. Move the toolbar where your hand wants it. Save the arrangement as a set.')
+        . toolrail_demo_typost('Any Block Can Be Added To The Toolbar', 'p', array('swsh', 'ss01'), array(
+            'fontId'            => $id,
+            'fontStyle'         => 'italic',
+            'lineHeight'        => 1.15,
+            'fontSizeMin'       => 28,
+            'fontSizePreferred' => 40,
+            'fontSizeMax'       => 56,
+        ))
+        . '</blockquote>' . "\n"
+        . '<!-- /wp:quote -->';
+    $blocks[] = toolrail_demo_paragraph(
+        'A pinned tool can carry your own name, description and icon. Open <strong>Toolbar settings</strong> from the gear at the end of the toolbar, find the tool under <strong>Pinned tools</strong>, and choose <strong>Edit</strong>. Empty fields use the block&#8217;s own. Only your toolbar changes.'
+    );
+    $blocks[] = toolrail_demo_paragraph(
+        'The Typography Stylist block on this toolbar is pinned as <strong>Typography Stylist (added by this demo)</strong>. That name, and the description in its tooltip, are the demo&#8217;s, not the block&#8217;s. Click it, then click in the canvas, to add a block of your own. The headings and the pull quotes in this post are Typography Stylist blocks set in EB Garamond: the headline and the quotes use the italic&#8217;s swash capitals, the first quote sets its lowercase in petite capitals, and the second adds the italic&#8217;s discretionary ligatures.'
+    );
+
+    $blocks[] = $heading('Built to be extended');
+    $blocks[] = toolrail_demo_paragraph(
+        'Other plugins can put their own tools on the toolbar. One PHP filter declares a plugin as a provider, and a small JavaScript API registers each tool: its icon, its flyout, and what happens when it is armed, including tools that are modes rather than blocks, such as picking a block on the canvas. A plugin can also keep its own settings on a pinned tool; they travel with saved sets and go when the tool is unpinned. Whatever a tool inserts, from any plugin, is saved the way that block or pattern is always saved, so the post never depends on the toolbar.'
+    );
+
+    $blocks[] = $heading('Try it now');
+    $blocks[] = toolrail_demo_list(array(
+        'Click <strong>Text</strong> on the toolbar, then click below this list. A paragraph appears where you clicked.',
+        'Drag a tool from the toolbar into the canvas. The editor&#8217;s own drop line shows where it will land.',
+        'Open the editor&#8217;s block inserter (the <strong>+</strong> button at the top left), then drag any block or pattern from that list onto the toolbar. It is pinned as a new tool.',
+        'Drag a block from the canvas onto the toolbar to pin its type, or to save it as a pattern and pin that.',
+        'Open the <strong>Section overview</strong> and drag this list above the heading before it.',
+        'Press Escape at any time to return to Select.',
+    ));
+
+    // Pull quote, italic: a swash on every capital of the title case, and
+    // the italic's discretionary ligatures on ck (Pick) and ch (Reach).
+    $blocks[] = '<!-- wp:quote -->' . "\n"
+        . '<blockquote class="wp-block-quote">'
+        . toolrail_demo_typost('Pick What You Reach For. Move The Toolbar Where Your Hand Wants It.', 'p', array('swsh', 'dlig'), array(
+            'fontId'            => $id,
+            'fontStyle'         => 'italic',
+            'lineHeight'        => 1.2,
+            'fontSizeMin'       => 26,
+            'fontSizePreferred' => 36,
+            'fontSizeMax'       => 52,
+        ))
         . '<cite>What the toolbar is for</cite>'
         . '</blockquote>' . "\n"
         . '<!-- /wp:quote -->';
@@ -351,11 +458,44 @@ function toolrail_demo_seed_preferences($user_id) {
     $stored = get_user_meta($user_id, $meta_key, true);
     if (!is_array($stored) || !isset($stored['toolrail']) || $stored['toolrail'] !== $scope) {
         throw new RuntimeException(sprintf(
-            'Editor Tool Rail demo: the toolbar preferences did not persist to %s for user %d.',
+            'EditRail demo: the toolbar preferences did not persist to %s for user %d.',
             $meta_key,
             $user_id
         ));
     }
+}
+
+/**
+ * EB Garamond's Typography Stylist font_id, adopting the font on first use.
+ *
+ * The companion mu-plugin registers EB Garamond in theme.json, which is
+ * where Typography Stylist's Font Library bridge reads Library fonts
+ * from. Adopting it is what the block's picker does when an author
+ * chooses a Library font: it allocates a numeric font_id, and the
+ * plugin then emits `--font-N` for it (aliased to the WordPress preset
+ * variable). Blocks saved by that id are byte-identical to picked ones,
+ * so the editor shows EB Garamond as the selected font. The editor's
+ * font list is cached per user for an hour; the cache is cleared so the
+ * first editor load sees the adoption.
+ *
+ * @return int The font_id.
+ * @throws RuntimeException When Typography Stylist or the font is missing.
+ */
+function toolrail_demo_font_id() {
+    static $font_id = null;
+    if (null !== $font_id) {
+        return $font_id;
+    }
+    if (!class_exists('Typost')) {
+        throw new RuntimeException('EditRail demo: Typography Stylist is not active; the demo post needs its block.');
+    }
+    $entry = Typost::get_instance()->font_library_bridge()->adopt_library_font('eb-garamond');
+    if (!is_array($entry) || empty($entry['font_id'])) {
+        throw new RuntimeException('EditRail demo: EB Garamond is not in the Font Library; the demo fonts mu-plugin did not register it.');
+    }
+    delete_transient('typost_editor_data_1');
+    $font_id = (int) $entry['font_id'];
+    return $font_id;
 }
 
 /**
@@ -379,11 +519,11 @@ function toolrail_demo_seed_preferences($user_id) {
 function toolrail_demo_create_post($user_id) {
     $existing = get_post(TOOLRAIL_DEMO_POST_ID);
     if ($existing) {
-        if ('editor-tool-rail-demo' === $existing->post_name) {
+        if ('editrail-demo' === $existing->post_name) {
             return (int) $existing->ID;
         }
         throw new RuntimeException(sprintf(
-            'Editor Tool Rail demo: post ID %d is already used by "%s"; the blueprint landing page needs it.',
+            'EditRail demo: post ID %d is already used by "%s"; the blueprint landing page needs it.',
             TOOLRAIL_DEMO_POST_ID,
             $existing->post_title
         ));
@@ -395,19 +535,19 @@ function toolrail_demo_create_post($user_id) {
         'post_type'      => 'post',
         'post_status'    => 'publish',
         'post_author'    => $user_id,
-        'post_title'     => 'Try the Editor Tool Rail',
-        'post_name'      => 'editor-tool-rail-demo',
+        'post_title'     => 'Try EditRail',
+        'post_name'      => 'editrail-demo',
         'post_content'   => toolrail_demo_content(),
         'comment_status' => 'closed',
         'ping_status'    => 'closed',
     )), true);
     kses_init_filters();
     if (is_wp_error($id)) {
-        throw new RuntimeException('Editor Tool Rail demo: the demo post could not be created: ' . $id->get_error_message());
+        throw new RuntimeException('EditRail demo: the demo post could not be created: ' . $id->get_error_message());
     }
     if ((int) $id !== TOOLRAIL_DEMO_POST_ID) {
         throw new RuntimeException(sprintf(
-            'Editor Tool Rail demo: the demo post landed at ID %d, not %d; the blueprint landing page would miss it.',
+            'EditRail demo: the demo post landed at ID %d, not %d; the blueprint landing page would miss it.',
             $id,
             TOOLRAIL_DEMO_POST_ID
         ));

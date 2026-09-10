@@ -1,5 +1,5 @@
 /**
- * Editor Tool Rail — client behavior spec.
+ * EditRail — client behavior spec.
  *
  * Everything runs on post-new.php and NEVER saves: armed insertion only
  * touches the unsaved editor state, so no sandbox seeding is needed and the

@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name:       Editor Tool Rail
+ * Plugin Name:       EditRail
  * Description:       A movable, graphics-editor-style toolbar for the block editor. Click a tool, then click the canvas to insert a core block at that point.
  * Version:           1.0.1
  * Requires at least: 6.5
@@ -9,7 +9,7 @@
  * Author URI:        https://mnc4.com/
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
- * Text Domain:       toolrail
+ * Text Domain:       editrail
  *
  * @package Toolrail
  */

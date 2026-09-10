@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1544 500" width="1544" height="500" role="img" aria-label="EditRail. A graphics-editor toolbar for the block editor.">
+  <!--
+    EditRail banner, editable source. Same layout and colors as
+    scripts/wordmark/wordmark.html, which renders the PNG banners for the
+    WordPress.org listing (node scripts/wordmark.js). Colors are the plugin's
+    Dark appearance preset (assets/editor-rail.css).
+
+    Text is live, in Inter (SIL OFL; google/fonts ofl/inter). Install Inter
+    before opening this in a vector editor, or the text falls back to the
+    system stack named below. "Edit" is Inter Regular, "Rail" Inter
+    ExtraBold, the tagline Inter Medium.
+  -->
+  <defs>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.04"/>
+    </linearGradient>
+    <!-- The rail glyph, shared with .wordpress-org/icon.svg (256-unit box). -->
+    <symbol id="rail" viewBox="0 0 256 256">
+      <rect x="86" y="34" width="84" height="188" rx="18" fill="#2f2f2f" stroke="#3f3f3f" stroke-width="2"/>
+      <rect x="110" y="46" width="36" height="36" rx="7" fill="#b0b0b0"/>
+      <rect x="110" y="90" width="36" height="36" rx="7" fill="#3858e9" stroke="#7b90ff" stroke-width="3"/>
+      <rect x="110" y="134" width="36" height="36" rx="7" fill="#b0b0b0"/>
+      <rect x="110" y="178" width="36" height="36" rx="7" fill="#b0b0b0"/>
+    </symbol>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1544" height="500" fill="#1e1e1e"/>
+  <!-- Faint canvas edge on the right, like the editor beside the rail -->
+  <rect x="1284" y="0" width="260" height="500" fill="url(#edge)"/>
+
+  <!-- Glyph: 220 x 220, vertically centered, 140 px from the left -->
+  <use href="#rail" x="140" y="140" width="220" height="220"/>
+
+  <!-- Wordmark: 148 px, tracking -0.03em -->
+  <text x="432" y="268" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="148" letter-spacing="-4.44" fill="#e0e0e0"><tspan font-weight="400">Edit</tspan><tspan font-weight="800" fill="#ffffff">Rail</tspan></text>
+
+  <!-- Tagline: 38 px medium, tracking -0.01em -->
+  <text x="432" y="347" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="38" font-weight="500" letter-spacing="-0.38" fill="#b0b0b0">A graphics-editor toolbar for the block editor</text>
+</svg>
