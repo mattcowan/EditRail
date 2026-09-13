@@ -40,17 +40,31 @@ async function resetPrefs(page) {
   await page.waitForTimeout(2500);
 }
 
+/**
+ * What NVDA said for ONE command: the log entries added since before it.
+ * `lastSpokenPhrase()` returns the last entry of the accumulated log, so a
+ * silent step would hand back the previous step's phrase and an assertion
+ * could go green on silence (review 2026-09-13, finding 2). Returns '' for
+ * a silent step.
+ */
+async function spokenSince(nvda, before) {
+  const log = await nvda.spokenPhraseLog();
+  return log.slice(before).filter(Boolean).join(' ');
+}
+
 /** NVDA+Tab: report the current focus (captures what the user would hear after a Playwright-driven change). */
 async function reportFocus(nvda) {
+  const before = (await nvda.spokenPhraseLog()).length;
   await nvda.perform(nvda.keyboardCommands.reportCurrentFocus);
   await h.delay(400);
-  return nvda.lastSpokenPhrase();
+  return spokenSince(nvda, before);
 }
 
 async function press(nvda, key, wait = 600) {
+  const before = (await nvda.spokenPhraseLog()).length;
   await nvda.press(key);
   await h.delay(wait);
-  return nvda.lastSpokenPhrase();
+  return spokenSince(nvda, before);
 }
 
 /**
@@ -77,9 +91,18 @@ async function open(page) {
 }
 
 test.describe('EditRail with NVDA', () => {
-  test.afterEach(async ({ page }) => {
-    await resetPrefs(page).catch(() => {});
-    await h.deleteCurrentPost(page);
+  test.afterEach(async ({ page }, testInfo) => {
+    // The journeys run against a REAL account and site, so a failed
+    // cleanup is reported, never swallowed (review 2026-09-13, finding 6).
+    // Reported, not thrown: a teardown throw would hide the journey's own
+    // result.
+    const resetError = await resetPrefs(page).then(() => null, (e) => e.message);
+    const deleted = await h.deleteCurrentPost(page);
+    if (resetError || !deleted) {
+      const note = `[editrail test:sr] cleanup after "${testInfo.title}": prefs reset ${resetError ? 'FAILED: ' + resetError : 'ok'}; post ${deleted ? 'deleted (' + deleted + ')' : 'NOT deleted'}`;
+      console.warn(note);
+      testInfo.annotations.push({ type: 'cleanup', description: note });
+    }
   });
 
   test('toolbar: arrow through tools, arm by Enter, insert, disarm', async ({ page, nvda }) => {
@@ -183,9 +206,10 @@ test.describe('EditRail with NVDA', () => {
     await page.waitForSelector(SETTINGS, { timeout: 5000 });
     log.backward = [];
     for (let i = 0; i < 32; i++) {
+      const before = (await nvda.spokenPhraseLog()).length;
       await nvda.perform({ keyCode: [WindowsKeyCodes.Tab], modifiers: [WindowsModifiers.Shift] });
       await h.delay(650);
-      const phrase = await nvda.lastSpokenPhrase();
+      const phrase = await spokenSince(nvda, before);
       const el = await h.describeFocus(page);
       const openNow = (await page.locator(SETTINGS).count()) > 0;
       log.backward.push({ phrase, el: el && (el.ariaLabel || el.labelText || el.text || el.tag), type: el && el.type, dialogOpen: openNow });

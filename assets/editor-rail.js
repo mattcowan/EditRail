@@ -1128,9 +1128,9 @@
     {
       id: 'overview',
       label: __('Section overview', 'editrail'),
-      // No how-to hint: NVDA reads `title` as the description, so the
-      // hint was heard on every stop (SR-1, QA 2026-09-11). The help
-      // panel carries the how-to.
+      // No how-to hint: a screen reader reads `title` as the description,
+      // so the hint was heard on every stop (SR-1, QA 2026-09-11). The
+      // help panel carries the how-to.
       icon: ICONS.overview,
       // A toggle, not an arming tool: reordering is an ordinary editing
       // action, so the deactivation promise is untouched (roadmap R6).
@@ -2506,7 +2506,7 @@ var DASHICON_NAMES = [
         shortLabel: blockTitle,
         // The tooltip carries the author's description or nothing. It
         // used to carry a generic how-to ("click in the canvas to
-        // insert…"), and NVDA reads `title` as the accessible description,
+        // insert…"), and a screen reader reads `title` as the description,
         // so every pinned tool announced that sentence (SR-1, QA
         // 2026-09-11). The help panel is where the how-to lives.
         hint: blockMeta && blockMeta.description ? blockMeta.description : '',
@@ -3243,9 +3243,20 @@ var DASHICON_NAMES = [
    * Pointer Events spec suppresses the compatibility mouse events), so a
    * mousedown listener here never ran.
    *
+   * The target IS checked: canvasDoc() falls back to the top document
+   * when the editor has no iframe (the Code editor, for one), and then
+   * this listener sees every press in wp-admin — including one on a
+   * control inside the very surface it would close (review 2026-09-13,
+   * finding 1). Anything inside the rail's own region is not "outside".
+   *
+   * @param {PointerEvent} e The canvas (or, iframe-less, document) pointerdown.
    * @return {void}
    */
-  function handleCanvasPointerdownClose() {
+  function handleCanvasPointerdownClose(e) {
+    var region = document.getElementById('toolrail-region');
+    if (e && e.target && region && region.contains(e.target)) {
+      return;
+    }
     if (openFlyout) {
       closeFlyout(false);
     }
@@ -3269,6 +3280,19 @@ var DASHICON_NAMES = [
    */
   var boundDoc = null;
   var documentEscapeBound = false;
+
+  /**
+   * Remove the canvas handlers from a document bindCanvas() bound earlier.
+   *
+   * @param {Document} doc The previously bound document.
+   * @return {void}
+   */
+  function unbindCanvas(doc) {
+    doc.removeEventListener('pointerdown', handleCanvasPointerdown, true);
+    doc.removeEventListener('pointerdown', handleCanvasPointerdownClose, true);
+    doc.removeEventListener('click', handleCanvasClick, true);
+    doc.removeEventListener('keydown', handleCanvasKeydown, true);
+  }
 
   /**
    * The document the canvas actually lives in: the editor iframe's, or the
@@ -3303,16 +3327,29 @@ var DASHICON_NAMES = [
     if (!doc || doc === boundDoc) {
       return;
     }
+    // The canvas document changes identity (the iframe is replaced, or
+    // the editor goes iframe-less in the Code editor and back). Listeners
+    // bound to the OLD document are removed first, or the top document
+    // keeps a set of canvas handlers forever after one round trip through
+    // the Code editor (review 2026-09-13, finding 1).
+    if (boundDoc) {
+      unbindCanvas(boundDoc);
+    }
     boundDoc = doc;
     doc.addEventListener('pointerdown', handleCanvasPointerdown, true);
     doc.addEventListener('pointerdown', handleCanvasPointerdownClose, true);
     doc.addEventListener('click', handleCanvasClick, true);
     doc.addEventListener('keydown', handleCanvasKeydown, true);
-    // The top document gets the same Escape once; keydowns inside the
-    // iframe never bubble out of it, so the two never double-handle.
+    // The top document gets the same Escape once, in the CAPTURE phase
+    // so it runs before the surface handlers (settings, help, add dialog,
+    // flyout) that open later and clear their own flag on the same press:
+    // in the bubble phase it saw every flag already false and disarmed on
+    // the Escape that closed the help panel (review 2026-09-13, finding
+    // 4). Keydowns inside the iframe never bubble out, so the canvas
+    // handler and this one never double-handle.
     if (!documentEscapeBound && doc !== document) {
       documentEscapeBound = true;
-      document.addEventListener('keydown', disarmOnEscape);
+      document.addEventListener('keydown', disarmOnEscape, true);
     }
 
     // Armed-cursor style lives INSIDE the canvas document.
@@ -7155,10 +7192,11 @@ var DASHICON_NAMES = [
       closeOverview(true);
     });
     bar.appendChild(close);
-    // The bar is appended AFTER the list (below): it is absolutely
-    // positioned, so DOM order only decides the Tab order, and with the
-    // sections first Tab ends on Done instead of leaving the page (SR-3,
-    // QA 2026-09-11).
+    // The bar stays FIRST in DOM order, where it is drawn: Tab order and
+    // the visual order agree, and Shift+Tab from the first section
+    // reaches Done. Keeping focus inside the overlay is the keydown
+    // handler's job (SR-3, QA 2026-09-11; review 2026-09-13, finding 3).
+    overlay.appendChild(bar);
 
     // --- Outline boxes, one per block, DOM order = document order.
     // A box is lines around the block plus a small corner tag; the
@@ -7480,7 +7518,6 @@ var DASHICON_NAMES = [
       list.appendChild(li);
     });
     overlay.appendChild(list);
-    overlay.appendChild(bar);
     positionOverviewBoxes();
 
     if (focusSelectors) {

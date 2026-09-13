@@ -6510,13 +6510,14 @@ test.describe('NVDA findings 2026-09-11 (1.0.2)', () => {
     const overlay = page.locator('#toolrail-overview');
     await expect(overlay.locator('.toolrail-ov-box')).toHaveCount(6);
 
-    // Focus opens on the first section; the bar (zoom, Done) comes AFTER
-    // the sections in DOM order so it is reachable forward.
+    // The bar (zoom, Done) stays FIRST in DOM order, where it is drawn,
+    // so Tab order and visual order agree (review 2026-09-13, finding 3);
+    // containment comes from the overlay's keydown handler.
     const order = await page.evaluate(() => {
       const o = document.querySelector('#toolrail-overview');
       const list = o.querySelector('.toolrail-ov-list');
       const bar = o.querySelector('.toolrail-ov-bar');
-      return !!(list.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING);
+      return !!(bar.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING);
     });
     expect(order).toBe(true);
 
@@ -6526,7 +6527,8 @@ test.describe('NVDA findings 2026-09-11 (1.0.2)', () => {
     });
     const inside = () => page.evaluate(() => document.querySelector('#toolrail-overview').contains(document.activeElement));
 
-    // Tab through the six sections and the bar; every stop stays inside.
+    // Tab from the first section through the rest and on round the bar:
+    // every stop stays inside, and Done is reached.
     const stops = [];
     for (let i = 0; i < 12; i++) {
       await page.keyboard.press('Tab');
@@ -6535,16 +6537,102 @@ test.describe('NVDA findings 2026-09-11 (1.0.2)', () => {
     expect(stops.every((s) => s.inside), JSON.stringify(stops)).toBe(true);
     expect(stops.some((s) => s.label === 'Done')).toBe(true);
 
-    // From Done, Tab wraps to the first section; Shift+Tab from there goes back to the last control.
-    const done = overlay.locator('.toolrail-ov-bar button', { hasText: /^Done$/ });
-    await done.focus();
+    // Wrap both ways: Tab on the last section lands on the bar's first
+    // button; Shift+Tab on the bar's first button lands on the last section.
+    await overlay.locator('.toolrail-ov-box [data-ov-action="pick"]').last().focus();
     await page.keyboard.press('Tab');
-    expect(await activeLabel()).toMatch(/^Paragraph, position 1 of 6/);
+    expect(await activeLabel()).toBe('Zoom out');
     await page.keyboard.press('Shift+Tab');
-    expect(await activeLabel()).toBe('Done');
+    expect(await activeLabel()).toMatch(/^Paragraph, position 6 of 6/);
     expect(await inside()).toBe(true);
 
     await page.keyboard.press('Escape');
     await expect(overlay).toHaveCount(0);
+  });
+});
+
+/**
+ * Code review 2026-09-13, findings 1 and 4 on the 1.0.2 fixes.
+ */
+test.describe('review 2026-09-13 follow-ups (1.0.2)', () => {
+  test('finding 1: after a Code editor round trip, a press inside Toolbar settings does not close it', async ({ page }) => {
+    await openNewPost(page);
+    // Iframe-less editor (the Code editor) and back: the canvas document
+    // becomes the top document for a while, and the canvas handlers must
+    // not stay bound to it afterwards. The editor mode is a persisted
+    // preference, so it is restored whatever happens.
+    const setMode = (mode) => page.evaluate((m) => window.wp.data.dispatch('core/edit-post').switchEditorMode(m), mode);
+    try {
+      await setMode('text');
+      await expect(page.locator('iframe[name="editor-canvas"]')).toHaveCount(0, { timeout: 10000 });
+      await page.waitForTimeout(600);
+      await setMode('visual');
+      await expect(page.locator('iframe[name="editor-canvas"]')).toHaveCount(1, { timeout: 15000 });
+      await expect(page.locator('#toolrail-rail')).toBeVisible();
+      await page.waitForTimeout(800);
+
+      await page.locator('#toolrail-rail [data-tool="settings"]').click();
+      const dialog = page.locator('.toolrail-settings');
+      await expect(dialog).toBeVisible();
+      // Real presses on controls INSIDE the dialog.
+      await page.locator('#toolrail-settings-search').click();
+      await expect(dialog).toBeVisible();
+      await dialog.locator('input[name="toolrail-dock"][value="right"]').click();
+      await expect(dialog).toBeVisible();
+      expect(await page.evaluate(() => document.getElementById('toolrail-region').dataset.dock)).toBe('right');
+      await dialog.locator('input[name="toolrail-dock"][value="left"]').click();
+      await expect(dialog).toBeVisible();
+
+      // The help panel too, then a canvas press still closes it (C3 holds after the round trip).
+      await page.keyboard.press('Escape');
+      await page.locator('#toolrail-rail [data-tool="help"]').click();
+      await expect(page.locator('.toolrail-help')).toBeVisible();
+      await page.locator('.toolrail-help button[aria-label="Close toolbar help"]').hover();
+      await page.mouse.down();
+      await page.mouse.up();
+      await expect(page.locator('.toolrail-help')).toHaveCount(0);
+      await page.locator('#toolrail-rail [data-tool="help"]').click();
+      await expect(page.locator('.toolrail-help')).toBeVisible();
+      await canvas(page).locator('body').click({ position: { x: 700, y: 300 } });
+      await expect(page.locator('.toolrail-help')).toHaveCount(0);
+    } finally {
+      await setMode('visual');
+      await page.waitForTimeout(1500);
+    }
+  });
+
+  test('finding 4: one Escape closes the help panel and leaves the tool armed; the next disarms', async ({ page }) => {
+    await openNewPost(page);
+    const heading = page.locator('#toolrail-rail [data-tool="pin:core/heading"]');
+    await heading.click();
+    await expect(heading).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('#toolrail-rail [data-tool="help"]').click();
+    await expect(page.locator('.toolrail-help')).toBeVisible();
+    // Focus is inside the panel: Escape belongs to the panel.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.toolrail-help')).toHaveCount(0);
+    await expect(heading).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Escape');
+    await expect(heading).toHaveAttribute('aria-pressed', 'false');
+
+    // The add dialog, opened from the block menu, behaves the same.
+    await page.evaluate(() => window.wp.data.dispatch('core/block-editor').resetBlocks([window.wp.blocks.createBlock('core/quote', {}, [window.wp.blocks.createBlock('core/paragraph', { content: 'Q' })])]));
+    await heading.click();
+    await page.evaluate(() => {
+      const id = window.wp.data.select('core/block-editor').getBlocks()[0].clientId;
+      const dt = new DataTransfer();
+      dt.setData('wp-blocks', JSON.stringify({ type: 'block', srcClientIds: [id], srcRootClientId: '' }));
+      const region = document.getElementById('toolrail-region');
+      region.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }));
+      region.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    });
+    const add = page.locator('#toolrail-region [role="dialog"][aria-labelledby="toolrail-adddialog-title"]');
+    await expect(add).toBeVisible();
+    await expect(heading).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Escape');
+    await expect(add).toHaveCount(0);
+    await expect(heading).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Escape');
+    await expect(heading).toHaveAttribute('aria-pressed', 'false');
   });
 });

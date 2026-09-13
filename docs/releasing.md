@@ -85,7 +85,7 @@ This suite reads its variables from a `.env` file at the repository root, not fr
 
 Copy `.env.example` to `.env` and fill it in. `.env` holds a password: it is in `.gitignore` and in `.distignore`, so it stays out of git and out of the zip. A `WP_BASE_URL` that is not a local host must use HTTPS, because the login posts the password.
 
-The journeys write to the account they log in with, the same as the e2e suite. Each one creates a post and deletes it again.
+The journeys write to the account they log in with, the same as the e2e suite. Each one creates a post and deletes it again. If the cleanup fails, the run prints a warning and adds a `cleanup` annotation to that test.
 
 ## The Playground blueprint
 

@@ -15,7 +15,7 @@ Fixes from the 2026-09-11 QA sweep (Playwright and NVDA; `private/qa-2026-09-11-
 * An armed click on the post title inserts at the top of the document instead of the bottom.
 * An armed click inside an empty container that accepts the block (an empty Group showing its layout placeholder) inserts inside it instead of beside it.
 * A tool's tooltip is its name, or its name and the author's description. The generic "click in the canvas to insert…" hint is gone: NVDA reads the tooltip as the description, so it was announced on every tool. The help panel explains inserting.
-* Section overview: Tab stays inside the overview while it is open, and the Zoom and Done buttons come after the sections, so Tab ends on Done and wraps. Before, one Tab past the last section left the page for the browser's toolbar with the overview still open.
+* Section overview: Tab stays inside the overview while it is open. Tab on the last control wraps to the first, and Shift+Tab on the first wraps to the last. Before, one Tab past the last section left the page for the browser's toolbar with the overview still open.
 * Screen-reader test suite: `npm run test:sr` runs NVDA journeys through the toolbar, Toolbar settings, the Section overview and the help panel with Guidepup in a headed Firefox (Windows only; not part of `npm test`). See `docs/releasing.md`.
 
 ## 1.0.1

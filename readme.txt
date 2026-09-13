@@ -70,7 +70,7 @@ The plugin folder is now editrail. After a zip upgrade, delete the old toolrail 
 * Pin, Unpin, Move up, Move down, Save set and Delete announce their outcome to screen readers. Enter in the set name field saves the set.
 * An armed click on the post title inserts at the top of the document. An armed click inside an empty Group inserts inside it.
 * A tool's tooltip is its name, or its name and your description. Screen readers no longer hear a how-to sentence on every tool; the help panel explains inserting.
-* Section overview: Tab stays inside the overview while it is open and ends on Done, instead of leaving the page.
+* Section overview: Tab stays inside the overview while it is open, instead of leaving the page.
 
 = 1.0.1 =
 * Renamed the plugin to EditRail. The slug and the text domain are now `editrail`. The stored preferences, the JavaScript API and the PHP filter keep their names, so pinned tools, saved sets and extensions are not affected.
