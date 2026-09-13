@@ -2,6 +2,22 @@
 
 Every version of EditRail (Editor Tool Rail before 1.0.1). The 0.1.x versions were development builds that were never listed on WordPress.org. The WordPress.org listing (`readme.txt`) shows only listed versions.
 
+## 1.0.2
+
+Fixes from the 2026-09-11 QA sweep (Playwright and NVDA; `private/qa-2026-09-11-editrail.md`).
+
+* Escape returns the toolbar to Select from anywhere in the editor, not only from inside the canvas. A keyboard user who armed a tool with Enter had no Escape at all. The disarm is announced.
+* A second press on an armed tool disarms it.
+* Toolbar settings: the Pinned tools list and the Add a block or pattern search now come first, directly under the note that introduces them; Toolbar position, Tool names and Appearance follow. The dialog closes when Tab leaves it, so with the three groups first, six Tabs closed the dialog and 27 of its 34 controls were reachable only with Shift+Tab.
+* A click into the canvas now closes Toolbar settings, the help panel, the Add to toolbar dialog and an open flyout, the same as a click anywhere else outside them. The editor iframe swallowed the outside click before.
+* Pin from the search, Unpin, Move up, Move down, Save set and Delete announce their outcome to screen readers, in text under the list they changed.
+* Enter in the "Save the current set as" field saves the set; saving with an empty name says "Type a name for the set."
+* An armed click on the post title inserts at the top of the document instead of the bottom.
+* An armed click inside an empty container that accepts the block (an empty Group showing its layout placeholder) inserts inside it instead of beside it.
+* A tool's tooltip is its name, or its name and the author's description. The generic "click in the canvas to insert…" hint is gone: NVDA reads the tooltip as the description, so it was announced on every tool. The help panel explains inserting.
+* Section overview: Tab stays inside the overview while it is open, and the Zoom and Done buttons come after the sections, so Tab ends on Done and wraps. Before, one Tab past the last section left the page for the browser's toolbar with the overview still open.
+* Screen-reader test suite: `npm run test:sr` runs NVDA journeys through the toolbar, Toolbar settings, the Section overview and the help panel with Guidepup in a headed Firefox (Windows only; not part of `npm test`). See `docs/releasing.md`.
+
 ## 1.0.1
 
 * Renamed the plugin to EditRail. The slug, the main file and the text domain are now `editrail`. The `toolrail_` prefix, the `window.toolrail` API, the `toolrail_tool_providers` filter, the script handle and the stored preferences keep their names, so pinned tools, saved sets and extensions are not affected.
