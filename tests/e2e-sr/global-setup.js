@@ -42,16 +42,29 @@ module.exports = async () => {
   assertSafeBaseUrl(baseURL);
 
   const browser = await chromium.launch();
-  const page = await browser.newPage();
-  await page.goto(`${baseURL}/wp-login.php`);
-  await page.fill('#user_login', username);
-  await page.fill('#user_pass', password);
-  await Promise.all([
-    page.waitForURL(`${baseURL}/wp-admin/**`),
-    page.click('#wp-submit'),
-  ]);
-  await page.context().storageState({ path: path.join(__dirname, 'auth.json') });
-  await browser.close();
+  try {
+    const page = await browser.newPage();
+    await page.goto(`${baseURL}/wp-login.php`);
+    // The base URL was checked above, but a redirect can move the login
+    // page to plain HTTP, and the form can post somewhere else again. Both
+    // destinations get the same check BEFORE any credential is typed
+    // (PR #35 review): a password must not travel over HTTP to a public
+    // host.
+    assertSafeBaseUrl(page.url());
+    const action = await page.locator('#loginform').getAttribute('action');
+    assertSafeBaseUrl(new URL(action || page.url(), page.url()).href);
+    await page.fill('#user_login', username);
+    await page.fill('#user_pass', password);
+    await Promise.all([
+      page.waitForURL(`${baseURL}/wp-admin/**`),
+      page.click('#wp-submit'),
+    ]);
+    await page.context().storageState({ path: path.join(__dirname, 'auth.json') });
+  } finally {
+    // Always, or a failed login leaves a headless Chromium running until
+    // the process exits (PR #35 review).
+    await browser.close();
+  }
 };
 
 module.exports.isLocalHost = isLocalHost;
