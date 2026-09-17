@@ -55,8 +55,12 @@ module.exports = async () => {
     assertSafeBaseUrl(new URL(action || page.url(), page.url()).href);
     await page.fill('#user_login', username);
     await page.fill('#user_pass', password);
+    // The admin wait is resolved against the login page's OWN URL, not
+    // the configured base: after an HTTP→HTTPS redirect the base no longer
+    // matches and the wait would time out after a successful login (PR #35
+    // review). A subdirectory install keeps its path the same way.
     await Promise.all([
-      page.waitForURL(`${baseURL}/wp-admin/**`),
+      page.waitForURL(new URL('./wp-admin/**', page.url()).href),
       page.click('#wp-submit'),
     ]);
     await page.context().storageState({ path: path.join(__dirname, 'auth.json') });
