@@ -6254,3 +6254,385 @@ test.describe('review 2026-09-05 follow-ups (pin data, icon browser)', () => {
     expect(result.loaded.list.title).toBe('Steps');
   });
 });
+
+/**
+ * QA sweep 2026-09-11 (private/qa-2026-09-11-editrail.md): one test per
+ * core finding, C1–C8. Each names the finding so the report and the
+ * spec can be read side by side.
+ */
+test.describe('QA 2026-09-11 follow-ups (1.0.2)', () => {
+  /** Text of core's polite live region — what wp.a11y.speak() last said. */
+  const liveText = (page) => page.evaluate(() => {
+    const el = document.getElementById('a11y-speak-polite');
+    return el ? el.textContent.replace(/ /g, ' ').trim() : '';
+  });
+  /**
+   * Pressed CORE tools (Select and the pins). Extension toggles — a
+   * theme's "Page design", a guides plugin's rulers — keep their own
+   * pressed state across page loads and are not what these tests are
+   * about.
+   */
+  const pressedTools = (page) => page.evaluate(() =>
+    Array.from(document.querySelectorAll('#toolrail-rail [data-tool][aria-pressed="true"]'))
+      .map((b) => b.dataset.tool)
+      .filter((id) => id === 'select' || id.startsWith('pin:'))
+  );
+
+  test('C1: Escape disarms with focus on the rail, and from the editor chrome, and says so', async ({ page }) => {
+    await openNewPost(page);
+    const paragraph = page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]');
+
+    // Arm by keyboard: focus stays on the rail button.
+    await paragraph.focus();
+    await page.keyboard.press('Enter');
+    await expect(paragraph).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Escape');
+    await expect(paragraph).toHaveAttribute('aria-pressed', 'false');
+    expect(await pressedTools(page)).toEqual(['select']);
+    expect(await liveText(page)).toContain('Tool disarmed');
+
+    // Arm by click, then Escape with focus somewhere else in wp-admin.
+    await paragraph.click();
+    await expect(paragraph).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('.editor-header button, .edit-post-header button').first().focus();
+    await page.keyboard.press('Escape');
+    await expect(paragraph).toHaveAttribute('aria-pressed', 'false');
+
+    // A surface that owns Escape keeps it: with the settings dialog open,
+    // Escape closes the dialog and the tool stays armed.
+    await paragraph.click();
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await expect(page.locator('.toolrail-settings')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.toolrail-settings')).toHaveCount(0);
+    await expect(paragraph).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Escape');
+    await expect(paragraph).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('C8: a second press on the armed tool disarms it', async ({ page }) => {
+    await openNewPost(page);
+    const heading = page.locator('#toolrail-rail [data-tool="pin:core/heading"]');
+    await heading.click();
+    await expect(heading).toHaveAttribute('aria-pressed', 'true');
+    await heading.click();
+    await expect(heading).toHaveAttribute('aria-pressed', 'false');
+    expect(await pressedTools(page)).toEqual(['select']);
+    // Keyboard too.
+    await heading.focus();
+    await page.keyboard.press('Enter');
+    await expect(heading).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Enter');
+    await expect(heading).toHaveAttribute('aria-pressed', 'false');
+    // Switching between two arming tools still arms the second.
+    await heading.click();
+    await page.locator('#toolrail-rail [data-tool="pin:core/image"]').click();
+    expect(await pressedTools(page)).toEqual(['pin:core/image']);
+  });
+
+  test('C5: an armed click on the post title inserts at the top, not the bottom', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const blocks = [];
+      for (let i = 0; i < 12; i++) {
+        blocks.push(window.wp.blocks.createBlock('core/paragraph', { content: 'Paragraph ' + (i + 1) + ' ' + 'text '.repeat(30) }));
+      }
+      window.wp.data.dispatch('core/block-editor').resetBlocks(blocks);
+    });
+    await canvas(page).locator('body').evaluate((b) => b.ownerDocument.defaultView.scrollTo(0, 0));
+
+    await page.locator('#toolrail-rail [data-tool="pin:core/heading"]').click();
+    await canvas(page).locator('.editor-post-title__input, .editor-post-title').first().click({ position: { x: 20, y: 10 } });
+
+    await expect.poll(() => blockNames(page)).toHaveLength(13);
+    const names = await blockNames(page);
+    expect(names[0]).toBe('core/heading');
+    expect(names.slice(1).every((n) => n === 'core/paragraph')).toBe(true);
+    // The author stays at the top: the canvas did not scroll to the bottom.
+    expect(await canvas(page).locator('body').evaluate((b) => b.ownerDocument.defaultView.scrollY)).toBeLessThan(200);
+  });
+
+  test('C6: an armed click inside an empty Group inserts inside it; a leaf block still takes before/after', async ({ page }) => {
+    await openNewPost(page);
+    for (const frac of [0.25, 0.75]) {
+      await page.evaluate(() => {
+        window.wp.data.dispatch('core/block-editor').resetBlocks([window.wp.blocks.createBlock('core/group')]);
+      });
+      const group = canvas(page).locator('[data-type="core/group"]').first();
+      await expect(group).toBeVisible();
+      await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').click();
+      const box = await group.boundingBox();
+      await group.click({ position: { x: 30, y: Math.round(box.height * frac) } });
+      await expect.poll(() => page.evaluate(() => {
+        const s = window.wp.data.select('core/block-editor');
+        return s.getBlocks().map((b) => b.name + ':' + b.innerBlocks.map((c) => c.name).join(','));
+      })).toEqual(['core/group:core/paragraph']);
+    }
+
+    // A leaf block (an image) has no root that accepts a paragraph, so
+    // the click still lands beside it: top half is before.
+    await page.evaluate(() => {
+      window.wp.data.dispatch('core/block-editor').resetBlocks([window.wp.blocks.createBlock('core/image')]);
+    });
+    const image = canvas(page).locator('[data-type="core/image"]').first();
+    await expect(image).toBeVisible();
+    await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').click();
+    await image.click({ position: { x: 30, y: 8 } });
+    await expect.poll(() => blockNames(page)).toEqual(['core/paragraph', 'core/image']);
+  });
+
+  test('C2: pinned tools and the search precede the position group, so Tab from the search reaches every group', async ({ page }) => {
+    await openNewPost(page);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await expect(page.locator('.toolrail-settings')).toBeVisible();
+
+    const order = await page.evaluate(() => {
+      const dlg = document.querySelector('.toolrail-settings');
+      const note = dlg.querySelector('.toolrail-settings-note');
+      const pinnedHead = Array.from(dlg.querySelectorAll('.toolrail-settings-subtitle')).find((h) => h.textContent === 'Pinned tools');
+      const search = dlg.querySelector('#toolrail-settings-search');
+      const position = dlg.querySelector('input[name="toolrail-dock"]');
+      const appearance = dlg.querySelector('input[name="toolrail-appearance"]');
+      const setName = dlg.querySelector('#toolrail-settings-setname');
+      const follows = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+      return {
+        noteThenPinned: follows(note, pinnedHead),
+        pinnedThenSearch: follows(pinnedHead, search),
+        searchThenPosition: follows(search, position),
+        positionThenAppearance: follows(position, appearance),
+        appearanceThenSets: follows(appearance, setName),
+      };
+    });
+    expect(order).toEqual({ noteThenPinned: true, pinnedThenSearch: true, searchThenPosition: true, positionThenAppearance: true, appearanceThenSets: true });
+
+    // Focus still opens in the search; from there Tab reaches the
+    // position radios without leaving the dialog.
+    expect(await page.evaluate(() => document.activeElement.id)).toBe('toolrail-settings-search');
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => document.activeElement.name)).toBe('toolrail-dock');
+    await expect(page.locator('.toolrail-settings')).toBeVisible();
+  });
+
+  test('C3: a click into the canvas closes the settings dialog, the help panel and a flyout', async ({ page }) => {
+    await openNewPost(page);
+    const gear = page.locator('#toolrail-rail [data-tool="settings"]');
+    await gear.click();
+    await expect(page.locator('.toolrail-settings')).toBeVisible();
+    await canvas(page).locator('body').click({ position: { x: 700, y: 300 } });
+    await expect(page.locator('.toolrail-settings')).toHaveCount(0);
+    await expect(gear).toHaveAttribute('aria-expanded', 'false');
+
+    await page.locator('#toolrail-rail [data-tool="help"]').click();
+    await expect(page.locator('.toolrail-help')).toBeVisible();
+    await canvas(page).locator('body').click({ position: { x: 700, y: 300 } });
+    await expect(page.locator('.toolrail-help')).toHaveCount(0);
+
+    // A flyout: register a parent with one child through the public API.
+    await page.evaluate(() => {
+      window.toolrail.registerTool({ id: 'qa/parent', label: 'QA parent', onActivate: () => {} });
+      window.toolrail.registerTool({ id: 'qa/child', label: 'QA child', parent: 'qa/parent', onActivate: () => {} });
+    });
+    const parent = page.locator('#toolrail-rail [data-tool="qa/parent"]');
+    await parent.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(page.locator('#toolrail-region [role="menu"]')).toHaveCount(1);
+    await canvas(page).locator('body').click({ position: { x: 700, y: 300 } });
+    await expect(page.locator('#toolrail-region [role="menu"]')).toHaveCount(0);
+  });
+
+  test('C4/C7: pin, unpin, move, save set and delete announce; Enter saves a set; an empty name is refused in text', async ({ page }) => {
+    await openNewPost(page);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    const dialog = page.locator('.toolrail-settings');
+    await expect(dialog).toBeVisible();
+    const pinnedStatus = dialog.locator('#toolrail-settings-pinned-status');
+    const setStatus = dialog.locator('#toolrail-settings-status');
+
+    await page.locator('#toolrail-settings-search').fill('Quote');
+    await page.locator('.toolrail-settings-result[data-block="core/quote"]').click();
+    await expect(pinnedStatus).toHaveText('Quote pinned to the toolbar.');
+    expect(await liveText(page)).toBe('Quote pinned to the toolbar.');
+
+    await dialog.locator('button[aria-label="Move Quote up"]').click();
+    await expect(pinnedStatus).toHaveText('Quote moved to position 4 of 5.');
+    await dialog.locator('button[aria-label="Move Quote down"]').click();
+    await expect(pinnedStatus).toHaveText('Quote moved to position 5 of 5.');
+
+    await dialog.locator('button[aria-label="Unpin Quote"]').click();
+    await expect(pinnedStatus).toHaveText('Quote unpinned from the toolbar.');
+    expect(await liveText(page)).toBe('Quote unpinned from the toolbar.');
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/quote"]')).toHaveCount(0);
+
+    // Save set: empty name is refused in text; Enter saves.
+    await dialog.locator('.toolrail-settings-saveset').click();
+    await expect(setStatus).toHaveText('Type a name for the set.');
+    await page.locator('#toolrail-settings-setname').fill('QA enter');
+    await page.keyboard.press('Enter');
+    await expect(setStatus).toHaveText('Saved the set "QA enter".');
+    await expect(dialog.locator('button[aria-label="Load the set QA enter"]')).toHaveCount(1);
+    expect(await liveText(page)).toBe('Saved the set "QA enter".');
+
+    await dialog.locator('button[aria-label="Delete the set QA enter"]').click();
+    await expect(setStatus).toHaveText('Deleted the set "QA enter".');
+    await expect(dialog.locator('button[aria-label="Load the set QA enter"]')).toHaveCount(0);
+  });
+});
+
+/**
+ * NVDA journeys 2026-09-11 (private/qa-2026-09-11-editrail.md, section 2):
+ * the screen-reader findings that had a code fix.
+ */
+test.describe('NVDA findings 2026-09-11 (1.0.2)', () => {
+  test('SR-1: a tool\'s tooltip is its label alone (or the author\'s description), never a how-to hint', async ({ page }) => {
+    await openNewPost(page);
+    // NVDA reads `title` as the accessible description, so a generic
+    // how-to there was heard on every stop down the rail.
+    const titles = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#toolrail-rail [data-tool^="pin:"], #toolrail-rail [data-tool="overview"]'))
+        .map((b) => ({ id: b.dataset.tool, label: b.getAttribute('aria-label'), title: b.title }))
+    );
+    expect(titles.length).toBeGreaterThanOrEqual(5);
+    for (const t of titles) {
+      expect(t.title, `${t.id} tooltip`).toBe(t.label);
+    }
+    // An author-written description still rides the tooltip and the
+    // accessible description.
+    await page.evaluate(() => window.toolrail.setPinMeta('core/heading', { description: 'Adds a section title' }));
+    const heading = page.locator('#toolrail-rail [data-tool="pin:core/heading"]');
+    await expect(heading).toHaveAttribute('title', 'Heading (pinned block) — Adds a section title');
+    await expect(heading).toHaveAttribute('aria-description', 'Adds a section title');
+  });
+
+  test('SR-3: Tab stays inside the Section overview and ends on Done, never in the browser chrome', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const overlay = page.locator('#toolrail-overview');
+    await expect(overlay.locator('.toolrail-ov-box')).toHaveCount(6);
+
+    // The bar (zoom, Done) stays FIRST in DOM order, where it is drawn,
+    // so Tab order and visual order agree (review 2026-09-13, finding 3);
+    // containment comes from the overlay's keydown handler.
+    const order = await page.evaluate(() => {
+      const o = document.querySelector('#toolrail-overview');
+      const list = o.querySelector('.toolrail-ov-list');
+      const bar = o.querySelector('.toolrail-ov-bar');
+      return !!(bar.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING);
+    });
+    expect(order).toBe(true);
+
+    const activeLabel = () => page.evaluate(() => {
+      const a = document.activeElement;
+      return a ? (a.getAttribute('aria-label') || a.textContent.trim()) : null;
+    });
+    const inside = () => page.evaluate(() => document.querySelector('#toolrail-overview').contains(document.activeElement));
+
+    // Tab from the first section through the rest and on round the bar:
+    // every stop stays inside, and Done is reached.
+    const stops = [];
+    for (let i = 0; i < 12; i++) {
+      await page.keyboard.press('Tab');
+      stops.push({ label: await activeLabel(), inside: await inside() });
+    }
+    expect(stops.every((s) => s.inside), JSON.stringify(stops)).toBe(true);
+    expect(stops.some((s) => s.label === 'Done')).toBe(true);
+
+    // Wrap both ways: Tab on the last section lands on the bar's first
+    // button; Shift+Tab on the bar's first button lands on the last section.
+    await overlay.locator('.toolrail-ov-box [data-ov-action="pick"]').last().focus();
+    await page.keyboard.press('Tab');
+    expect(await activeLabel()).toBe('Zoom out');
+    await page.keyboard.press('Shift+Tab');
+    expect(await activeLabel()).toMatch(/^Paragraph, position 6 of 6/);
+    expect(await inside()).toBe(true);
+
+    await page.keyboard.press('Escape');
+    await expect(overlay).toHaveCount(0);
+  });
+});
+
+/**
+ * Code review 2026-09-13, findings 1 and 4 on the 1.0.2 fixes.
+ */
+test.describe('review 2026-09-13 follow-ups (1.0.2)', () => {
+  test('finding 1: after a Code editor round trip, a press inside Toolbar settings does not close it', async ({ page }) => {
+    await openNewPost(page);
+    // Iframe-less editor (the Code editor) and back: the canvas document
+    // becomes the top document for a while, and the canvas handlers must
+    // not stay bound to it afterwards. The editor mode is a persisted
+    // preference, so it is restored whatever happens.
+    const setMode = (mode) => page.evaluate((m) => window.wp.data.dispatch('core/edit-post').switchEditorMode(m), mode);
+    try {
+      await setMode('text');
+      await expect(page.locator('iframe[name="editor-canvas"]')).toHaveCount(0, { timeout: 10000 });
+      await page.waitForTimeout(600);
+      await setMode('visual');
+      await expect(page.locator('iframe[name="editor-canvas"]')).toHaveCount(1, { timeout: 15000 });
+      await expect(page.locator('#toolrail-rail')).toBeVisible();
+      await page.waitForTimeout(800);
+
+      await page.locator('#toolrail-rail [data-tool="settings"]').click();
+      const dialog = page.locator('.toolrail-settings');
+      await expect(dialog).toBeVisible();
+      // Real presses on controls INSIDE the dialog.
+      await page.locator('#toolrail-settings-search').click();
+      await expect(dialog).toBeVisible();
+      await dialog.locator('input[name="toolrail-dock"][value="right"]').click();
+      await expect(dialog).toBeVisible();
+      expect(await page.evaluate(() => document.getElementById('toolrail-region').dataset.dock)).toBe('right');
+      await dialog.locator('input[name="toolrail-dock"][value="left"]').click();
+      await expect(dialog).toBeVisible();
+
+      // The help panel too, then a canvas press still closes it (C3 holds after the round trip).
+      await page.keyboard.press('Escape');
+      await page.locator('#toolrail-rail [data-tool="help"]').click();
+      await expect(page.locator('.toolrail-help')).toBeVisible();
+      await page.locator('.toolrail-help button[aria-label="Close toolbar help"]').hover();
+      await page.mouse.down();
+      await page.mouse.up();
+      await expect(page.locator('.toolrail-help')).toHaveCount(0);
+      await page.locator('#toolrail-rail [data-tool="help"]').click();
+      await expect(page.locator('.toolrail-help')).toBeVisible();
+      await canvas(page).locator('body').click({ position: { x: 700, y: 300 } });
+      await expect(page.locator('.toolrail-help')).toHaveCount(0);
+    } finally {
+      await setMode('visual');
+      await page.waitForTimeout(1500);
+    }
+  });
+
+  test('finding 4: one Escape closes the help panel and leaves the tool armed; the next disarms', async ({ page }) => {
+    await openNewPost(page);
+    const heading = page.locator('#toolrail-rail [data-tool="pin:core/heading"]');
+    await heading.click();
+    await expect(heading).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('#toolrail-rail [data-tool="help"]').click();
+    await expect(page.locator('.toolrail-help')).toBeVisible();
+    // Focus is inside the panel: Escape belongs to the panel.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.toolrail-help')).toHaveCount(0);
+    await expect(heading).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Escape');
+    await expect(heading).toHaveAttribute('aria-pressed', 'false');
+
+    // The add dialog, opened from the block menu, behaves the same.
+    await page.evaluate(() => window.wp.data.dispatch('core/block-editor').resetBlocks([window.wp.blocks.createBlock('core/quote', {}, [window.wp.blocks.createBlock('core/paragraph', { content: 'Q' })])]));
+    await heading.click();
+    await page.evaluate(() => {
+      const id = window.wp.data.select('core/block-editor').getBlocks()[0].clientId;
+      const dt = new DataTransfer();
+      dt.setData('wp-blocks', JSON.stringify({ type: 'block', srcClientIds: [id], srcRootClientId: '' }));
+      const region = document.getElementById('toolrail-region');
+      region.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }));
+      region.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    });
+    const add = page.locator('#toolrail-region [role="dialog"][aria-labelledby="toolrail-adddialog-title"]');
+    await expect(add).toBeVisible();
+    await expect(heading).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Escape');
+    await expect(add).toHaveCount(0);
+    await expect(heading).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Escape');
+    await expect(heading).toHaveAttribute('aria-pressed', 'false');
+  });
+});

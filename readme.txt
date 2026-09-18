@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.0.1
+Stable tag: 1.0.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -63,6 +63,14 @@ Its own preferences, and nothing else. The plugin stores no options and writes n
 The plugin folder is now editrail. After a zip upgrade, delete the old toolrail folder so two copies do not load. After a git deploy, activate EditRail again once in the Plugins screen. Pinned tools and saved sets are kept.
 
 == Changelog ==
+
+= 1.0.2 =
+* Escape returns the toolbar to Select from anywhere in the editor, not only from inside the canvas, and the change is announced. A second press on an armed tool also disarms it.
+* Toolbar settings: Pinned tools and the Add a block or pattern search now come first. From the search field, Tab now reaches the Toolbar position, Tool names and Appearance groups before it leaves the dialog. A click into the canvas closes the dialog, the help panel and the flyouts, the same as a click anywhere else outside them.
+* Pin, Unpin, Move up, Move down, Save set and Delete announce their outcome to screen readers. Enter in the set name field saves the set.
+* An armed click on the post title inserts at the top of the document. An armed click inside an empty Group inserts inside it.
+* A tool's tooltip is its name, or its name and your description. Screen readers no longer hear a how-to sentence on every tool; the help panel explains inserting.
+* Section overview: Tab stays inside the overview while it is open, instead of leaving the page.
 
 = 1.0.1 =
 * Renamed the plugin to EditRail. The slug and the text domain are now `editrail`. The stored preferences, the JavaScript API and the PHP filter keep their names, so pinned tools, saved sets and extensions are not affected.

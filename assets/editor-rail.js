@@ -1128,7 +1128,9 @@
     {
       id: 'overview',
       label: __('Section overview', 'editrail'),
-      hint: __('zoom the canvas out and reorder sections; Enter a section to reorder the blocks inside it', 'editrail'),
+      // No how-to hint: a screen reader reads `title` as the description,
+      // so the hint was heard on every stop (SR-1, QA 2026-09-11). The
+      // help panel carries the how-to.
       icon: ICONS.overview,
       // A toggle, not an arming tool: reordering is an ordinary editing
       // action, so the deactivation promise is untouched (roadmap R6).
@@ -2472,9 +2474,7 @@ var DASHICON_NAMES = [
             patternTitle
           ),
           shortLabel: patternTitle,
-          hint: patternMeta && patternMeta.description
-            ? patternMeta.description
-            : __('click in the canvas to insert this pattern; manage pinned tools in Toolbar settings', 'editrail'),
+          hint: patternMeta && patternMeta.description ? patternMeta.description : '',
           description: patternMeta && patternMeta.description ? patternMeta.description : '',
           icon: ICONS.pattern,
           customIcon: patternMeta && patternMeta.icon ? patternMeta.icon : '',
@@ -2504,12 +2504,12 @@ var DASHICON_NAMES = [
         // the accessible name (which keeps it) still contains the
         // visible text, so WCAG 2.5.3 Label in Name holds.
         shortLabel: blockTitle,
-        hint: blockMeta && blockMeta.description
-          ? blockMeta.description
-          : __('click in the canvas to insert; manage pinned tools in Toolbar settings', 'editrail'),
-        // An author-written description is set as the button's
-        // aria-description (buildToolButton); the hint above only rides
-        // the tooltip.
+        // The tooltip carries the author's description or nothing. It
+        // used to carry a generic how-to ("click in the canvas to
+        // insert…"), and a screen reader reads `title` as the description,
+        // so every pinned tool announced that sentence (SR-1, QA
+        // 2026-09-11). The help panel is where the how-to lives.
+        hint: blockMeta && blockMeta.description ? blockMeta.description : '',
         description: blockMeta && blockMeta.description ? blockMeta.description : '',
         icon: '',
         customIcon: blockMeta && blockMeta.icon ? blockMeta.icon : '',
@@ -2830,13 +2830,18 @@ var DASHICON_NAMES = [
    * (append) fall out of the same count.
    *
    * Empty canvas below everything, or a click that reaches no list at
-   * all, still appends at the end of the document.
+   * all, still appends at the end of the document — except a click ABOVE
+   * the root list (the post title), which is the top. A click on an
+   * EMPTY container that accepts the block goes inside it.
    *
-   * @param {MouseEvent} e   The canvas click.
-   * @param {Object}     sel The core/block-editor selectors.
+   * @param {MouseEvent} e          The canvas click.
+   * @param {Object}     sel        The core/block-editor selectors.
+   * @param {string[]}   blockNames The top-level block names the tool
+   *                                inserts; decides whether an empty
+   *                                container under the pointer takes them.
    * @return {{rootClientId: string, index: number}}
    */
-  function resolveInsertionPoint(e, sel) {
+  function resolveInsertionPoint(e, sel, blockNames) {
     var target = e.target && e.target.closest ? e.target : null;
     var blockEl = target ? target.closest('[data-block]') : null;
     var listEl = target ? target.closest('.block-editor-block-list__layout') : null;
@@ -2876,6 +2881,19 @@ var DASHICON_NAMES = [
 
     if (blockEl) {
       var clientId = blockEl.getAttribute('data-block');
+      // An EMPTY container (a Group showing its layout placeholder) has
+      // no inner list to hit, so the before/after rule below could only
+      // put the block BESIDE it. When the container accepts the block,
+      // a click inside it means "inside" (QA 2026-09-11, C6; owner
+      // decision the same day). canInsertBlockType is the discriminator:
+      // it is false for a paragraph, an image or an empty Cover, true
+      // for an empty Group (measured on WP 7.1).
+      if (blockNames && blockNames.length
+        && typeof sel.canInsertBlockType === 'function'
+        && sel.getBlockCount(clientId) === 0
+        && blockNames.every(function (name) { return sel.canInsertBlockType(name, clientId); })) {
+        return { rootClientId: clientId, index: 0 };
+      }
       var index = sel.getBlockIndex(clientId);
       var rect = blockEl.getBoundingClientRect();
       if (e.clientY > rect.top + rect.height / 2) {
@@ -2884,6 +2902,14 @@ var DASHICON_NAMES = [
       return { rootClientId: sel.getBlockRootClientId(clientId) || '', index: index };
     }
 
+    // Nothing under the pointer: the empty space BELOW the content, or
+    // ABOVE it — the post title. Above the root list is the top of the
+    // document (QA 2026-09-11, C5; owner decision the same day): a click
+    // on the title used to land the block at the bottom and scroll there.
+    var rootList = target ? target.ownerDocument.querySelector('.is-root-container') : null;
+    if (rootList && e.clientY < rootList.getBoundingClientRect().top) {
+      return { rootClientId: '', index: 0 };
+    }
     return { rootClientId: '', index: sel.getBlockCount('') };
   }
 
@@ -3044,7 +3070,8 @@ var DASHICON_NAMES = [
 
     var sel = wp.data.select('core/block-editor');
     var dispatch = wp.data.dispatch('core/block-editor');
-    var point = climbToAllowedParent(sel, blocks.map(function (b) { return b.name; }), resolveInsertionPoint(e, sel));
+    var blockNames = blocks.map(function (b) { return b.name; });
+    var point = climbToAllowedParent(sel, blockNames, resolveInsertionPoint(e, sel, blockNames));
 
     // preGestureIds is captured at POINTERDOWN, not here. Core has
     // already appended its default block by the time this click handler
@@ -3174,9 +3201,73 @@ var DASHICON_NAMES = [
    * @param {KeyboardEvent} e The canvas keydown.
    * @return {void}
    */
+  /**
+   * Escape returns the rail to Select from ANYWHERE: the canvas, the rail
+   * itself, the block toolbar, the sidebar. Until 1.0.2 only the canvas
+   * document had a handler, so the keyboard author who had just armed a
+   * tool with Enter — focus on the rail — had no Escape at all, while the
+   * help panel promised "at any time" (QA 2026-09-11, C1). Surfaces that
+   * own Escape themselves keep it: a flyout, the settings/help/add
+   * dialogs and the overview each close one level per press, and their
+   * handlers run on the same document keydown.
+   *
+   * @param {KeyboardEvent} e A keydown from the canvas or the top document.
+   * @return {boolean} Whether a tool was disarmed.
+   */
+  function disarmOnEscape(e) {
+    if (e.key !== 'Escape' || activeTool === 'select') {
+      return false;
+    }
+    if (openFlyout || settingsOpen || helpOpen || addDialogOpen || overviewOpen) {
+      return false;
+    }
+    setActiveTool('select');
+    speak(__('Tool disarmed. Select is active.', 'editrail'));
+    return true;
+  }
+
   function handleCanvasKeydown(e) {
-    if (e.key === 'Escape' && activeTool !== 'select') {
-      setActiveTool('select');
+    disarmOnEscape(e);
+  }
+
+  /**
+   * A press inside the canvas is an "outside click" for every popover the
+   * rail owns. The dialogs' own mousedown listeners sit on the top
+   * document, which never sees an event from inside the editor iframe, so
+   * a click into a paragraph left Toolbar settings parked open with the
+   * gear still saying aria-expanded="true" (QA 2026-09-11, C3).
+   *
+   * Bound to POINTERDOWN, not mousedown: a real click on the canvas body
+   * fires pointerdown and click but no mousedown at all (measured on WP
+   * 7.1 — something in the canvas cancels the pointerdown, which by the
+   * Pointer Events spec suppresses the compatibility mouse events), so a
+   * mousedown listener here never ran.
+   *
+   * The target IS checked: canvasDoc() falls back to the top document
+   * when the editor has no iframe (the Code editor, for one), and then
+   * this listener sees every press in wp-admin — including one on a
+   * control inside the very surface it would close (review 2026-09-13,
+   * finding 1). Anything inside the rail's own region is not "outside".
+   *
+   * @param {PointerEvent} e The canvas (or, iframe-less, document) pointerdown.
+   * @return {void}
+   */
+  function handleCanvasPointerdownClose(e) {
+    var region = document.getElementById('toolrail-region');
+    if (e && e.target && region && region.contains(e.target)) {
+      return;
+    }
+    if (openFlyout) {
+      closeFlyout(false);
+    }
+    if (settingsOpen) {
+      closeSettings(false);
+    }
+    if (helpOpen) {
+      closeHelp(false);
+    }
+    if (addDialogOpen) {
+      closeAddDialog('');
     }
   }
 
@@ -3188,6 +3279,20 @@ var DASHICON_NAMES = [
    * editors.
    */
   var boundDoc = null;
+  var documentEscapeBound = false;
+
+  /**
+   * Remove the canvas handlers from a document bindCanvas() bound earlier.
+   *
+   * @param {Document} doc The previously bound document.
+   * @return {void}
+   */
+  function unbindCanvas(doc) {
+    doc.removeEventListener('pointerdown', handleCanvasPointerdown, true);
+    doc.removeEventListener('pointerdown', handleCanvasPointerdownClose, true);
+    doc.removeEventListener('click', handleCanvasClick, true);
+    doc.removeEventListener('keydown', handleCanvasKeydown, true);
+  }
 
   /**
    * The document the canvas actually lives in: the editor iframe's, or the
@@ -3222,10 +3327,30 @@ var DASHICON_NAMES = [
     if (!doc || doc === boundDoc) {
       return;
     }
+    // The canvas document changes identity (the iframe is replaced, or
+    // the editor goes iframe-less in the Code editor and back). Listeners
+    // bound to the OLD document are removed first, or the top document
+    // keeps a set of canvas handlers forever after one round trip through
+    // the Code editor (review 2026-09-13, finding 1).
+    if (boundDoc) {
+      unbindCanvas(boundDoc);
+    }
     boundDoc = doc;
     doc.addEventListener('pointerdown', handleCanvasPointerdown, true);
+    doc.addEventListener('pointerdown', handleCanvasPointerdownClose, true);
     doc.addEventListener('click', handleCanvasClick, true);
     doc.addEventListener('keydown', handleCanvasKeydown, true);
+    // The top document gets the same Escape once, in the CAPTURE phase
+    // so it runs before the surface handlers (settings, help, add dialog,
+    // flyout) that open later and clear their own flag on the same press:
+    // in the bubble phase it saw every flag already false and disarmed on
+    // the Escape that closed the help panel (review 2026-09-13, finding
+    // 4). Keydowns inside the iframe never bubble out, so the canvas
+    // handler and this one never double-handle.
+    if (!documentEscapeBound && doc !== document) {
+      documentEscapeBound = true;
+      document.addEventListener('keydown', disarmOnEscape, true);
+    }
 
     // Armed-cursor style lives INSIDE the canvas document.
     if (doc !== document && doc.head && !doc.getElementById('toolrail-canvas-style')) {
@@ -4752,12 +4877,13 @@ var DASHICON_NAMES = [
     note.textContent = __('Pinned tools appear on the toolbar as quick-insert tools: any block type, and any pattern. They are saved to your account on this site, for you only.', 'editrail');
     node.appendChild(note);
 
-    node.appendChild(buildPositionControl());
-    node.appendChild(settingsDivider());
-    node.appendChild(buildWideControl());
-    node.appendChild(settingsDivider());
-    node.appendChild(buildAppearanceControl());
-    node.appendChild(settingsDivider());
+    // Pinned tools + Add a block come FIRST, directly under the note that
+    // introduces them, and the position / tool names / appearance groups
+    // follow (QA 2026-09-11, C2; owner decision the same day). Focus
+    // opens in the search field, and the dialog closes when Tab leaves
+    // it, so whatever sits ABOVE the search is reachable only backwards:
+    // with the three groups first, six Tabs closed the dialog and 27 of
+    // its 34 controls were behind the caret.
 
     // --- Pinned blocks, THEN Add a block (one section, this order on
     // purpose: the list shows what is already on the toolbar, the
@@ -4812,8 +4938,17 @@ var DASHICON_NAMES = [
       // second choice — focus stays on the row the author is moving.
       var row = pinnedRowSelector(name);
 
+      // Move, Unpin and the search results below each set pinnedStatus:
+      // the row rebuild moves nothing a screen reader hears, and focus
+      // stays (or returns to the search), so without a message a blind
+      // author had no way to know the action took (QA 2026-09-11, C4).
       var up = settingsButton('↑', function () {
         if (moveSlot(name, -1)) {
+          pinnedStatus = sprintf(
+            /* translators: 1: tool title, 2: new position, 3: number of pinned tools. */
+            __('%1$s moved to position %2$d of %3$d.', 'editrail'),
+            label.textContent, i, slots.length
+          );
           refreshSettings([row + '.toolrail-settings-up', row + '.toolrail-settings-down']);
         }
       }, 'toolrail-settings-up');
@@ -4823,6 +4958,11 @@ var DASHICON_NAMES = [
 
       var down = settingsButton('↓', function () {
         if (moveSlot(name, 1)) {
+          pinnedStatus = sprintf(
+            /* translators: 1: tool title, 2: new position, 3: number of pinned tools. */
+            __('%1$s moved to position %2$d of %3$d.', 'editrail'),
+            label.textContent, i + 2, slots.length
+          );
           refreshSettings([row + '.toolrail-settings-down', row + '.toolrail-settings-up']);
         }
       }, 'toolrail-settings-down');
@@ -4857,6 +4997,11 @@ var DASHICON_NAMES = [
       // matches the wording of the block menu's own Unpin item.
       var remove = settingsButton(__('Unpin', 'editrail'), function () {
         unpinBlock(name);
+        pinnedStatus = sprintf(
+          /* translators: %s: tool title. */
+          __('%s unpinned from the toolbar.', 'editrail'),
+          label.textContent
+        );
         refreshSettings('#toolrail-settings-search');
       }, 'toolrail-settings-remove');
       remove.setAttribute('aria-label', sprintf(__('Unpin %s', 'editrail'), label.textContent));
@@ -4992,6 +5137,11 @@ var DASHICON_NAMES = [
       var resultButton = function (title, kindLabel, ariaLabel, onPin) {
         var btn = settingsButton(title, function () {
           onPin();
+          pinnedStatus = sprintf(
+            /* translators: %s: block or pattern title. */
+            __('%s pinned to the toolbar.', 'editrail'),
+            title
+          );
           refreshSettings('#toolrail-settings-search');
         }, 'toolrail-settings-result');
         btn.setAttribute('aria-label', ariaLabel);
@@ -5021,6 +5171,14 @@ var DASHICON_NAMES = [
     }
     search.addEventListener('input', renderResults);
     renderResults();
+
+    // --- Toolbar position, tool names, appearance ---
+    node.appendChild(settingsDivider());
+    node.appendChild(buildPositionControl());
+    node.appendChild(settingsDivider());
+    node.appendChild(buildWideControl());
+    node.appendChild(settingsDivider());
+    node.appendChild(buildAppearanceControl());
 
     // --- Saved sets ---
     node.appendChild(settingsDivider());
@@ -5056,13 +5214,30 @@ var DASHICON_NAMES = [
     nameInput.id = 'toolrail-settings-setname';
     nameInput.className = 'toolrail-settings-search';
     saveRow.appendChild(nameInput);
-    saveRow.appendChild(settingsButton(__('Save set', 'editrail'), function () {
-      if (saveConfig(nameInput.value)) {
-        refreshSettings('#toolrail-settings-setname');
+    // Save announces its outcome either way (QA 2026-09-11, C4/C7): an
+    // empty name used to re-focus the field and say nothing, which read
+    // as a dead button; Enter in the field now saves too, the way a
+    // one-field form is expected to.
+    var saveSet = function () {
+      var trimmed = nameInput.value.trim();
+      if (saveConfig(trimmed)) {
+        settingsStatus = sprintf(
+          /* translators: %s: set name. */
+          __('Saved the set "%s".', 'editrail'),
+          trimmed
+        );
       } else {
-        nameInput.focus();
+        settingsStatus = __('Type a name for the set.', 'editrail');
       }
-    }, 'toolrail-settings-saveset'));
+      refreshSettings('#toolrail-settings-setname');
+    };
+    nameInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        saveSet();
+      }
+    });
+    saveRow.appendChild(settingsButton(__('Save set', 'editrail'), saveSet, 'toolrail-settings-saveset'));
     node.appendChild(saveRow);
 
     var configs = loadConfigs();
@@ -5110,6 +5285,11 @@ var DASHICON_NAMES = [
         li.appendChild(exp);
         var del = settingsButton(__('Delete', 'editrail'), function () {
           deleteConfig(cfg);
+          settingsStatus = sprintf(
+            /* translators: %s: set name. */
+            __('Deleted the set "%s".', 'editrail'),
+            cfg
+          );
           refreshSettings('#toolrail-settings-setname');
         }, 'toolrail-settings-delset');
         del.setAttribute('aria-label', sprintf(__('Delete the set %s', 'editrail'), cfg));
@@ -7012,6 +7192,10 @@ var DASHICON_NAMES = [
       closeOverview(true);
     });
     bar.appendChild(close);
+    // The bar stays FIRST in DOM order, where it is drawn: Tab order and
+    // the visual order agree, and Shift+Tab from the first section
+    // reaches Done. Keeping focus inside the overlay is the keydown
+    // handler's job (SR-3, QA 2026-09-11; review 2026-09-13, finding 3).
     overlay.appendChild(bar);
 
     // --- Outline boxes, one per block, DOM order = document order.
@@ -7929,6 +8113,33 @@ var DASHICON_NAMES = [
       return;
     }
     var inOverlay = overlay.contains(document.activeElement);
+
+    // Tab stays inside the overlay while it is open (SR-3, QA
+    // 2026-09-11): the sections were the last focusable things in the
+    // document, so one Tab too many left the page for the browser's own
+    // toolbar with the overview still covering the canvas. The overlay
+    // already owns the canvas for its lifetime; owning Tab is the same
+    // promise. Last → first and first → last, over the visible controls
+    // (a picked box's arrows count once they are shown).
+    if (e.key === 'Tab' && inOverlay) {
+      var stops = Array.prototype.filter.call(
+        overlay.querySelectorAll('button, [tabindex="0"]'),
+        function (el) { return !el.disabled && el.offsetParent !== null; }
+      );
+      if (!stops.length) {
+        return;
+      }
+      var first = stops[0];
+      var last = stops[stops.length - 1];
+      if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      } else if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      }
+      return;
+    }
 
     if (e.key === 'Escape') {
       if (!inOverlay && !overviewDrag && !overviewMarquee) {
@@ -9072,10 +9283,12 @@ var DASHICON_NAMES = [
   }
 
   /**
-   * Build one tool button. The accessible NAME is the label alone — the
-   * how-to hint rides the pointer tooltip only, because baking hints into
-   * aria-label made screen-reader users hear the same wall of instruction
-   * a dozen times down the rail. An arming tool is also draggable into the
+   * Build one tool button. The accessible NAME is the label alone, and
+   * the tooltip carries only an author-written description (or the
+   * "not available" reason while dimmed): a generic how-to in either
+   * place is read on every stop down the rail — in aria-label as the
+   * name, in `title` as the description (SR-1, QA 2026-09-11). The help
+   * panel holds the how-to. An arming tool is also draggable into the
    * canvas, carrying the payload core's own inserter sends so core's drop
    * zone owns the rest; the keyboard path stays arm-then-click.
    *
@@ -9185,6 +9398,15 @@ var DASHICON_NAMES = [
           warn('tool "' + tool.id + '" onActivate threw: ' + e.message);
         }
         syncPressed(true);
+        return;
+      }
+      // A second press on the ARMED tool disarms it — a pressed button
+      // that stays pressed when pressed again reads as stuck, and it was
+      // the keyboard author's only way back besides Select (QA
+      // 2026-09-11, C8; owner decision the same day).
+      if (!tool.select && activeTool === tool.id) {
+        setActiveTool('select');
+        speak(__('Tool disarmed. Select is active.', 'editrail'));
         return;
       }
       setActiveTool(tool.select ? 'select' : tool.id);

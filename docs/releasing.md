@@ -63,6 +63,30 @@ npx wp-env stop
 
 Without those variables the suite targets `http://mnc4.local` with `admin` / `pass`, the local development site.
 
+## Run the screen-reader journeys locally
+
+`npm run test:sr` runs the NVDA journeys in `tests/e2e-sr/`. They are not part of CI. They run on Windows only, in a headed Firefox with a portable NVDA attached, and they take the keyboard while they run.
+
+Install the screen-reader tooling once on the machine:
+
+```
+npx @guidepup/setup setup
+npx @guidepup/setup install nvda
+npx playwright install firefox
+```
+
+This suite reads its variables from a `.env` file at the repository root, not from the command line. `playwright.nvda.config.js` and `tests/e2e-sr/global-setup.js` load it with `dotenv`.
+
+| Variable | What it sets |
+|---|---|
+| `WP_BASE_URL` | The site the journeys run against. It defaults to `http://mnc4.local`. |
+| `WP_USERNAME` | The account `global-setup.js` logs in with. It has no default: the run stops without it. |
+| `WP_PASSWORD` | The password for that account. It has no default: the run stops without it. |
+
+Copy `.env.example` to `.env` and fill it in. `.env` holds a password: it is in `.gitignore` and in `.distignore`, so it stays out of git and out of the zip. A `WP_BASE_URL` that is not a local host must use HTTPS, because the login posts the password.
+
+The journeys write to the account they log in with, the same as the e2e suite. Each one creates a post and deletes it again. If the cleanup fails, the run prints a warning and adds a `cleanup` annotation to that test.
+
 ## The Playground blueprint
 
 `.wordpress-org/blueprints/blueprint.json` is the WordPress.org Live Preview: it installs Twenty Twenty-Five, Typography Stylist and this plugin by slug, seeds the admin's editor preferences (no welcome guide; the default tools plus the Typography Stylist block pinned, with a custom name), publishes a demo post, logs in, and opens that post in the editor. It is generated. Do not edit it by hand.

@@ -163,6 +163,7 @@ Separate plugins by the same author use this contract and nothing else: rulers a
 | --- | --- |
 | `npm run test:php` | Runs the PHPUnit suite in `tests/phpunit/`. It needs no WordPress install. The bootstrap stubs the few WordPress functions the PHP uses. |
 | `npm run test:e2e` | Runs the Playwright suite in `tests/e2e/` against a WordPress site. |
+| `npm run test:sr` | Runs the NVDA screen-reader journeys in `tests/e2e-sr/` against a WordPress site. Windows only. It drives a headed Firefox with Guidepup's portable NVDA, and it takes the keyboard for several minutes. Do not type while it runs. |
 | `npm run check-versions` | Checks that all six version numbers agree. |
 | `npm run package` | Runs the version check, then builds `editrail.zip`. |
 
@@ -173,6 +174,16 @@ npx wp-env start
 TOOLRAIL_URL=http://localhost:8888 TOOLRAIL_ADMIN_PASS=password npm run test:e2e
 npx wp-env stop
 ```
+
+The screen-reader journeys need more setup. Do these three steps once on the machine:
+
+```
+npx @guidepup/setup setup
+npx @guidepup/setup install nvda
+npx playwright install firefox
+```
+
+Then copy `.env.example` to `.env` and put the site URL and the login in it. `docs/releasing.md` lists the variables.
 
 `docs/releasing.md` describes the CI workflows and the release procedure.
 
