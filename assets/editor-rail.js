@@ -7,7 +7,7 @@
  * produces ordinary core blocks — deactivating this plugin changes nothing
  * about how authored content renders or edits.
  *
- * MOUNT STRATEGY (proven in the Background Candy Phase 0 spike): the rail is
+ * MOUNT STRATEGY (proven in an early prototype): the rail is
  * inserted into the editor's own skeleton so it participates in the editor's
  * flex layout rather than overlapping the canvas; a debounced
  * MutationObserver re-mounts it across React re-renders (it survives the

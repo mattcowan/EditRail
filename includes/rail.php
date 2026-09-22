@@ -17,9 +17,9 @@
 defined('ABSPATH') || exit;
 
 /**
- * filemtime()-based cache-buster (the Background Candy lesson: a constant
- * version ships stale assets), falling back to the plugin version when the
- * file is missing.
+ * filemtime()-based cache-buster (a constant version ships stale assets
+ * to browsers that cached the last build), falling back to the plugin
+ * version when the file is missing.
  *
  * @param string $relative Path relative to the plugin root.
  * @return string|int

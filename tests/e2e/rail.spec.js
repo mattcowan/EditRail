@@ -1188,9 +1188,9 @@ test.describe('extension hooks', () => {
   /**
    * Apart from the rail's own actions (a press, a rebuild), the only
    * repaint trigger is the wp.data subscription in start(), so a tool
-   * whose isActive() reads something the editor's stores never see (a pick mode canceled with Escape, a sidebar
-   * section held in React state) stayed pressed until an unrelated
-   * keystroke ticked a store. That is the mechanism behind E1 and half
+   * whose isActive() reads something the editor's stores never see (a
+   * pick mode canceled with Escape, a sidebar section held in React
+   * state) stayed pressed until an unrelated keystroke ticked a store. That is the mechanism behind E1 and half
    * of E2 in the 2026-09-11 QA report, and no extension could fix it:
    * the rail owned its own repaint schedule and exposed no way in.
    *
@@ -2898,10 +2898,9 @@ test.describe('section overview (R6)', () => {
    * below it — pick P-B, then Shift+click P-A: the clicked box becomes
    * active, and a marquee makes the topmost member active too — that
    * later member painted over the whole active box, strip included.
-   * When the strip
-   * stays inside (a wide box, a partial overlap) the lower half of the
-   * arrows then sat under that member's pick button, and a click picked
-   * it and collapsed the group.
+   * When the strip stays inside (a wide box, a partial overlap) the
+   * lower half of the arrows then sat under that member's pick button,
+   * and a click picked it and collapsed the group.
    *
    * Tight margins force the overlap on any theme, and the preconditions
    * are asserted so the test cannot pass on a layout with no overlap.
@@ -2931,11 +2930,23 @@ test.describe('section overview (R6)', () => {
       const overlaps = s.bottom > n.top && s.top < n.bottom && s.right > n.left && s.left < n.right;
       // Every enabled strip button must be the element at its own
       // center AND just above its bottom edge — the part that overlaps.
+      // The box-to-box overlap above is not enough on its own: on a
+      // theme with taller paragraphs only the strip's bottom padding
+      // reaches the next box, and then no sampled point lands on it and
+      // the test would pass with the fix reverted. So count the points
+      // that fall inside the next box, and the buttons checked.
       const buried = [];
+      let checked = 0;
+      let pointsInNext = 0;
       strip.querySelectorAll('button:not([disabled])').forEach((btn) => {
+        checked += 1;
         const r = btn.getBoundingClientRect();
         [r.top + r.height / 2, r.bottom - 2].forEach((y) => {
-          const hit = document.elementFromPoint(r.left + r.width / 2, y);
+          const x = r.left + r.width / 2;
+          if (x > n.left && x < n.right && y > n.top && y < n.bottom) {
+            pointsInNext += 1;
+          }
+          const hit = document.elementFromPoint(x, y);
           if (!hit || !(hit === btn || btn.contains(hit))) {
             buried.push(btn.dataset.ovAction + '@' + Math.round(y) + ' -> ' + (hit ? hit.className : 'null'));
           }
@@ -2946,6 +2957,8 @@ test.describe('section overview (R6)', () => {
         activeBox: strip.closest('.toolrail-ov-box').dataset.clientid,
         belowIsSelected: next.classList.contains('is-selected'),
         overlaps,
+        checked,
+        pointsInNext,
         buried,
       };
     }, ids[1]);
@@ -2955,6 +2968,8 @@ test.describe('section overview (R6)', () => {
     expect(probe.activeBox).toBe(ids[0]);
     expect(probe.belowIsSelected).toBe(true);
     expect(probe.overlaps).toBe(true);
+    expect(probe.checked).toBeGreaterThan(0);
+    expect(probe.pointsInNext).toBeGreaterThan(0);
     // The claim.
     expect(probe.buried).toEqual([]);
   });
