@@ -10,7 +10,9 @@
  * strings, so a rename that breaks the suite breaks this too.
  *
  * Environment:
- *   TOOLRAIL_URL           site root      (default http://typographystylist.local)
+ *   TOOLRAIL_URL           site root      (default http://example.local — a
+ *                          placeholder, so the script names no real site;
+ *                          set this to your own WordPress install)
  *   TOOLRAIL_ADMIN_USER    admin login    (default admin)
  *   TOOLRAIL_ADMIN_PASS    admin password (default pass)
  *   TOOLRAIL_FIXTURE_POST  post ID of a long draft used for the Section
@@ -64,7 +66,7 @@ const fs = require('fs');
 const path = require('path');
 const { chromium } = require('@playwright/test');
 
-const BASE = (process.env.TOOLRAIL_URL || 'http://typographystylist.local').replace(/\/+$/, '');
+const BASE = (process.env.TOOLRAIL_URL || 'http://example.local').replace(/\/+$/, '');
 const USER = process.env.TOOLRAIL_ADMIN_USER || 'admin';
 const PASS = process.env.TOOLRAIL_ADMIN_PASS || 'pass';
 const FIXTURE_POST = process.env.TOOLRAIL_FIXTURE_POST || '';

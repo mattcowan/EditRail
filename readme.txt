@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.0.2
+Stable tag: 1.0.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -63,6 +63,9 @@ Its own preferences, and nothing else. The plugin stores no options and writes n
 The plugin folder is now editrail. After a zip upgrade, delete the old toolrail folder so two copies do not load. After a git deploy, activate EditRail again once in the Plugins screen. Pinned tools and saved sets are kept.
 
 == Changelog ==
+
+= 1.0.3 =
+* Section overview: when a section's box is too narrow to hold the reorder controls, the controls now sit beside the box instead of over the next section. On a theme that sizes a short paragraph to its text, the controls covered the next section and you could not click it.
 
 = 1.0.2 =
 * Escape returns the toolbar to Select from anywhere in the editor, not only from inside the canvas, and the change is announced. A second press on an armed tool also disarms it.

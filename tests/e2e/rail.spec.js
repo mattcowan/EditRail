@@ -1185,6 +1185,56 @@ test.describe('registration API', () => {
  * admin account then carries — harmless, and the key is the test's own.
  */
 test.describe('extension hooks', () => {
+  /**
+   * The paint is scheduled from ONE place — the wp.data subscription in
+   * start() — so a tool whose isActive() reads something the editor's
+   * stores never see (a pick mode canceled with Escape, a sidebar
+   * section held in React state) stayed pressed until an unrelated
+   * keystroke ticked a store. That is the mechanism behind E1 and half
+   * of E2 in the 2026-09-11 QA report, and no extension could fix it:
+   * the rail owned its own repaint schedule and exposed no way in.
+   *
+   * The whole flip is read INSIDE one evaluate so no store tick can
+   * interleave and repaint the button for us — otherwise the test
+   * could pass without refresh() doing anything.
+   */
+  test('refresh() repaints pressed state that no store change would reach (QA 2026-09-11, E1/E2)', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.evaluate(() => {
+      window.e2eToolActive = false;
+      window.toolrail.registerTool({
+        id: 'e2e-refresh',
+        label: 'E2E refresh probe',
+        onActivate: () => {},
+        isActive: () => !!window.e2eToolActive,
+      });
+    });
+
+    const btn = page.locator('#toolrail-rail [data-tool="e2e-refresh"]');
+    await expect(btn).toHaveAttribute('aria-pressed', 'false');
+
+    const flip = await page.evaluate(() => {
+      const el = document.querySelector('#toolrail-rail [data-tool="e2e-refresh"]');
+      window.e2eToolActive = true;
+      const stale = el.getAttribute('aria-pressed');
+      window.toolrail.refresh();
+      return { stale, painted: el.getAttribute('aria-pressed') };
+    });
+    // stale: the state moved and nothing repainted — the defect.
+    // painted: refresh() closed the gap, in the same synchronous turn.
+    expect(flip).toEqual({ stale: 'false', painted: 'true' });
+
+    // And back the other way, so this is a repaint and not a one-way latch.
+    const unflip = await page.evaluate(() => {
+      const el = document.querySelector('#toolrail-rail [data-tool="e2e-refresh"]');
+      window.e2eToolActive = false;
+      window.toolrail.refresh();
+      return el.getAttribute('aria-pressed');
+    });
+    expect(unflip).toBe('false');
+  });
+
   test('prefs accepts only toolrail-ext: keys and string values', async ({ page }) => {
     await openNewPost(page);
 
@@ -2771,6 +2821,74 @@ test.describe('section overview (R6)', () => {
     await expect(page.locator('#toolrail-overview .toolrail-ov-controls:not([hidden])')).toHaveCount(1);
     await overviewBoxButton(page, ids[1], 'down').click();
     await expect.poll(async () => overviewContents(page)).toEqual(['P-B', 'P-C', 'P-A', 'P-D', 'P-E', 'P-F']);
+  });
+
+  /**
+   * The picked box's reorder strip is about 213x58px and lives inside
+   * the box. When the boxes are NARROW — a theme that sizes a one-line
+   * paragraph to its content — the strip spills out of its own box and
+   * over the next one, swallowing that box's pick button: the four
+   * multi-select specs above then time out on an intercepted
+   * Shift+click. That is what happened on mnc4.local (QA 2026-09-18).
+   *
+   * The width is forced here rather than left to the theme, so the
+   * spec pins the geometry rule on any site. The second half is the
+   * CONTROL: with wide boxes the strip must stay exactly where it
+   * always was, or this fix would have moved every strip on every
+   * ordinary document.
+   */
+  test('the reorder strip moves aside when it would cover the next box, and stays inside when it would not (QA 2026-09-18)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+
+    const forceWidth = (css) => canvas(page).locator('body').evaluate((body, rule) => {
+      const doc = body.ownerDocument;
+      let style = doc.getElementById('e2e-box-width');
+      if (!style) {
+        style = doc.createElement('style');
+        style.id = 'e2e-box-width';
+        doc.head.appendChild(style);
+      }
+      style.textContent = '.is-root-container > [data-block] {' + rule + '}';
+    }, css);
+
+    // --- Narrow: the strip cannot fit inside its own box. ---
+    await forceWidth('width: 90px !important; max-width: 90px !important;');
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    await overviewBoxButton(page, ids[0], 'pick').click();
+
+    const strip = page.locator('#toolrail-overview .toolrail-ov-controls:not([hidden])');
+    await expect(strip).toHaveCount(1);
+    expect(await strip.getAttribute('data-placement')).not.toBe('inside');
+
+    // What the failing specs actually needed: the NEXT box's pick
+    // button is the element at its own centre, so a click reaches it.
+    const atCentre = await page.evaluate((id) => {
+      const btn = document.querySelector(
+        '#toolrail-overview .toolrail-ov-box[data-clientid="' + id + '"] [data-ov-action="pick"]'
+      );
+      const r = btn.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return hit === btn;
+    }, ids[1]);
+    expect(atCentre).toBe(true);
+
+    // And the gesture that used to time out completes.
+    await overviewBoxButton(page, ids[1], 'pick').click({ modifiers: ['Shift'], timeout: 5000 });
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+
+    // --- Control: wide boxes keep the strip where it has always been. ---
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#toolrail-overview')).toHaveCount(0);
+    await forceWidth('min-width: 620px !important;');
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await overviewBoxButton(page, ids[0], 'pick').click();
+    const wideStrip = page.locator('#toolrail-overview .toolrail-ov-controls:not([hidden])');
+    await expect(wideStrip).toHaveCount(1);
+    expect(await wideStrip.getAttribute('data-placement')).toBe('inside');
   });
 
   test('a group selection marks every member with a shape, not a colour shift (issue #21)', async ({ page }) => {

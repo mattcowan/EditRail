@@ -121,6 +121,7 @@ A tool gives one of three actions. `insertBlock` names a block type to insert at
 | `toolrail:position-changed` window event | Fires when the toolbar docks or floats. |
 | `window.toolrail.getDock()` | The current dock. |
 | `window.toolrail.getCanvasGeometry()` | Where the canvas is on screen: `{ frameRect, scale, pan, scrollX, scrollY, mode }`. Use it to draw an overlay in the parent document that lines up with the canvas. |
+| `window.toolrail.refresh()` | Repaints the pressed state of every tool. Call it when your `isActive()` result changes for a reason the editor's data stores do not see, such as a pick mode you cancel yourself or a sidebar section held in React state. The toolbar repaints itself on every store change, so you do not need this for state that lives in a store. It is cheap to call more often than necessary. |
 
 ### 4. Store per-user state
 

@@ -83,6 +83,13 @@
  *     mode: { frameRect, scale, pan, scrollX, scrollY, mode }. A canvas
  *     document point maps to the parent viewport as
  *     frameRect.left + (x - scrollX) * scale (and the same for y).
+ *   window.toolrail.refresh()
+ *     Repaint the pressed state of every tool NOW. The paint is otherwise
+ *     scheduled from one place only — the wp.data subscription in start()
+ *     — so a tool whose isActive() changes for a reason no store sees (a
+ *     pick mode canceled with Escape, a sidebar section held in React
+ *     state) stayed pressed until an unrelated keystroke ticked a store.
+ *     Cheap to over-call: the signature guard bails when nothing moved.
  */
 (function (wp) {
   'use strict';
@@ -6325,6 +6332,8 @@ var DASHICON_NAMES = [
    * order. Boxes ARE the blocks now (v2) — no overlap-avoid needed,
    * because blocks don't overlap. A short block keeps a 24px hit floor;
    * a block with no DOM element yet simply hides until the next pass.
+   * The one thing that CAN overlap a neighbor is the picked box's
+   * reorder strip, so it is seated last (placeOverviewControls).
    */
   function positionOverviewBoxes() {
     var overlay = overviewNode();
@@ -6346,6 +6355,130 @@ var DASHICON_NAMES = [
       box.style.height = Math.max(rect.height, 24) + 'px';
     });
     positionOverviewVeil(oRect);
+    placeOverviewControls(oRect);
+  }
+
+  /**
+   * Put the visible reorder strip where it obstructs no other box.
+   *
+   * The strip is a child of the picked box and by default sits inside
+   * its top-left corner, which is right for a box the strip fits in. A
+   * short NARROW box is another matter — a theme that sizes a one-line
+   * paragraph to its content, a button, a small image: the strip is
+   * about 213×58px, so it spills down over the next box in the column
+   * and swallows that box's pick button. A Shift+click on the neighbor
+   * then lands on the strip (the four overview multi-select specs
+   * failed this way on mnc4.local once the theme's sticky-footer body
+   * rule reached the canvas and shrank short paragraphs to fit-content;
+   * traced 2026-09-18).
+   *
+   * Candidates, in order: inside (the CSS default), to the right, to
+   * the left, above. The first that fits inside the overlay, stays
+   * clear of the bar and obstructs no other box wins. "Obstructs" means
+   * covering a box's center or more than half its area — a strip that
+   * merely clips the top few pixels of a tall neighbor stays inside,
+   * where it always was, so an ordinary document looks unchanged. When
+   * every candidate obstructs something, the one covering the least
+   * area wins. The result rides on data-placement for the specs.
+   *
+   * @param {DOMRect} oRect The overlay's viewport rect, already measured.
+   * @return {void}
+   */
+  function placeOverviewControls(oRect) {
+    var overlay = overviewNode();
+    if (!overlay) {
+      return;
+    }
+    var controls = overlay.querySelector('.toolrail-ov-controls:not([hidden])');
+    var box = controls && controls.closest ? controls.closest('.toolrail-ov-box') : null;
+    if (!controls || !box || box.style.display === 'none') {
+      return;
+    }
+    var rel = function (el) {
+      var r = el.getBoundingClientRect();
+      return { left: r.left - oRect.left, top: r.top - oRect.top, width: r.width, height: r.height };
+    };
+    // Measure the strip at its natural place (the CSS default, inside
+    // the box's border), not wherever the last pass left it. The
+    // measured rect, not the stylesheet's 4px, is the inside
+    // candidate: the box's border shifts the strip too, and 2px was
+    // the difference between clearing a neighbor's center and sitting
+    // on it.
+    controls.style.left = '';
+    controls.style.top = '';
+    var own = rel(box);
+    var natural = rel(controls);
+    var w = natural.width;
+    var h = natural.height;
+    if (!w || !h) {
+      return;
+    }
+    // Inline left/top are measured from the box's padding edge.
+    var origin = { left: own.left + box.clientLeft, top: own.top + box.clientTop };
+    var others = Array.prototype.slice.call(overlay.querySelectorAll('.toolrail-ov-box'))
+      .filter(function (b) {
+        return b !== box && b.style.display !== 'none';
+      })
+      .map(rel);
+    var bar = overlay.querySelector('.toolrail-ov-bar');
+    var barRect = bar ? rel(bar) : null;
+    var GAP = 8;
+    var candidates = [
+      { name: 'inside', left: natural.left, top: natural.top },
+      { name: 'right', left: own.left + own.width + GAP, top: own.top },
+      { name: 'left', left: own.left - GAP - w, top: own.top },
+      { name: 'above', left: natural.left, top: own.top - GAP - h }
+    ];
+    var overlap = function (a, b) {
+      var x = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left);
+      var y = Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top);
+      return x > 0 && y > 0 ? x * y : 0;
+    };
+    var coversCenter = function (a, b) {
+      var cx = b.left + b.width / 2;
+      var cy = b.top + b.height / 2;
+      return cx >= a.left && cx <= a.left + a.width && cy >= a.top && cy <= a.top + a.height;
+    };
+    var chosen = null;
+    var least = null;
+    var leastArea = Infinity;
+    candidates.some(function (c) {
+      var strip = { left: c.left, top: c.top, width: w, height: h };
+      // Inside is the status quo and always allowed; the others must
+      // fit in the overlay and stay out from under the bar.
+      if (c.name !== 'inside') {
+        if (strip.left < 0 || strip.top < 0 || strip.left + w > oRect.width || strip.top + h > oRect.height) {
+          return false;
+        }
+        if (barRect && overlap(strip, barRect) > 0) {
+          return false;
+        }
+      }
+      var area = 0;
+      var obstructs = false;
+      others.forEach(function (o) {
+        var a = overlap(strip, o);
+        area += a;
+        if (a > 0 && (coversCenter(strip, o) || a > (o.width * o.height) / 2)) {
+          obstructs = true;
+        }
+      });
+      if (!obstructs) {
+        chosen = c;
+        return true;
+      }
+      if (area < leastArea) {
+        leastArea = area;
+        least = c;
+      }
+      return false;
+    });
+    var use = chosen || least;
+    controls.dataset.placement = use.name;
+    if (use.name !== 'inside') {
+      controls.style.left = (use.left - origin.left) + 'px';
+      controls.style.top = (use.top - origin.top) + 'px';
+    }
   }
 
   /** Punch the veil's hole at the drilled root's rect: four strips
@@ -6452,6 +6585,9 @@ var DASHICON_NAMES = [
         controls.hidden = !isActive;
       }
     });
+    // The strip just shown may belong to a different box than before —
+    // seat it before the author's next click.
+    placeOverviewControls(overlay.getBoundingClientRect());
   }
 
   /** Open a box's reorder controls and move focus to the first usable
@@ -10784,6 +10920,26 @@ var DASHICON_NAMES = [
     getConfigs: loadConfigs,
     exportConfig: exportConfig,
     importConfig: importConfigPayload,
+    /**
+     * Repaint pressed state, availability and tooltips now.
+     *
+     * syncPressed() is scheduled from ONE place — the wp.data
+     * subscription in start(). That covers every tool whose isActive()
+     * reads the editor's stores, and misses every tool whose active
+     * state changes for a reason no store sees: a pick mode canceled
+     * with Escape, a sidebar section switched in React state, a modal
+     * that closed. Those tools stayed pressed until some unrelated
+     * keystroke ticked a store (QA 2026-09-11, E1 and E2; the theme
+     * documents the same gap in its own areaIsActive docblock).
+     *
+     * Call this straight after the state your isActive() reads has
+     * changed. It is cheap to over-call: pressedSignature() is built
+     * first and the paint bails when nothing moved, which is the same
+     * guard the store subscription leans on every keystroke.
+     *
+     * @return {void}
+     */
+    refresh: function () { syncPressed(); },
     getActiveTool: function () { return activeTool; },
     setActiveTool: setActiveTool,
     getMode: railMode,

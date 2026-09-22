@@ -2,6 +2,10 @@
 
 Every version of EditRail (Editor Tool Rail before 1.0.1). The 0.1.x versions were development builds that were never listed on WordPress.org. The WordPress.org listing (`readme.txt`) shows only listed versions.
 
+## 1.0.3
+
+* Section overview: the picked section's reorder controls are seated where they obstruct no other section's box. The strip is about 213x58px and sat inside the box's top-left corner, so on a layout with narrow boxes — a theme whose canvas sizes a one-line paragraph to its content — it spilled over the next box and swallowed that box's pick button. It now tries inside, right, left and above, and takes the first spot that covers no other box's centre (falling back to the least-covering spot). Wide boxes are unchanged.
+
 ## 1.0.2
 
 Fixes from the 2026-09-11 QA sweep (Playwright and NVDA; `private/qa-2026-09-11-editrail.md`).
