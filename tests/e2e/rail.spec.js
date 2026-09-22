@@ -1186,9 +1186,9 @@ test.describe('registration API', () => {
  */
 test.describe('extension hooks', () => {
   /**
-   * The paint is scheduled from ONE place — the wp.data subscription in
-   * start() — so a tool whose isActive() reads something the editor's
-   * stores never see (a pick mode canceled with Escape, a sidebar
+   * Apart from the rail's own actions (a press, a rebuild), the only
+   * repaint trigger is the wp.data subscription in start(), so a tool
+   * whose isActive() reads something the editor's stores never see (a pick mode canceled with Escape, a sidebar
    * section held in React state) stayed pressed until an unrelated
    * keystroke ticked a store. That is the mechanism behind E1 and half
    * of E2 in the 2026-09-11 QA report, and no extension could fix it:
@@ -2865,8 +2865,8 @@ test.describe('section overview (R6)', () => {
     expect(await strip.getAttribute('data-placement')).not.toBe('inside');
 
     // What the failing specs actually needed: the NEXT box's pick
-    // button is the element at its own centre, so a click reaches it.
-    const atCentre = await page.evaluate((id) => {
+    // button is the element at its own center, so a click reaches it.
+    const atCenter = await page.evaluate((id) => {
       const btn = document.querySelector(
         '#toolrail-overview .toolrail-ov-box[data-clientid="' + id + '"] [data-ov-action="pick"]'
       );
@@ -2874,7 +2874,7 @@ test.describe('section overview (R6)', () => {
       const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
       return hit === btn;
     }, ids[1]);
-    expect(atCentre).toBe(true);
+    expect(atCenter).toBe(true);
 
     // And the gesture that used to time out completes.
     await overviewBoxButton(page, ids[1], 'pick').click({ modifiers: ['Shift'], timeout: 5000 });
@@ -2889,6 +2889,74 @@ test.describe('section overview (R6)', () => {
     const wideStrip = page.locator('#toolrail-overview .toolrail-ov-controls:not([hidden])');
     await expect(wideStrip).toHaveCount(1);
     expect(await wideStrip.getAttribute('data-placement')).toBe('inside');
+  });
+
+  /**
+   * Code review 2026-09-22, finding 1. Each selected box sets z-index: 1
+   * and so is its own stacking context; the strip's z-index counts only
+   * inside its box. When the active box has a selected member directly
+   * below it — pick P-B, then Shift+click P-A: the clicked box becomes
+   * active, and a marquee makes the topmost member active too — that
+   * later member painted over the whole active box, strip included.
+   * When the strip
+   * stays inside (a wide box, a partial overlap) the lower half of the
+   * arrows then sat under that member's pick button, and a click picked
+   * it and collapsed the group.
+   *
+   * Tight margins force the overlap on any theme, and the preconditions
+   * are asserted so the test cannot pass on a layout with no overlap.
+   */
+  test('the active box\'s strip paints above a later selected member it overlaps (review 2026-09-22)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+    await canvas(page).locator('body').evaluate((body) => {
+      const style = body.ownerDocument.createElement('style');
+      style.textContent = '.is-root-container > [data-block] {'
+        + ' min-width: 620px !important; margin-top: 4px !important; margin-bottom: 0 !important; }';
+      body.ownerDocument.head.appendChild(style);
+    });
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    await overviewBoxButton(page, ids[1], 'pick').click();
+    await overviewBoxButton(page, ids[0], 'pick').click({ modifiers: ['Shift'] });
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+
+    const probe = await page.evaluate((id1) => {
+      const strip = document.querySelector('#toolrail-overview .toolrail-ov-controls:not([hidden])');
+      const next = document.querySelector('#toolrail-overview .toolrail-ov-box[data-clientid="' + id1 + '"]');
+      const s = strip.getBoundingClientRect();
+      const n = next.getBoundingClientRect();
+      const overlaps = s.bottom > n.top && s.top < n.bottom && s.right > n.left && s.left < n.right;
+      // Every enabled strip button must be the element at its own
+      // center AND just above its bottom edge — the part that overlaps.
+      const buried = [];
+      strip.querySelectorAll('button:not([disabled])').forEach((btn) => {
+        const r = btn.getBoundingClientRect();
+        [r.top + r.height / 2, r.bottom - 2].forEach((y) => {
+          const hit = document.elementFromPoint(r.left + r.width / 2, y);
+          if (!hit || !(hit === btn || btn.contains(hit))) {
+            buried.push(btn.dataset.ovAction + '@' + Math.round(y) + ' -> ' + (hit ? hit.className : 'null'));
+          }
+        });
+      });
+      return {
+        placement: strip.dataset.placement,
+        activeBox: strip.closest('.toolrail-ov-box').dataset.clientid,
+        belowIsSelected: next.classList.contains('is-selected'),
+        overlaps,
+        buried,
+      };
+    }, ids[1]);
+
+    // Preconditions: the reviewer's case, not some easier one.
+    expect(probe.placement).toBe('inside');
+    expect(probe.activeBox).toBe(ids[0]);
+    expect(probe.belowIsSelected).toBe(true);
+    expect(probe.overlaps).toBe(true);
+    // The claim.
+    expect(probe.buried).toEqual([]);
   });
 
   test('a group selection marks every member with a shape, not a colour shift (issue #21)', async ({ page }) => {

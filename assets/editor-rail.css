@@ -1403,6 +1403,18 @@ span.toolrail-ov-crumb {
     display: none;
 }
 
+/* The box that holds the visible strip paints above the other selected
+   boxes. Each .is-selected box sets z-index: 1 and is its own stacking
+   context, so the strip's own z-index counts only inside its box, and a
+   selected box LATER in the document painted over the whole active box,
+   strip included. With a strip that overlaps the next member, a click
+   on the arrows then picked that member and collapsed the group. 2
+   keeps the box under the drop line and marquee: they share z-index 2
+   and are appended after the list, so they still paint on top. */
+.toolrail-ov-box.is-active {
+    z-index: 2;
+}
+
 /* Drag-to-reorder (pointer sugar — the arrows are the keyboard path).
    The drop line marks the gap a release would move the section into;
    same two-tone discipline as the outlines so it reads on any content. */

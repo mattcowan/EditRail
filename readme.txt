@@ -65,7 +65,8 @@ The plugin folder is now editrail. After a zip upgrade, delete the old toolrail 
 == Changelog ==
 
 = 1.0.3 =
-* Section overview: when a section's box is too narrow to hold the reorder controls, the controls now sit beside the box instead of over the next section. On a theme that sizes a short paragraph to its text, the controls covered the next section and you could not click it.
+* Section overview: when a section's box is too narrow to hold the reorder controls, the controls now sit beside or above the box instead of over the next section. On a theme that sizes a short paragraph to its text, the controls covered the next section and you could not click it. In a group selection, the controls also stay on top of the other selected sections.
+* For developers: `window.toolrail.refresh()` repaints the pressed state of every tool. Call it when a tool's active state changes for a reason the editor's data stores do not see.
 
 = 1.0.2 =
 * Escape returns the toolbar to Select from anywhere in the editor, not only from inside the canvas, and the change is announced. A second press on an armed tool also disarms it.

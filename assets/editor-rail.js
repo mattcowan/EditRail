@@ -84,11 +84,12 @@
  *     document point maps to the parent viewport as
  *     frameRect.left + (x - scrollX) * scale (and the same for y).
  *   window.toolrail.refresh()
- *     Repaint the pressed state of every tool NOW. The paint is otherwise
- *     scheduled from one place only — the wp.data subscription in start()
- *     — so a tool whose isActive() changes for a reason no store sees (a
- *     pick mode canceled with Escape, a sidebar section held in React
- *     state) stayed pressed until an unrelated keystroke ticked a store.
+ *     Repaint the pressed state of every tool NOW. Apart from the rail's
+ *     own actions (a press, a rebuild), the only repaint trigger is the
+ *     wp.data subscription in start(), so a tool whose isActive() changes
+ *     for a reason no store sees (a pick mode canceled with Escape, a
+ *     sidebar section held in React state) stayed pressed until an
+ *     unrelated keystroke ticked a store.
  *     Cheap to over-call: the signature guard bails when nothing moved.
  */
 (function (wp) {
@@ -6367,10 +6368,15 @@ var DASHICON_NAMES = [
    * paragraph to its content, a button, a small image: the strip is
    * about 213×58px, so it spills down over the next box in the column
    * and swallows that box's pick button. A Shift+click on the neighbor
-   * then lands on the strip (the four overview multi-select specs
-   * failed this way on mnc4.local once the theme's sticky-footer body
-   * rule reached the canvas and shrank short paragraphs to fit-content;
-   * traced 2026-09-18).
+   * then lands on the strip. A theme can cause this without meaning
+   * to: editor styles that make the canvas body a column flex container
+   * turn the root block list into a flex item, which shrinks to fit its
+   * content, so a one-word paragraph becomes a box about 74px wide.
+   *
+   * The strip only wins the click it overlaps if it paints on top, so
+   * the box that holds it carries .is-active and a higher z-index than
+   * the other selected boxes (each selected box is its own stacking
+   * context, and a later one would otherwise cover the strip).
    *
    * Candidates, in order: inside (the CSS default), to the right, to
    * the left, above. The first that fits inside the overlay, stays
@@ -6566,6 +6572,9 @@ var DASHICON_NAMES = [
       var isActive = id === overviewSelected;
       var isMember = overviewSelectedIds.indexOf(id) !== -1;
       box.classList.toggle('is-selected', isActive || isMember);
+      // The box holding the visible strip must paint above the other
+      // selected members — see .toolrail-ov-box.is-active in the CSS.
+      box.classList.toggle('is-active', isActive);
       var pick = box.querySelector('[data-ov-action="pick"]');
       if (pick) {
         pick.setAttribute('aria-expanded', isActive ? 'true' : 'false');
@@ -7392,6 +7401,7 @@ var DASHICON_NAMES = [
       var li = document.createElement('li');
       li.className = 'toolrail-ov-box'
         + (isActive || isMember ? ' is-selected' : '')
+        + (isActive ? ' is-active' : '')
         + (movable ? '' : ' is-locked');
       li.dataset.clientid = clientId;
 
@@ -10923,14 +10933,14 @@ var DASHICON_NAMES = [
     /**
      * Repaint pressed state, availability and tooltips now.
      *
-     * syncPressed() is scheduled from ONE place — the wp.data
-     * subscription in start(). That covers every tool whose isActive()
-     * reads the editor's stores, and misses every tool whose active
-     * state changes for a reason no store sees: a pick mode canceled
-     * with Escape, a sidebar section switched in React state, a modal
-     * that closed. Those tools stayed pressed until some unrelated
-     * keystroke ticked a store (QA 2026-09-11, E1 and E2; the theme
-     * documents the same gap in its own areaIsActive docblock).
+     * The rail repaints after its own actions (a press, a rebuild, a
+     * re-mount). For every other change, the only trigger is the
+     * wp.data subscription in start(). That covers every tool whose
+     * isActive() reads the editor's stores, and misses every tool whose
+     * active state changes for a reason no store sees: a pick mode
+     * canceled with Escape, a sidebar section switched in React state,
+     * a modal that closed. Those tools stayed pressed until some
+     * unrelated keystroke ticked a store (QA 2026-09-11, E1 and E2).
      *
      * Call this straight after the state your isActive() reads has
      * changed. It is cheap to over-call: pressedSignature() is built
