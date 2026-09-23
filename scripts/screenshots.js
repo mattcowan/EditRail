@@ -10,11 +10,9 @@
  * strings, so a rename that breaks the suite breaks this too.
  *
  * Environment:
- *   TOOLRAIL_URL           site root      (default http://example.local — a
- *                          placeholder, so the script names no real site;
- *                          set this to your own WordPress install)
+ *   TOOLRAIL_URL           site root      (default http://localhost:8888)
  *   TOOLRAIL_ADMIN_USER    admin login    (default admin)
- *   TOOLRAIL_ADMIN_PASS    admin password (default pass)
+ *   TOOLRAIL_ADMIN_PASS    admin password (default password)
  *   TOOLRAIL_FIXTURE_POST  post ID of a long draft used for the Section
  *                          overview shot. Unset: the overview document is
  *                          built in memory on post-new.php instead, which
@@ -28,6 +26,13 @@
  *   TOOLRAIL_ONLY          comma-separated screenshot numbers to take,
  *                          e.g. "1" or "1,3". Unset: all of them.
  *   TOOLRAIL_HEADED=1      watch it run.
+ *
+ * Every variable above can also be set in a `.env` file at the repository
+ * root (see `.env.example`); a variable set on the command line wins.
+ * The default is the local wp-env site that `npx wp-env start` creates
+ * (`.wp-env.json`, port 8888) and that CI uses. It is a loopback address,
+ * so the login can never send the password to another machine: a `.local`
+ * default can be answered by any device on the network (PR #36 review).
  *
  * The listing set was taken on a local WordPress Playground of the
  * blueprint (`npm run playground -- --port=9400`, login admin/password):
@@ -64,11 +69,12 @@
  */
 const fs = require('fs');
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 const { chromium } = require('@playwright/test');
 
-const BASE = (process.env.TOOLRAIL_URL || 'http://example.local').replace(/\/+$/, '');
+const BASE = (process.env.TOOLRAIL_URL || 'http://localhost:8888').replace(/\/+$/, '');
 const USER = process.env.TOOLRAIL_ADMIN_USER || 'admin';
-const PASS = process.env.TOOLRAIL_ADMIN_PASS || 'pass';
+const PASS = process.env.TOOLRAIL_ADMIN_PASS || 'password';
 const FIXTURE_POST = process.env.TOOLRAIL_FIXTURE_POST || '';
 const DEMO_POST = process.env.TOOLRAIL_DEMO_POST || '';
 const ONLY = (process.env.TOOLRAIL_ONLY || '')

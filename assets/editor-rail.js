@@ -61,7 +61,7 @@
  * event with {mode} in detail; window.toolrail.getMode() reads it.
  *
  * EXTENSION HOOKS (0.1.21, the first post-release patch on the roadmap's
- * "guides" phase — built by the toolrail-guides provider plugin):
+ * "guides" phase — built for a rulers-and-guides provider plugin):
  *   window.toolrail.prefs.get(key) / .set(key, stringValue)
  *     Per-user preferences over the same readKey/writeKey pair the rail
  *     uses (core/preferences, scope 'toolrail', synced to the account),

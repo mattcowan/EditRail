@@ -3,8 +3,8 @@
  *
  * Everything runs on post-new.php and NEVER saves: armed insertion only
  * touches the unsaved editor state, so no sandbox seeding is needed and the
- * site's content is never written. (The Background Candy sandbox rule
- * applies to specs that SAVE; this one must not.)
+ * site's content is never written. (A sandbox post is for specs that
+ * SAVE; this one must not.)
  *
  * Requires the plugin ACTIVE on the target site (TOOLRAIL_URL).
  */
@@ -190,7 +190,7 @@ function canvas(page) {
  * Click the canvas in the EMPTY space below everything already laid out
  * (title and blocks), measured live — never at a fixed pixel. Fixed
  * coordinates encode one theme's layout: y=400 was empty space under
- * Background Candy's title on mnc4.local and landed ON the title/first
+ * one theme's title on the test site and landed ON the title/first
  * block under the default theme on wp-env (CI, 2026-08-28), where a
  * second click after an insert also hit the block just inserted.
  * `gap` is the distance below the lowest edge; `modifiers` pass through.
@@ -2829,7 +2829,7 @@ test.describe('section overview (R6)', () => {
    * paragraph to its content — the strip spills out of its own box and
    * over the next one, swallowing that box's pick button: the four
    * multi-select specs above then time out on an intercepted
-   * Shift+click. That is what happened on mnc4.local (QA 2026-09-18).
+   * Shift+click. That is what happened on the test site (QA 2026-09-18).
    *
    * The width is forced here rather than left to the theme, so the
    * spec pins the geometry rule on any site. The second half is the
@@ -4648,8 +4648,8 @@ test.describe('tool availability (R9) and pressed semantics (R10)', () => {
     await seedOverviewBlocks(page);
 
     // Three provider tools that pin the contract down from both sides:
-    // an onActivate panel (default canvas: false — the Background Candy
-    // case that proves "disable everything" is wrong), an onActivate
+    // an onActivate panel (default canvas: false — a theme's sidebar
+    // tool, the case that proves "disable everything" is wrong), an onActivate
     // that DECLARES it needs the canvas, and an insert tool that
     // declares it does not.
     await page.evaluate(() => {

@@ -1,7 +1,9 @@
 /**
  * Log in once with headless Chromium and save the cookies for the
  * screen-reader project. Credentials come from .env (WP_USERNAME /
- * WP_PASSWORD); the base URL defaults to the mnc4 Local site.
+ * WP_PASSWORD), with no default. The base URL comes from WP_BASE_URL and
+ * defaults to the loopback wp-env site, http://localhost:8888, so an unset
+ * URL can never send the password to another machine (PR #36 review).
  */
 require('dotenv').config();
 const path = require('path');
@@ -33,7 +35,7 @@ function assertSafeBaseUrl(baseURL) {
 }
 
 module.exports = async () => {
-  const baseURL = process.env.WP_BASE_URL || 'http://mnc4.local';
+  const baseURL = process.env.WP_BASE_URL || 'http://localhost:8888';
   const username = process.env.WP_USERNAME;
   const password = process.env.WP_PASSWORD;
   if (!username || !password) {

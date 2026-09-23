@@ -377,7 +377,7 @@ test.describe('EditRail with NVDA', () => {
     const focusTitles = await h.focusBrowser(page, nvda);
     const log = {};
     const parent = page.locator(`${RAIL} [data-tool="toolrail-guides"]`);
-    test.skip(!(await parent.count()), 'editrail-guides is not active');
+    test.skip(!(await parent.count()), 'the rulers-and-guides extension is not active');
     await parent.focus();
     await h.delay(300);
     log.modeToggle = await h.ensureFocusMode(nvda, async () => { await nvda.press('ArrowRight'); await h.delay(400); return (await page.locator('#toolrail-region [role="menu"]').count()) > 0; });

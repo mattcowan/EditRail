@@ -12,7 +12,7 @@ all**, because quick slots pin arbitrary block types: open **Toolbar settings** 
 at the end of the rail), search "Typography", and pin it — or drag it from the inserter
 onto the rail, or use "Pin to toolbar" in the block's options menu. The pinned slot renders
 the block's own icon, armed-inserts `typost/block` on canvas click, and rides the saved-sets
-feature (named per-user configurations). Verified live on mnc4 2026-08-25: pin → slot with
+feature (named per-user configurations). Verified live on the test site 2026-08-25: pin → slot with
 the real TS icon → canvas click → a `typost/block` in the document.
 
 So the `registerTool` integration below is **optional polish**, not a prerequisite. Ship it
@@ -119,7 +119,7 @@ provider validator refuses entries without a `sanitize_key`-stable `slug` or a
 
 ## Verifying
 
-With both plugins active on mnc4: open any post, focus the rail's Text button,
+With both plugins active: open any post, focus the rail's Text button,
 press ArrowRight — the flyout should list Typography Stylist; picking it and clicking the
 canvas should insert `typost/block`. EditRail's own E2E spec
 (`tests/e2e/rail.spec.js`, "registration API" describe block) proves the identical path

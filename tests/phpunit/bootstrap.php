@@ -2,9 +2,9 @@
 /**
  * Standalone PHPUnit bootstrap — no WordPress install required.
  *
- * The Background Candy convention: stub just enough of WordPress that the
- * plugin's files load and the PURE helpers are testable directly. Unlike the
- * theme's bootstrap, add_filter/apply_filters here are a WORKING minimal
+ * Stub just enough of WordPress that the plugin's files load and the PURE
+ * helpers are testable directly. add_filter/apply_filters here are a WORKING
+ * minimal
  * hook system, because the provider registry's whole contract is "collect
  * what the filter returns and refuse the malformed parts" — a no-op filter
  * stub would make those tests vacuous.

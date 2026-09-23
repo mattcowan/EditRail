@@ -168,13 +168,15 @@ Separate plugins by the same author use this contract and nothing else: rulers a
 | `npm run check-versions` | Checks that all six version numbers agree. |
 | `npm run package` | Runs the version check, then builds `editrail.zip`. |
 
-To run the e2e suite on a disposable WordPress, start Docker and use wp-env:
+To run the e2e suite on a disposable WordPress, start Docker and use wp-env. The suite uses the wp-env site and its login by default:
 
 ```
 npx wp-env start
-TOOLRAIL_URL=http://localhost:8888 TOOLRAIL_ADMIN_PASS=password npm run test:e2e
+npm run test:e2e
 npx wp-env stop
 ```
+
+To use your own WordPress site, copy `.env.example` to `.env` and set `TOOLRAIL_URL`, `TOOLRAIL_ADMIN_USER` and `TOOLRAIL_ADMIN_PASS`. A variable set on the command line wins over `.env`. `docs/releasing.md` lists every variable.
 
 The screen-reader journeys need more setup. Do these three steps once on the machine:
 
@@ -184,7 +186,7 @@ npx @guidepup/setup install nvda
 npx playwright install firefox
 ```
 
-Then copy `.env.example` to `.env` and put the site URL and the login in it. `docs/releasing.md` lists the variables.
+Then copy `.env.example` to `.env` and set `WP_USERNAME` and `WP_PASSWORD`. Set `WP_BASE_URL` too if your site is not the wp-env one. `docs/releasing.md` lists the variables.
 
 `docs/releasing.md` describes the CI workflows and the release procedure.
 
