@@ -6704,6 +6704,40 @@ test.describe('NVDA findings 2026-09-11 (1.0.2)', () => {
     await expect(heading).toHaveAttribute('aria-description', 'Adds a section title');
   });
 
+  /**
+   * SR-2, traced 2026-09-22. Only the rail's arrow/Home/End handler moved
+   * the roving tab stop, so focus that reached a tool any other way — a
+   * mouse click, or a screen reader that moves focus onto the button it
+   * activates — left the stop behind on the last arrowed-to tool. Tab from
+   * the focused tool then went to that stop when it sat later in the DOM,
+   * instead of leaving the toolbar. The NVDA journey hit exactly this: End
+   * left the stop on Toolbar settings, focus was put on Paragraph, and Tab
+   * landed on Toolbar settings in focus mode too (so it was never NVDA's
+   * browse mode). The APG toolbar pattern keeps the stop on the focused
+   * item, whatever moved focus there.
+   */
+  test('SR-2: the tab stop follows focus, so Tab from a clicked tool leaves the toolbar', async ({ page }) => {
+    await openNewPost(page);
+    const rail = page.locator('#toolrail-rail');
+    const stops = () => page.evaluate(() => Array.from(document.querySelectorAll('#toolrail-rail .toolrail-tool'))
+      .filter((b) => b.tabIndex === 0).map((b) => b.dataset.tool));
+
+    // End puts the one tab stop on the LAST tool.
+    await rail.locator('[data-tool="select"]').focus();
+    await page.keyboard.press('End');
+    const last = (await stops())[0];
+    expect(last).not.toBe('pin:core/paragraph');
+
+    // A mouse click moves focus without the arrow handler.
+    await rail.locator('[data-tool="pin:core/paragraph"]').click();
+    expect(await stops()).toEqual(['pin:core/paragraph']);
+
+    // Tab leaves the toolbar instead of stopping on the old tab stop.
+    await page.keyboard.press('Tab');
+    const inRail = await page.evaluate(() => !!document.activeElement.closest('#toolrail-rail'));
+    expect(inRail).toBe(false);
+  });
+
   test('SR-3: Tab stays inside the Section overview and ends on Done, never in the browser chrome', async ({ page }) => {
     await openNewPost(page);
     await seedOverviewParagraphs(page);

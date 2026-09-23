@@ -6,6 +6,7 @@ Every version of EditRail (Editor Tool Rail before 1.0.1). The 0.1.x versions we
 
 * Section overview: the picked section's reorder controls are seated where they obstruct no other section's box. The strip is about 213x58px and sat inside the box's top-left corner, so on a layout with narrow boxes — a theme whose canvas sizes a one-line paragraph to its content — it spilled over the next box and swallowed that box's pick button. It now tries inside, right, left and above, and takes the first spot that covers no other box's center (falling back to the least-covering spot). Wide boxes are unchanged.
 * Section overview: the box that shows the reorder controls now paints above the other selected boxes. In a group selection, a selected box further down the document covered the controls where they overlapped it, so a click on the arrows picked that box and collapsed the group.
+* The toolbar's one Tab stop now follows focus. After a click on a tool, or after a screen reader moved focus to one, Tab could stop on another toolbar button, such as Toolbar settings, instead of leaving the toolbar. Only the arrow keys moved the Tab stop before.
 * For extension authors: `window.toolrail.refresh()` repaints the pressed state of every tool. Call it when your `isActive()` result changes for a reason the editor's data stores do not see, such as a pick mode you cancel yourself. Before, such a tool stayed pressed until an unrelated edit repainted the toolbar.
 
 ## 1.0.2

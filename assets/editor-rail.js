@@ -9869,6 +9869,25 @@ var DASHICON_NAMES = [
       firstBtn.tabIndex = 0;
     }
 
+    // The tab stop follows FOCUS, not only the arrow keys. A mouse click,
+    // or a screen reader that moves focus onto the button it activates,
+    // puts focus on a tool without the keydown handler below; the stop
+    // then stayed on the last arrowed-to tool, and Tab from the focused
+    // tool went to that stop when it sat later in the DOM — Toolbar
+    // settings after End — instead of leaving the toolbar (QA 2026-09-11,
+    // SR-2, traced 2026-09-22). The APG toolbar pattern keeps the stop on
+    // the focused item.
+    rail.addEventListener('focusin', function (e) {
+      var target = e.target;
+      if (!target || !target.classList || !target.classList.contains('toolrail-tool') || target.tabIndex === 0) {
+        return;
+      }
+      Array.prototype.slice.call(rail.querySelectorAll('.toolrail-tool')).forEach(function (b) {
+        b.tabIndex = -1;
+      });
+      target.tabIndex = 0;
+    });
+
     // APG toolbar keys, following the rail's orientation: Up/Down move
     // along a vertical rail and ArrowRight opens a flyout, while a
     // horizontal rail moves on Left/Right and opens its flyouts with
