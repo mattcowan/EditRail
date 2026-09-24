@@ -11,8 +11,13 @@
  * (see `.env.example`); a variable set on the command line wins.
  * The default is the local wp-env site that `npx wp-env start` creates
  * (`.wp-env.json`, port 8888) and that CI uses. It is a loopback address,
- * so the login can never send the password to another machine: a `.local`
- * default can be answered by any device on the network (PR #36 review). The default login is wp-env's own,
+ * so with no URL set the login sends the password only to this machine; a
+ * `.local` default could be answered by any device on the network (PR #36
+ * review). A URL set in `.env` or on the command line receives the
+ * password too: point it only at a site you trust. Plain http:// to a host
+ * that is not local stops the login before the password is typed
+ * (scripts/lib/safe-base-url.js); WP_ALLOW_HTTP=1 allows a trusted
+ * intranet host. The default login is wp-env's own,
  * admin / password.
  */
 const { defineConfig, devices } = require('@playwright/test');

@@ -31,8 +31,13 @@
  * root (see `.env.example`); a variable set on the command line wins.
  * The default is the local wp-env site that `npx wp-env start` creates
  * (`.wp-env.json`, port 8888) and that CI uses. It is a loopback address,
- * so the login can never send the password to another machine: a `.local`
- * default can be answered by any device on the network (PR #36 review).
+ * so with no URL set the login sends the password only to this machine; a
+ * `.local` default could be answered by any device on the network (PR #36
+ * review). A URL set in `.env` or on the command line receives the
+ * password too: point it only at a site you trust. Plain http:// to a host
+ * that is not local stops the run before the password is typed
+ * (scripts/lib/safe-base-url.js); WP_ALLOW_HTTP=1 allows a trusted
+ * intranet host.
  *
  * The listing set was taken on a local WordPress Playground of the
  * blueprint (`npm run playground -- --port=9400`, login admin/password):
@@ -72,7 +77,17 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 const { chromium } = require('@playwright/test');
 
+const { assertSafeBaseUrl, assertSafeLoginPage } = require('./lib/safe-base-url');
+
 const BASE = (process.env.TOOLRAIL_URL || 'http://localhost:8888').replace(/\/+$/, '');
+// Plain HTTP to a non-local host would send PASS in clear text: stop before
+// any browser starts (PR #36 review). login() checks again after redirects.
+try {
+  assertSafeBaseUrl(BASE, 'TOOLRAIL_URL');
+} catch (e) {
+  console.error(e.message);
+  process.exit(1);
+}
 const USER = process.env.TOOLRAIL_ADMIN_USER || 'admin';
 const PASS = process.env.TOOLRAIL_ADMIN_PASS || 'password';
 const FIXTURE_POST = process.env.TOOLRAIL_FIXTURE_POST || '';
@@ -200,6 +215,7 @@ async function login(browser) {
   try {
     const page = await context.newPage();
     await page.goto(`${BASE}/wp-login.php`, { waitUntil: 'domcontentloaded' });
+    await assertSafeLoginPage(page, 'TOOLRAIL_URL');
     await page.fill('#user_login', USER);
     await page.fill('#user_pass', PASS);
     await page.click('#wp-submit');

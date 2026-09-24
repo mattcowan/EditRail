@@ -69,7 +69,7 @@ The suite and `scripts/screenshots.js` read these variables from the environment
 | `TOOLRAIL_ADMIN_USER` | The admin login. It defaults to `admin`. |
 | `TOOLRAIL_ADMIN_PASS` | The admin password. It defaults to `password`, the wp-env default. |
 
-The default site is a loopback address, so the login cannot send a password to another machine when no variable is set. To use your own WordPress site, copy `.env.example` to `.env` and set the three values.
+The default site is a loopback address, so the login cannot send a password to another machine when no variable is set. To use your own WordPress site, copy `.env.example` to `.env` and set the three values. The site you set receives the admin password. A plain `http://` URL for a host that is not local stops the login before the password is typed; use `https://`, or set `WP_ALLOW_HTTP=1` for a trusted intranet host. The NVDA journeys below apply the same rule.
 
 ## Run the screen-reader journeys locally
 
@@ -91,7 +91,7 @@ This suite reads its variables from a `.env` file at the repository root. `playw
 | `WP_USERNAME` | The account `global-setup.js` logs in with. It has no default: the run stops without it. |
 | `WP_PASSWORD` | The password for that account. It has no default: the run stops without it. |
 
-Copy `.env.example` to `.env` and fill it in. `.env` holds a password: it is in `.gitignore` and in `.distignore`, so it stays out of git and out of the zip. A `WP_BASE_URL` that is not a local host must use HTTPS, because the login posts the password.
+Copy `.env.example` to `.env` and fill it in. `.env` holds a password: it is in `.gitignore` and in `.distignore`, so it stays out of git and out of the zip. A `WP_BASE_URL` that is not a local host must use HTTPS, because the login posts the password; `WP_ALLOW_HTTP=1` allows a trusted intranet host. The e2e suite and `scripts/screenshots.js` apply the same rule (`scripts/lib/safe-base-url.js`).
 
 The journeys write to the account they log in with, the same as the e2e suite. Each one creates a post and deletes it again. If the cleanup fails, the run prints a warning and adds a `cleanup` annotation to that test.
 
