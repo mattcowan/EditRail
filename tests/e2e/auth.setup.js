@@ -7,6 +7,7 @@ const { test: setup, expect } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
 const { assertSafeBaseUrl, assertSafeLoginPage } = require('../../scripts/lib/safe-base-url');
+const { SNAPSHOT_FILE, snapshotRailPrefs } = require('./prefs-account');
 
 const AUTH_FILE = path.join(__dirname, '.auth', 'admin.json');
 const USER = process.env.TOOLRAIL_ADMIN_USER || 'admin';
@@ -30,4 +31,8 @@ setup('authenticate as admin', async ({ page }) => {
   await expect(page.locator('#wpadminbar')).toBeVisible();
 
   await page.context().storageState({ path: AUTH_FILE });
+
+  // Save the account's own rail settings before any test changes them;
+  // global-teardown.js puts them back at the end of the run.
+  await snapshotRailPrefs(SNAPSHOT_FILE, setup.info().project.use.baseURL, AUTH_FILE, '[editrail e2e]');
 });

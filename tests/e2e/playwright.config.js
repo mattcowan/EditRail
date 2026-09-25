@@ -29,6 +29,9 @@ const baseURL = process.env.TOOLRAIL_URL || 'http://localhost:8888';
 
 module.exports = defineConfig({
   testDir: '.',
+  // Restores the developer's own rail settings once, after every test
+  // (auth.setup.js saved them). See prefs-account.js.
+  globalTeardown: require.resolve('./global-teardown.js'),
   timeout: 30000,
   retries: 0,
   use: {

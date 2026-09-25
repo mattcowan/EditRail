@@ -10,6 +10,7 @@
  */
 const { test, expect } = require('@playwright/test');
 const path = require('path');
+const { setRailScope, apiForPage, readPrefs } = require('./prefs-account');
 
 const AUTH = path.join(__dirname, '.auth', 'admin.json');
 
@@ -48,6 +49,12 @@ const RAIL_PREF_KEYS = [
  * through the shared admin account. Clearing also restores the DEFAULT
  * pinned slots (Group/Text/Heading/Image), which several tests rely on.
  *
+ * The account is cleared on the SERVER and confirmed there
+ * (prefs-account.js setRailScope), never through this page's store: the
+ * caller reloads next, and a reload cancels the trailing half of core's
+ * debounced save. The developer's own settings are not lost: auth.setup.js
+ * saved them, and global-teardown.js restores them after the run.
+ *
  * The slot-migration stamp MUST be cleared with the rest: it stops the
  * one-time slot migration from re-running, which is what seeds the
  * defaults — leave it set with the data wiped and the rail comes back
@@ -57,8 +64,8 @@ const RAIL_PREF_KEYS = [
  * @param {import('@playwright/test').Page} page Page with the editor loaded.
  * @return {Promise<boolean>} Whether anything was actually stored.
  */
-function resetRailPrefs(page) {
-  return page.evaluate((keys) => {
+async function resetRailPrefs(page) {
+  const localHad = await page.evaluate((keys) => {
     let had = false;
     keys.forEach((k) => {
       if (window.localStorage.getItem(k) !== null) {
@@ -66,101 +73,27 @@ function resetRailPrefs(page) {
       }
       window.localStorage.removeItem(k);
     });
-    try {
-      const sel = window.wp.data.select('core/preferences');
-      const disp = window.wp.data.dispatch('core/preferences');
-      keys.forEach((k) => {
-        if (sel.get('toolrail', k) !== undefined) {
-          had = true;
-          disp.set('toolrail', k, undefined);
-        }
-      });
-    } catch (e) {
-      /* Store not ready — nothing stored there either, then. */
-    }
     return had;
   }, RAIL_PREF_KEYS);
+  // The account on the SERVER, confirmed, and the page's store left alone:
+  // a store change here would schedule core's debounced save, and the
+  // reload that follows would cancel its trailing half, leaving a partial
+  // state in the account (prefs-account.js has the whole story).
+  const serverHad = await setRailScope(page, {});
+  return localHad || serverHad;
 }
 
-/**
- * Leave the shared admin account clean when the run ends.
- *
- * resetRailPrefs runs as SETUP inside openNewPost, which protects each
- * spec from the one before it but leaves the LAST spec's writes stranded
- * in wp_persisted_preferences — server-side user meta, shared with the
- * human's own browser on this site. That is not hypothetical: the
- * corrupt-list spec below is the last in this file, and its `not-json{{{`
- * fixture survived a passing run into the real account, emptying the rail
- * of every pinned tool and making "Restore default tools" refuse to run
- * (diagnosed 2026-08-28). Before pins moved to the account store the
- * damage was confined to the Playwright browser profile; it is not any
- * more, so the suite must clean up after itself.
- *
- * A FRESH context, not the finished test's page: two specs leave
- * Storage.prototype.getItem/setItem throwing, and one swaps in a no-op
- * persistence layer — a reset run in that realm would either throw or
- * write nowhere. One clean editor load costs a few seconds per run.
- *
- * Teardown WRITES the baseline rather than clearing and trusting the slot
- * migration to reseed it, because that reseed happens at boot(), not at
- * clear time. Clearing alone measurably strands the account in the one
- * state the setup comment above warns about — stamp set, slot list gone,
- * so migrateSlots() returns early and the rail renders with no pinned
- * tools at all. (Observed on the first cut of this hook: the boot-race
- * watcher re-stamped while the cleared slot list was what the debounced
- * REST write carried up.) Setting both keys together cannot land
- * half-applied.
- *
- * This is per FILE, which is the right granularity while the suite is one
- * serial spec file. Adding a second file, or parallel mode, would need
- * this to move to a globalTeardown instead — otherwise one worker's
- * cleanup lands mid-test in another.
+/*
+ * The account is put back once per RUN, not per file: auth.setup.js saves
+ * the developer's own rail settings right after login, and
+ * global-teardown.js restores them after every test has finished, confirmed
+ * against the server. The per-file teardown this replaces wrote a fixed
+ * baseline through the page's store and trusted a 3 s wait before a reload.
+ * Core's debounced save lost the trailing write on this slow site, so the
+ * baseline never reached the database, and its "4 pins after reload" check
+ * passed anyway because an empty account reseeds its pins on screen. It also
+ * replaced the developer's own pins with the defaults (2026-09-24).
  */
-test.afterAll(async ({ browser }) => {
-  const context = await browser.newContext({ storageState: AUTH });
-  try {
-    const page = await context.newPage();
-    await page.goto('/wp-admin/post-new.php');
-    // The store has to be attached before a reset can reach the account.
-    await page.waitForFunction(
-      () => window.wp && window.wp.data && !!window.wp.data.select('core/preferences'),
-      null,
-      { timeout: 20000 }
-    );
-    await resetRailPrefs(page);
-    await page.evaluate((keys) => {
-      const disp = window.wp.data.dispatch('core/preferences');
-      keys.forEach((k) => disp.set('toolrail', k, undefined));
-      // DEFAULT_SLOTS, spelled out: the account must end in the state a
-      // migrated install is in, not in a half-migrated one — both lift
-      // stamps set, or the next boot re-runs a lift.
-      disp.set(
-        'toolrail',
-        'toolrail-quick-slots',
-        JSON.stringify(['core/group', 'core/paragraph', 'core/heading', 'core/image'])
-      );
-      disp.set('toolrail', 'toolrail-slots-migrated', '1');
-      disp.set('toolrail', 'toolrail-group-seeded', '1');
-    }, RAIL_PREF_KEYS);
-    // Give the preferences store's debounced REST write time to land —
-    // closing the context first would drop it and leave the account dirty.
-    await page.waitForTimeout(3000);
-
-    // Prove it landed in user meta, not just in this page's store: the
-    // localStorage cache was cleared above, so a fresh load can only get
-    // the pins from the preloaded account preferences.
-    await page.reload();
-    await expect(page.locator('#toolrail-rail [data-tool^="pin:"]')).toHaveCount(4, {
-      timeout: 20000,
-    });
-  } catch (e) {
-    /* Editor unreachable at teardown — report it, do not fail the run. */
-    // eslint-disable-next-line no-console
-    console.warn('[toolrail] preference teardown did not run:', e.message);
-  } finally {
-    await context.close();
-  }
-});
 
 async function openNewPost(page) {
   await page.goto('/wp-admin/post-new.php');
@@ -229,6 +162,38 @@ async function waitForPatternCatalog(page) {
     return sel.hasFinishedResolution('getBlockPatterns', [])
       && sel.hasFinishedResolution('getEntityRecords', ['postType', 'wp_block', { per_page: -1, context: 'edit' }]);
   }), { timeout: 15000 }).toBe(true);
+}
+
+/**
+ * Wait until the SERVER copy of a rail key passes `check`.
+ *
+ * Replaces fixed waits before a reload or a second browser. Core saves
+ * preferences on a debounce (the first change at once, later ones 2.5 s
+ * after that request finishes), so how long a save takes depends on the
+ * server and on what else the page saved before. A fixed 3 s wait passed
+ * only while the old store-based reset happened to keep that debounce busy
+ * (2026-09-24); see prefs-account.js.
+ *
+ * @param {import('@playwright/test').Page} page  A page on the test site.
+ * @param {string}                          key   A toolrail preference key.
+ * @param {function(?string): boolean}      check Passes on the saved value (null = absent).
+ * @return {Promise<void>}
+ */
+async function waitForSavedPref(page, key, check) {
+  const api = await apiForPage(page);
+  await expect.poll(async () => {
+    const scope = (await readPrefs(api)).toolrail || {};
+    return check(scope[key] === undefined ? null : scope[key]);
+  }, { timeout: 20000, message: 'server copy of ' + key }).toBe(true);
+}
+
+/** A saved toolrail-position value's dock, or null. */
+function savedDock(value) {
+  try {
+    return value ? JSON.parse(value).dock : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 async function getPref(page, key) {
@@ -1188,7 +1153,7 @@ test.describe('registration API', () => {
  * The rule every login in this repository shares before it types the admin
  * password (scripts/lib/safe-base-url.js, PR #36 review): plain HTTP is
  * allowed only to a local development host. No browser needed, so it lives
- * here instead of a second spec file (the teardown above is per file).
+ * here instead of a second spec file.
  */
 test.describe('login URL check (scripts/lib/safe-base-url.js)', () => {
   const { isLocalHost, assertSafeBaseUrl } = require('../../scripts/lib/safe-base-url');
@@ -1942,6 +1907,7 @@ test.describe('regressions', () => {
   });
 
   test('a browser\'s stale local copy is dropped once the account holds the key', async ({ page }) => {
+    test.slow(); // three editor loads on a slow site
     await openNewPost(page);
     // Give the account a position of its own (boot only READS one; a
     // fresh account has no key, and the lift would rightly win). Then a
@@ -1949,7 +1915,7 @@ test.describe('regressions', () => {
     // is the thing that resurrected old pins after a delete + reinstall,
     // and WHICH pins depended on which browser booted first.
     await page.evaluate(() => window.toolrail.setDock('left'));
-    await page.waitForTimeout(3000);
+    await waitForSavedPref(page, 'toolrail-position', (v) => savedDock(v) === 'left');
     await page.evaluate(() => {
       window.localStorage.setItem('toolrail-position', JSON.stringify({ dock: 'right', x: 40, y: 60 }));
       window.localStorage.setItem('toolrail-quick-slots', JSON.stringify(['core/cover']));
@@ -1967,6 +1933,7 @@ test.describe('regressions', () => {
   });
 
   test('a lifted local copy survives one boot, then is consumed', async ({ page }) => {
+    test.slow(); // three editor loads on a slow site
     await openNewPost(page);
     // Account empty of the key, local copy present: the lift keeps the
     // source, because boot's own write can still be wiped by a late
@@ -1982,7 +1949,7 @@ test.describe('regressions', () => {
     expect(await page.evaluate(() => window.localStorage.getItem('toolrail-position'))).not.toBeNull();
 
     // Let the account write land, then boot against the hydrated account.
-    await page.waitForTimeout(3000);
+    await waitForSavedPref(page, 'toolrail-position', (v) => savedDock(v) === 'right');
     await page.reload();
     await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
     await expect(page.locator('#toolrail-region')).toHaveAttribute('data-dock', 'right');
@@ -1993,14 +1960,16 @@ test.describe('regressions', () => {
 
 test.describe('account persistence', () => {
   test('position and pins follow the account into a fresh browser profile', async ({ page, browser }) => {
+    test.slow(); // two browser contexts on a slow site
     await openNewPost(page);
 
     await page.evaluate(() => window.toolrail.pinBlock('core/quote'));
     await page.evaluate(() => window.toolrail.setDock('bottom'));
 
-    // The preferences store persists to user meta on a debounce — let it
-    // flush before the fresh profile loads from the server.
-    await page.waitForTimeout(3500);
+    // The preferences store persists to user meta on a debounce: wait for
+    // the server copy before the fresh profile loads from it.
+    await waitForSavedPref(page, 'toolrail-position', (v) => savedDock(v) === 'bottom');
+    await waitForSavedPref(page, 'toolrail-quick-slots', (v) => !!v && JSON.parse(v).indexOf('core/quote') !== -1);
 
     // Same login, EMPTY localStorage: everything the fresh profile shows
     // came from the account, which is the whole point of the feature.
