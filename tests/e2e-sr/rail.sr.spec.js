@@ -150,11 +150,35 @@ test.describe('EditRail with NVDA', () => {
     // Escape with focus still on the rail: does it disarm? (help text says "at any time")
     log.escapeOnRail = await press(nvda, 'Escape', 700);
     log.pressedAfterEscape = await page.locator(`${RAIL} [data-tool="pin:core/paragraph"]`).getAttribute('aria-pressed');
+    // SR-2: which rail buttons are Tab stops after the disarm? One is the
+    // roving-tabindex contract; two would explain a Tab that stays on the rail.
+    log.railTabStopsAfterEscape = await page.evaluate((sel) => Array.from(document.querySelectorAll(sel + ' [data-tool]')).filter((b) => b.tabIndex === 0).map((b) => b.dataset.tool), RAIL);
 
     // Tab away from the rail while armed: where does focus go, what is said.
     log.tabAway = await press(nvda, 'Tab', 900);
     log.focusAfterTab = await h.describeFocus(page);
     log.canvasFocusAfterTab = await h.describeCanvasFocus(page);
+
+    // SR-2 re-check (2026-09-22). NVDA uses the first Escape to leave focus
+    // mode, so the Tab above may have run in BROWSE mode, where NVDA moves
+    // its own cursor over programmatically focusable elements. Force focus
+    // mode, put focus back on the same button, and Tab again: in focus mode
+    // the key goes to the browser, which should leave the rail in one stop.
+    await page.locator(`${RAIL} [data-tool="pin:core/paragraph"]`).focus();
+    await h.delay(300);
+    log.sr2ModeToggle = await h.ensureFocusMode(nvda, async () => {
+      await nvda.press('ArrowDown'); await h.delay(300);
+      return page.evaluate(() => {
+        const a = document.activeElement;
+        return !!(a && a.dataset && a.dataset.tool && a.dataset.tool !== 'pin:core/paragraph');
+      });
+    });
+    await page.locator(`${RAIL} [data-tool="pin:core/paragraph"]`).focus();
+    await h.delay(300);
+    log.sr2TabStopsBeforeTab = await page.evaluate((sel) => Array.from(document.querySelectorAll(sel + ' [data-tool]')).filter((b) => b.tabIndex === 0).map((b) => b.dataset.tool), RAIL);
+    log.sr2TabInFocusMode = await press(nvda, 'Tab', 900);
+    log.sr2FocusAfterTab = await h.describeFocus(page);
+    log.sr2CanvasFocusAfterTab = await h.describeCanvasFocus(page);
 
     // Insert with a real click (Playwright) and report what NVDA then announces for the focus.
     await page.locator(`${RAIL} [data-tool="pin:core/paragraph"]`).focus();
@@ -353,7 +377,7 @@ test.describe('EditRail with NVDA', () => {
     const focusTitles = await h.focusBrowser(page, nvda);
     const log = {};
     const parent = page.locator(`${RAIL} [data-tool="toolrail-guides"]`);
-    test.skip(!(await parent.count()), 'editrail-guides is not active');
+    test.skip(!(await parent.count()), 'the rulers-and-guides extension is not active');
     await parent.focus();
     await h.delay(300);
     log.modeToggle = await h.ensureFocusMode(nvda, async () => { await nvda.press('ArrowRight'); await h.delay(400); return (await page.locator('#toolrail-region [role="menu"]').count()) > 0; });

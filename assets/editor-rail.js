@@ -7,7 +7,7 @@
  * produces ordinary core blocks — deactivating this plugin changes nothing
  * about how authored content renders or edits.
  *
- * MOUNT STRATEGY (proven in the Background Candy Phase 0 spike): the rail is
+ * MOUNT STRATEGY (proven in an early prototype): the rail is
  * inserted into the editor's own skeleton so it participates in the editor's
  * flex layout rather than overlapping the canvas; a debounced
  * MutationObserver re-mounts it across React re-renders (it survives the
@@ -61,7 +61,7 @@
  * event with {mode} in detail; window.toolrail.getMode() reads it.
  *
  * EXTENSION HOOKS (0.1.21, the first post-release patch on the roadmap's
- * "guides" phase — built by the toolrail-guides provider plugin):
+ * "guides" phase — built for a rulers-and-guides provider plugin):
  *   window.toolrail.prefs.get(key) / .set(key, stringValue)
  *     Per-user preferences over the same readKey/writeKey pair the rail
  *     uses (core/preferences, scope 'toolrail', synced to the account),
@@ -83,6 +83,14 @@
  *     mode: { frameRect, scale, pan, scrollX, scrollY, mode }. A canvas
  *     document point maps to the parent viewport as
  *     frameRect.left + (x - scrollX) * scale (and the same for y).
+ *   window.toolrail.refresh()
+ *     Repaint the pressed state of every tool NOW. Apart from the rail's
+ *     own actions (a press, a rebuild), the only repaint trigger is the
+ *     wp.data subscription in start(), so a tool whose isActive() changes
+ *     for a reason no store sees (a pick mode canceled with Escape, a
+ *     sidebar section held in React state) stayed pressed until an
+ *     unrelated keystroke ticked a store.
+ *     Cheap to over-call: the signature guard bails when nothing moved.
  */
 (function (wp) {
   'use strict';
@@ -6325,6 +6333,8 @@ var DASHICON_NAMES = [
    * order. Boxes ARE the blocks now (v2) — no overlap-avoid needed,
    * because blocks don't overlap. A short block keeps a 24px hit floor;
    * a block with no DOM element yet simply hides until the next pass.
+   * The one thing that CAN overlap a neighbor is the picked box's
+   * reorder strip, so it is seated last (placeOverviewControls).
    */
   function positionOverviewBoxes() {
     var overlay = overviewNode();
@@ -6346,6 +6356,135 @@ var DASHICON_NAMES = [
       box.style.height = Math.max(rect.height, 24) + 'px';
     });
     positionOverviewVeil(oRect);
+    placeOverviewControls(oRect);
+  }
+
+  /**
+   * Put the visible reorder strip where it obstructs no other box.
+   *
+   * The strip is a child of the picked box and by default sits inside
+   * its top-left corner, which is right for a box the strip fits in. A
+   * short NARROW box is another matter — a theme that sizes a one-line
+   * paragraph to its content, a button, a small image: the strip is
+   * about 213×58px, so it spills down over the next box in the column
+   * and swallows that box's pick button. A Shift+click on the neighbor
+   * then lands on the strip. A theme can cause this without meaning
+   * to: editor styles that make the canvas body a column flex container
+   * turn the root block list into a flex item, which shrinks to fit its
+   * content, so a one-word paragraph becomes a box about 74px wide.
+   *
+   * The strip only wins the click it overlaps if it paints on top, so
+   * the box that holds it carries .is-active and a higher z-index than
+   * the other selected boxes (each selected box is its own stacking
+   * context, and a later one would otherwise cover the strip).
+   *
+   * Candidates, in order: inside (the CSS default), to the right, to
+   * the left, above. The first that fits inside the overlay, stays
+   * clear of the bar and obstructs no other box wins. "Obstructs" means
+   * covering a box's center or more than half its area — a strip that
+   * merely clips the top few pixels of a tall neighbor stays inside,
+   * where it always was, so an ordinary document looks unchanged. When
+   * every candidate obstructs something, the one covering the least
+   * area wins. The result rides on data-placement for the specs.
+   *
+   * @param {DOMRect} oRect The overlay's viewport rect, already measured.
+   * @return {void}
+   */
+  function placeOverviewControls(oRect) {
+    var overlay = overviewNode();
+    if (!overlay) {
+      return;
+    }
+    var controls = overlay.querySelector('.toolrail-ov-controls:not([hidden])');
+    var box = controls && controls.closest ? controls.closest('.toolrail-ov-box') : null;
+    if (!controls || !box || box.style.display === 'none') {
+      return;
+    }
+    var rel = function (el) {
+      var r = el.getBoundingClientRect();
+      return { left: r.left - oRect.left, top: r.top - oRect.top, width: r.width, height: r.height };
+    };
+    // Measure the strip at its natural place (the CSS default, inside
+    // the box's border), not wherever the last pass left it. The
+    // measured rect, not the stylesheet's 4px, is the inside
+    // candidate: the box's border shifts the strip too, and 2px was
+    // the difference between clearing a neighbor's center and sitting
+    // on it.
+    controls.style.left = '';
+    controls.style.top = '';
+    var own = rel(box);
+    var natural = rel(controls);
+    var w = natural.width;
+    var h = natural.height;
+    if (!w || !h) {
+      return;
+    }
+    // Inline left/top are measured from the box's padding edge.
+    var origin = { left: own.left + box.clientLeft, top: own.top + box.clientTop };
+    var others = Array.prototype.slice.call(overlay.querySelectorAll('.toolrail-ov-box'))
+      .filter(function (b) {
+        return b !== box && b.style.display !== 'none';
+      })
+      .map(rel);
+    var bar = overlay.querySelector('.toolrail-ov-bar');
+    var barRect = bar ? rel(bar) : null;
+    var GAP = 8;
+    var candidates = [
+      { name: 'inside', left: natural.left, top: natural.top },
+      { name: 'right', left: own.left + own.width + GAP, top: own.top },
+      { name: 'left', left: own.left - GAP - w, top: own.top },
+      { name: 'above', left: natural.left, top: own.top - GAP - h }
+    ];
+    var overlap = function (a, b) {
+      var x = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left);
+      var y = Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top);
+      return x > 0 && y > 0 ? x * y : 0;
+    };
+    var coversCenter = function (a, b) {
+      var cx = b.left + b.width / 2;
+      var cy = b.top + b.height / 2;
+      return cx >= a.left && cx <= a.left + a.width && cy >= a.top && cy <= a.top + a.height;
+    };
+    var chosen = null;
+    var least = null;
+    var leastArea = Infinity;
+    candidates.some(function (c) {
+      var strip = { left: c.left, top: c.top, width: w, height: h };
+      // Inside is the status quo and always allowed; the others must
+      // fit in the overlay and stay out from under the bar.
+      if (c.name !== 'inside') {
+        if (strip.left < 0 || strip.top < 0 || strip.left + w > oRect.width || strip.top + h > oRect.height) {
+          return false;
+        }
+        if (barRect && overlap(strip, barRect) > 0) {
+          return false;
+        }
+      }
+      var area = 0;
+      var obstructs = false;
+      others.forEach(function (o) {
+        var a = overlap(strip, o);
+        area += a;
+        if (a > 0 && (coversCenter(strip, o) || a > (o.width * o.height) / 2)) {
+          obstructs = true;
+        }
+      });
+      if (!obstructs) {
+        chosen = c;
+        return true;
+      }
+      if (area < leastArea) {
+        leastArea = area;
+        least = c;
+      }
+      return false;
+    });
+    var use = chosen || least;
+    controls.dataset.placement = use.name;
+    if (use.name !== 'inside') {
+      controls.style.left = (use.left - origin.left) + 'px';
+      controls.style.top = (use.top - origin.top) + 'px';
+    }
   }
 
   /** Punch the veil's hole at the drilled root's rect: four strips
@@ -6433,6 +6572,9 @@ var DASHICON_NAMES = [
       var isActive = id === overviewSelected;
       var isMember = overviewSelectedIds.indexOf(id) !== -1;
       box.classList.toggle('is-selected', isActive || isMember);
+      // The box holding the visible strip must paint above the other
+      // selected members — see .toolrail-ov-box.is-active in the CSS.
+      box.classList.toggle('is-active', isActive);
       var pick = box.querySelector('[data-ov-action="pick"]');
       if (pick) {
         pick.setAttribute('aria-expanded', isActive ? 'true' : 'false');
@@ -6452,6 +6594,9 @@ var DASHICON_NAMES = [
         controls.hidden = !isActive;
       }
     });
+    // The strip just shown may belong to a different box than before —
+    // seat it before the author's next click.
+    placeOverviewControls(overlay.getBoundingClientRect());
   }
 
   /** Open a box's reorder controls and move focus to the first usable
@@ -7256,6 +7401,7 @@ var DASHICON_NAMES = [
       var li = document.createElement('li');
       li.className = 'toolrail-ov-box'
         + (isActive || isMember ? ' is-selected' : '')
+        + (isActive ? ' is-active' : '')
         + (movable ? '' : ' is-locked');
       li.dataset.clientid = clientId;
 
@@ -9723,6 +9869,25 @@ var DASHICON_NAMES = [
       firstBtn.tabIndex = 0;
     }
 
+    // The tab stop follows FOCUS, not only the arrow keys. A mouse click,
+    // or a screen reader that moves focus onto the button it activates,
+    // puts focus on a tool without the keydown handler below; the stop
+    // then stayed on the last arrowed-to tool, and Tab from the focused
+    // tool went to that stop when it sat later in the DOM — Toolbar
+    // settings after End — instead of leaving the toolbar (QA 2026-09-11,
+    // SR-2, traced 2026-09-22). The APG toolbar pattern keeps the stop on
+    // the focused item.
+    rail.addEventListener('focusin', function (e) {
+      var target = e.target;
+      if (!target || !target.classList || !target.classList.contains('toolrail-tool') || target.tabIndex === 0) {
+        return;
+      }
+      Array.prototype.slice.call(rail.querySelectorAll('.toolrail-tool')).forEach(function (b) {
+        b.tabIndex = -1;
+      });
+      target.tabIndex = 0;
+    });
+
     // APG toolbar keys, following the rail's orientation: Up/Down move
     // along a vertical rail and ArrowRight opens a flyout, while a
     // horizontal rail moves on Left/Right and opens its flyouts with
@@ -10784,6 +10949,26 @@ var DASHICON_NAMES = [
     getConfigs: loadConfigs,
     exportConfig: exportConfig,
     importConfig: importConfigPayload,
+    /**
+     * Repaint pressed state, availability and tooltips now.
+     *
+     * The rail repaints after its own actions (a press, a rebuild, a
+     * re-mount). For every other change, the only trigger is the
+     * wp.data subscription in start(). That covers every tool whose
+     * isActive() reads the editor's stores, and misses every tool whose
+     * active state changes for a reason no store sees: a pick mode
+     * canceled with Escape, a sidebar section switched in React state,
+     * a modal that closed. Those tools stayed pressed until some
+     * unrelated keystroke ticked a store (QA 2026-09-11, E1 and E2).
+     *
+     * Call this straight after the state your isActive() reads has
+     * changed. It is cheap to over-call: pressedSignature() is built
+     * first and the paint bails when nothing moved, which is the same
+     * guard the store subscription leans on every keystroke.
+     *
+     * @return {void}
+     */
+    refresh: function () { syncPressed(); },
     getActiveTool: function () { return activeTool; },
     setActiveTool: setActiveTool,
     getMode: railMode,

@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       EditRail
  * Description:       A movable, graphics-editor-style toolbar for the block editor. Click a tool, then click the canvas to insert a core block at that point.
- * Version:           1.0.2
+ * Version:           1.0.3
  * Requires at least: 6.5
  * Requires PHP:      7.4
  * Author:            Matthew Cowan
@@ -18,7 +18,7 @@ defined('ABSPATH') || exit;
 
 // Guarded so the standalone PHPUnit bootstrap can pre-define them.
 if (!defined('TOOLRAIL_VERSION')) {
-    define('TOOLRAIL_VERSION', '1.0.2');
+    define('TOOLRAIL_VERSION', '1.0.3');
 }
 if (!defined('TOOLRAIL_PLUGIN_DIR')) {
     define('TOOLRAIL_PLUGIN_DIR', plugin_dir_path(__FILE__));

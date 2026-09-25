@@ -35,7 +35,7 @@ class Test_Uninstall extends WP_UnitTestCase {
         $GLOBALS['toolrail_test_before_update']   = null;
     }
 
-    /** A row shaped like the real one on mnc4: core scopes plus ours. */
+    /** A row shaped like a real one on the test site: core scopes plus ours. */
     private function row_with_toolrail() {
         return [
             'core'           => ['editorMode' => 'visual', 'welcomeGuide' => false],

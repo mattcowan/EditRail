@@ -1374,7 +1374,10 @@ span.toolrail-ov-crumb {
 
 /* The reorder controls, revealed inside the lines when a box is picked.
    Floats at the box's top-left and may overflow a short box — the strip
-   matters more than the geometry there. */
+   matters more than the geometry there. When that overflow would cover
+   a NEIGHBOR (a narrow box in a column of narrow boxes), the JS seats
+   it beside or above the box instead, via inline left/top
+   (placeOverviewControls); data-placement names the spot. */
 .toolrail-ov-controls {
     position: absolute;
     top: 4px;
@@ -1398,6 +1401,18 @@ span.toolrail-ov-crumb {
    specificity (the wp-admin lesson) — restate it. */
 .toolrail-ov-controls[hidden] {
     display: none;
+}
+
+/* The box that holds the visible strip paints above the other selected
+   boxes. Each .is-selected box sets z-index: 1 and is its own stacking
+   context, so the strip's own z-index counts only inside its box, and a
+   selected box LATER in the document painted over the whole active box,
+   strip included. With a strip that overlaps the next member, a click
+   on the arrows then picked that member and collapsed the group. 2
+   keeps the box under the drop line and marquee: they share z-index 2
+   and are appended after the list, so they still paint on top. */
+.toolrail-ov-box.is-active {
+    z-index: 2;
 }
 
 /* Drag-to-reorder (pointer sugar — the arrows are the keyboard path).

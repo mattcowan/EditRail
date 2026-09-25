@@ -49,7 +49,7 @@ There is no build step. The plugin ships its source JS and CSS unchanged.
 | `screenshot-1.png` … | The screenshots. Their captions are the numbered list under `== Screenshots ==` in `readme.txt`; the numbers must match. |
 | `blueprints/blueprint.json` | The Live Preview blueprint. Generated; see below. |
 
-`node scripts/screenshots.js` regenerates the screenshots against a local site (defaults to `http://typographystylist.local`; see the script header for the variables). `node scripts/wordmark.js` regenerates the icon and banner from `scripts/wordmark/wordmark.html`. `scripts/wordmark/banner.svg` is the same banner as an editable vector with live text in Inter, for a vector editor; it is a source, not a listing asset. Removing a file from `.wordpress-org/` removes it from WordPress.org on the next sync.
+`node scripts/screenshots.js` regenerates the screenshots. It uses the same site variables and defaults as the e2e suite (see "Run the e2e tests against wp-env locally"). See the script header for the other variables. `node scripts/wordmark.js` regenerates the icon and banner from `scripts/wordmark/wordmark.html`. `scripts/wordmark/banner.svg` is the same banner as an editable vector with live text in Inter, for a vector editor; it is a source, not a listing asset. Removing a file from `.wordpress-org/` removes it from WordPress.org on the next sync.
 
 ## Run the e2e tests against wp-env locally
 
@@ -57,11 +57,19 @@ There is no build step. The plugin ships its source JS and CSS unchanged.
 
 ```
 npx wp-env start
-TOOLRAIL_URL=http://localhost:8888 TOOLRAIL_ADMIN_PASS=password npm run test:e2e
+npm run test:e2e
 npx wp-env stop
 ```
 
-Without those variables the suite targets `http://mnc4.local` with `admin` / `pass`, the local development site.
+The suite and `scripts/screenshots.js` read these variables from the environment, or from a `.env` file at the repository root. A variable set on the command line wins over `.env`.
+
+| Variable | What it sets |
+|---|---|
+| `TOOLRAIL_URL` | The site root. It defaults to `http://localhost:8888`, the wp-env site. |
+| `TOOLRAIL_ADMIN_USER` | The admin login. It defaults to `admin`. |
+| `TOOLRAIL_ADMIN_PASS` | The admin password. It defaults to `password`, the wp-env default. |
+
+The default site is a loopback address, so the login cannot send a password to another machine when no variable is set. To use your own WordPress site, copy `.env.example` to `.env` and set the three values. The site you set receives the admin password. A plain `http://` URL for a host that is not local stops the login before the password is typed; use `https://`, or set `WP_ALLOW_HTTP=1` for a trusted intranet host. The NVDA journeys below apply the same rule.
 
 ## Run the screen-reader journeys locally
 
@@ -75,15 +83,15 @@ npx @guidepup/setup install nvda
 npx playwright install firefox
 ```
 
-This suite reads its variables from a `.env` file at the repository root, not from the command line. `playwright.nvda.config.js` and `tests/e2e-sr/global-setup.js` load it with `dotenv`.
+This suite reads its variables from a `.env` file at the repository root. `playwright.nvda.config.js` and `tests/e2e-sr/global-setup.js` load it with `dotenv`. A variable set on the command line wins over `.env`.
 
 | Variable | What it sets |
 |---|---|
-| `WP_BASE_URL` | The site the journeys run against. It defaults to `http://mnc4.local`. |
+| `WP_BASE_URL` | The site the journeys run against. It defaults to `http://localhost:8888`, the wp-env site. |
 | `WP_USERNAME` | The account `global-setup.js` logs in with. It has no default: the run stops without it. |
 | `WP_PASSWORD` | The password for that account. It has no default: the run stops without it. |
 
-Copy `.env.example` to `.env` and fill it in. `.env` holds a password: it is in `.gitignore` and in `.distignore`, so it stays out of git and out of the zip. A `WP_BASE_URL` that is not a local host must use HTTPS, because the login posts the password.
+Copy `.env.example` to `.env` and fill it in. `.env` holds a password: it is in `.gitignore` and in `.distignore`, so it stays out of git and out of the zip. A `WP_BASE_URL` that is not a local host must use HTTPS, because the login posts the password; `WP_ALLOW_HTTP=1` allows a trusted intranet host. The e2e suite and `scripts/screenshots.js` apply the same rule (`scripts/lib/safe-base-url.js`).
 
 The journeys write to the account they log in with, the same as the e2e suite. Each one creates a post and deletes it again. If the cleanup fails, the run prints a warning and adds a `cleanup` annotation to that test.
 

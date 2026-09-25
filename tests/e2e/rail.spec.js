@@ -3,8 +3,8 @@
  *
  * Everything runs on post-new.php and NEVER saves: armed insertion only
  * touches the unsaved editor state, so no sandbox seeding is needed and the
- * site's content is never written. (The Background Candy sandbox rule
- * applies to specs that SAVE; this one must not.)
+ * site's content is never written. (A sandbox post is for specs that
+ * SAVE; this one must not.)
  *
  * Requires the plugin ACTIVE on the target site (TOOLRAIL_URL).
  */
@@ -190,7 +190,7 @@ function canvas(page) {
  * Click the canvas in the EMPTY space below everything already laid out
  * (title and blocks), measured live — never at a fixed pixel. Fixed
  * coordinates encode one theme's layout: y=400 was empty space under
- * Background Candy's title on mnc4.local and landed ON the title/first
+ * one theme's title on the test site and landed ON the title/first
  * block under the default theme on wp-env (CI, 2026-08-28), where a
  * second click after an insert also hit the block just inserted.
  * `gap` is the distance below the lowest edge; `modifiers` pass through.
@@ -1184,7 +1184,98 @@ test.describe('registration API', () => {
  * read-mostly; the prefs test writes ONE namespaced key, which the shared
  * admin account then carries — harmless, and the key is the test's own.
  */
+/**
+ * The rule every login in this repository shares before it types the admin
+ * password (scripts/lib/safe-base-url.js, PR #36 review): plain HTTP is
+ * allowed only to a local development host. No browser needed, so it lives
+ * here instead of a second spec file (the teardown above is per file).
+ */
+test.describe('login URL check (scripts/lib/safe-base-url.js)', () => {
+  const { isLocalHost, assertSafeBaseUrl } = require('../../scripts/lib/safe-base-url');
+
+  test('plain HTTP is allowed only to a local host; HTTPS always; WP_ALLOW_HTTP=1 opts out', () => {
+    // Local development hosts, including the wp-env default.
+    ['localhost', '127.0.0.1', '::1', '[::1]', '10.0.0.5', '192.168.1.20', '172.16.0.1',
+      'mysite.local', 'site.test', 'editrail', 'host.docker.internal'].forEach((h) => {
+      expect(isLocalHost(h), h).toBe(true);
+    });
+    // Public-looking hosts, and a near miss on the private 172.16/12 range.
+    ['example.com', 'wp.example.org', '8.8.8.8', '172.32.0.1', ''].forEach((h) => {
+      expect(isLocalHost(h), h).toBe(false);
+    });
+
+    expect(() => assertSafeBaseUrl('http://localhost:8888', 'TOOLRAIL_URL')).not.toThrow();
+    expect(() => assertSafeBaseUrl('https://wp.example.org', 'TOOLRAIL_URL')).not.toThrow();
+    // The message names the variable that set the URL.
+    expect(() => assertSafeBaseUrl('http://wp.example.org', 'TOOLRAIL_URL')).toThrow(/^TOOLRAIL_URL uses plain HTTP for a non-local host \(wp\.example\.org\)/);
+
+    const before = process.env.WP_ALLOW_HTTP;
+    try {
+      process.env.WP_ALLOW_HTTP = '1';
+      expect(() => assertSafeBaseUrl('http://wp.example.org', 'TOOLRAIL_URL')).not.toThrow();
+      process.env.WP_ALLOW_HTTP = 'yes';
+      expect(() => assertSafeBaseUrl('http://wp.example.org', 'TOOLRAIL_URL')).toThrow();
+    } finally {
+      if (before === undefined) {
+        delete process.env.WP_ALLOW_HTTP;
+      } else {
+        process.env.WP_ALLOW_HTTP = before;
+      }
+    }
+  });
+});
+
 test.describe('extension hooks', () => {
+  /**
+   * Apart from the rail's own actions (a press, a rebuild), the only
+   * repaint trigger is the wp.data subscription in start(), so a tool
+   * whose isActive() reads something the editor's stores never see (a
+   * pick mode canceled with Escape, a sidebar section held in React
+   * state) stayed pressed until an unrelated keystroke ticked a store. That is the mechanism behind E1 and half
+   * of E2 in the 2026-09-11 QA report, and no extension could fix it:
+   * the rail owned its own repaint schedule and exposed no way in.
+   *
+   * The whole flip is read INSIDE one evaluate so no store tick can
+   * interleave and repaint the button for us — otherwise the test
+   * could pass without refresh() doing anything.
+   */
+  test('refresh() repaints pressed state that no store change would reach (QA 2026-09-11, E1/E2)', async ({ page }) => {
+    await openNewPost(page);
+
+    await page.evaluate(() => {
+      window.e2eToolActive = false;
+      window.toolrail.registerTool({
+        id: 'e2e-refresh',
+        label: 'E2E refresh probe',
+        onActivate: () => {},
+        isActive: () => !!window.e2eToolActive,
+      });
+    });
+
+    const btn = page.locator('#toolrail-rail [data-tool="e2e-refresh"]');
+    await expect(btn).toHaveAttribute('aria-pressed', 'false');
+
+    const flip = await page.evaluate(() => {
+      const el = document.querySelector('#toolrail-rail [data-tool="e2e-refresh"]');
+      window.e2eToolActive = true;
+      const stale = el.getAttribute('aria-pressed');
+      window.toolrail.refresh();
+      return { stale, painted: el.getAttribute('aria-pressed') };
+    });
+    // stale: the state moved and nothing repainted — the defect.
+    // painted: refresh() closed the gap, in the same synchronous turn.
+    expect(flip).toEqual({ stale: 'false', painted: 'true' });
+
+    // And back the other way, so this is a repaint and not a one-way latch.
+    const unflip = await page.evaluate(() => {
+      const el = document.querySelector('#toolrail-rail [data-tool="e2e-refresh"]');
+      window.e2eToolActive = false;
+      window.toolrail.refresh();
+      return el.getAttribute('aria-pressed');
+    });
+    expect(unflip).toBe('false');
+  });
+
   test('prefs accepts only toolrail-ext: keys and string values', async ({ page }) => {
     await openNewPost(page);
 
@@ -2771,6 +2862,157 @@ test.describe('section overview (R6)', () => {
     await expect(page.locator('#toolrail-overview .toolrail-ov-controls:not([hidden])')).toHaveCount(1);
     await overviewBoxButton(page, ids[1], 'down').click();
     await expect.poll(async () => overviewContents(page)).toEqual(['P-B', 'P-C', 'P-A', 'P-D', 'P-E', 'P-F']);
+  });
+
+  /**
+   * The picked box's reorder strip is about 213x58px and lives inside
+   * the box. When the boxes are NARROW — a theme that sizes a one-line
+   * paragraph to its content — the strip spills out of its own box and
+   * over the next one, swallowing that box's pick button: the four
+   * multi-select specs above then time out on an intercepted
+   * Shift+click. That is what happened on the test site (QA 2026-09-18).
+   *
+   * The width is forced here rather than left to the theme, so the
+   * spec pins the geometry rule on any site. The second half is the
+   * CONTROL: with wide boxes the strip must stay exactly where it
+   * always was, or this fix would have moved every strip on every
+   * ordinary document.
+   */
+  test('the reorder strip moves aside when it would cover the next box, and stays inside when it would not (QA 2026-09-18)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+
+    const forceWidth = (css) => canvas(page).locator('body').evaluate((body, rule) => {
+      const doc = body.ownerDocument;
+      let style = doc.getElementById('e2e-box-width');
+      if (!style) {
+        style = doc.createElement('style');
+        style.id = 'e2e-box-width';
+        doc.head.appendChild(style);
+      }
+      style.textContent = '.is-root-container > [data-block] {' + rule + '}';
+    }, css);
+
+    // --- Narrow: the strip cannot fit inside its own box. ---
+    await forceWidth('width: 90px !important; max-width: 90px !important;');
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    await overviewBoxButton(page, ids[0], 'pick').click();
+
+    const strip = page.locator('#toolrail-overview .toolrail-ov-controls:not([hidden])');
+    await expect(strip).toHaveCount(1);
+    expect(await strip.getAttribute('data-placement')).not.toBe('inside');
+
+    // What the failing specs actually needed: the NEXT box's pick
+    // button is the element at its own center, so a click reaches it.
+    const atCenter = await page.evaluate((id) => {
+      const btn = document.querySelector(
+        '#toolrail-overview .toolrail-ov-box[data-clientid="' + id + '"] [data-ov-action="pick"]'
+      );
+      const r = btn.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return hit === btn;
+    }, ids[1]);
+    expect(atCenter).toBe(true);
+
+    // And the gesture that used to time out completes.
+    await overviewBoxButton(page, ids[1], 'pick').click({ modifiers: ['Shift'], timeout: 5000 });
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+
+    // --- Control: wide boxes keep the strip where it has always been. ---
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#toolrail-overview')).toHaveCount(0);
+    await forceWidth('min-width: 620px !important;');
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await overviewBoxButton(page, ids[0], 'pick').click();
+    const wideStrip = page.locator('#toolrail-overview .toolrail-ov-controls:not([hidden])');
+    await expect(wideStrip).toHaveCount(1);
+    expect(await wideStrip.getAttribute('data-placement')).toBe('inside');
+  });
+
+  /**
+   * Code review 2026-09-22, finding 1. Each selected box sets z-index: 1
+   * and so is its own stacking context; the strip's z-index counts only
+   * inside its box. When the active box has a selected member directly
+   * below it — pick P-B, then Shift+click P-A: the clicked box becomes
+   * active, and a marquee makes the topmost member active too — that
+   * later member painted over the whole active box, strip included.
+   * When the strip stays inside (a wide box, a partial overlap) the
+   * lower half of the arrows then sat under that member's pick button,
+   * and a click picked it and collapsed the group.
+   *
+   * Tight margins force the overlap on any theme, and the preconditions
+   * are asserted so the test cannot pass on a layout with no overlap.
+   */
+  test('the active box\'s strip paints above a later selected member it overlaps (review 2026-09-22)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+    await canvas(page).locator('body').evaluate((body) => {
+      const style = body.ownerDocument.createElement('style');
+      style.textContent = '.is-root-container > [data-block] {'
+        + ' min-width: 620px !important; margin-top: 4px !important; margin-bottom: 0 !important; }';
+      body.ownerDocument.head.appendChild(style);
+    });
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    await overviewBoxButton(page, ids[1], 'pick').click();
+    await overviewBoxButton(page, ids[0], 'pick').click({ modifiers: ['Shift'] });
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+
+    const probe = await page.evaluate((id1) => {
+      const strip = document.querySelector('#toolrail-overview .toolrail-ov-controls:not([hidden])');
+      const next = document.querySelector('#toolrail-overview .toolrail-ov-box[data-clientid="' + id1 + '"]');
+      const s = strip.getBoundingClientRect();
+      const n = next.getBoundingClientRect();
+      const overlaps = s.bottom > n.top && s.top < n.bottom && s.right > n.left && s.left < n.right;
+      // Every enabled strip button must be the element at its own
+      // center AND just above its bottom edge — the part that overlaps.
+      // The box-to-box overlap above is not enough on its own: on a
+      // theme with taller paragraphs only the strip's bottom padding
+      // reaches the next box, and then no sampled point lands on it and
+      // the test would pass with the fix reverted. So count the points
+      // that fall inside the next box, and the buttons checked.
+      const buried = [];
+      let checked = 0;
+      let pointsInNext = 0;
+      strip.querySelectorAll('button:not([disabled])').forEach((btn) => {
+        checked += 1;
+        const r = btn.getBoundingClientRect();
+        [r.top + r.height / 2, r.bottom - 2].forEach((y) => {
+          const x = r.left + r.width / 2;
+          if (x > n.left && x < n.right && y > n.top && y < n.bottom) {
+            pointsInNext += 1;
+          }
+          const hit = document.elementFromPoint(x, y);
+          if (!hit || !(hit === btn || btn.contains(hit))) {
+            buried.push(btn.dataset.ovAction + '@' + Math.round(y) + ' -> ' + (hit ? hit.className : 'null'));
+          }
+        });
+      });
+      return {
+        placement: strip.dataset.placement,
+        activeBox: strip.closest('.toolrail-ov-box').dataset.clientid,
+        belowIsSelected: next.classList.contains('is-selected'),
+        overlaps,
+        checked,
+        pointsInNext,
+        buried,
+      };
+    }, ids[1]);
+
+    // Preconditions: the reviewer's case, not some easier one.
+    expect(probe.placement).toBe('inside');
+    expect(probe.activeBox).toBe(ids[0]);
+    expect(probe.belowIsSelected).toBe(true);
+    expect(probe.overlaps).toBe(true);
+    expect(probe.checked).toBeGreaterThan(0);
+    expect(probe.pointsInNext).toBeGreaterThan(0);
+    // The claim.
+    expect(probe.buried).toEqual([]);
   });
 
   test('a group selection marks every member with a shape, not a colour shift (issue #21)', async ({ page }) => {
@@ -4447,8 +4689,8 @@ test.describe('tool availability (R9) and pressed semantics (R10)', () => {
     await seedOverviewBlocks(page);
 
     // Three provider tools that pin the contract down from both sides:
-    // an onActivate panel (default canvas: false — the Background Candy
-    // case that proves "disable everything" is wrong), an onActivate
+    // an onActivate panel (default canvas: false — a theme's sidebar
+    // tool, the case that proves "disable everything" is wrong), an onActivate
     // that DECLARES it needs the canvas, and an insert tool that
     // declares it does not.
     await page.evaluate(() => {
@@ -6501,6 +6743,40 @@ test.describe('NVDA findings 2026-09-11 (1.0.2)', () => {
     const heading = page.locator('#toolrail-rail [data-tool="pin:core/heading"]');
     await expect(heading).toHaveAttribute('title', 'Heading (pinned block) — Adds a section title');
     await expect(heading).toHaveAttribute('aria-description', 'Adds a section title');
+  });
+
+  /**
+   * SR-2, traced 2026-09-22. Only the rail's arrow/Home/End handler moved
+   * the roving tab stop, so focus that reached a tool any other way — a
+   * mouse click, or a screen reader that moves focus onto the button it
+   * activates — left the stop behind on the last arrowed-to tool. Tab from
+   * the focused tool then went to that stop when it sat later in the DOM,
+   * instead of leaving the toolbar. The NVDA journey hit exactly this: End
+   * left the stop on Toolbar settings, focus was put on Paragraph, and Tab
+   * landed on Toolbar settings in focus mode too (so it was never NVDA's
+   * browse mode). The APG toolbar pattern keeps the stop on the focused
+   * item, whatever moved focus there.
+   */
+  test('SR-2: the tab stop follows focus, so Tab from a clicked tool leaves the toolbar', async ({ page }) => {
+    await openNewPost(page);
+    const rail = page.locator('#toolrail-rail');
+    const stops = () => page.evaluate(() => Array.from(document.querySelectorAll('#toolrail-rail .toolrail-tool'))
+      .filter((b) => b.tabIndex === 0).map((b) => b.dataset.tool));
+
+    // End puts the one tab stop on the LAST tool.
+    await rail.locator('[data-tool="select"]').focus();
+    await page.keyboard.press('End');
+    const last = (await stops())[0];
+    expect(last).not.toBe('pin:core/paragraph');
+
+    // A mouse click moves focus without the arrow handler.
+    await rail.locator('[data-tool="pin:core/paragraph"]').click();
+    expect(await stops()).toEqual(['pin:core/paragraph']);
+
+    // Tab leaves the toolbar instead of stopping on the old tab stop.
+    await page.keyboard.press('Tab');
+    const inRail = await page.evaluate(() => !!document.activeElement.closest('#toolrail-rail'));
+    expect(inRail).toBe(false);
   });
 
   test('SR-3: Tab stays inside the Section overview and ends on Done, never in the browser chrome', async ({ page }) => {

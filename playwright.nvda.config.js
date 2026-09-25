@@ -27,7 +27,8 @@ module.exports = defineConfig({
 
   use: {
     ...screenReaderConfig.use,
-    baseURL: process.env.WP_BASE_URL || 'http://mnc4.local',
+    // Loopback wp-env default: see tests/e2e-sr/global-setup.js.
+    baseURL: process.env.WP_BASE_URL || 'http://localhost:8888',
     storageState: 'tests/e2e-sr/auth.json',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
