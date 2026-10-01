@@ -28,14 +28,29 @@
  *   - once per run, at the end, restoreRailPrefs() puts the snapshot back.
  * The snapshot file is deleted only after a confirmed restore. A run that
  * dies first leaves it, and the next run keeps it instead of snapshotting a
- * test's leftover state.
+ * test's leftover state. There is one file per account, and it records the
+ * runner's process ID, so a second run on the same account stops at setup
+ * instead of overwriting the first run's snapshot.
  */
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 const { request } = require('@playwright/test');
 
-/** Where the e2e suite's start-of-run snapshot waits for the end-of-run restore. */
-const SNAPSHOT_FILE = path.join(__dirname, '.auth', 'rail-prefs-snapshot.json');
+/**
+ * Where both suites' start-of-run snapshots wait for the end-of-run restore:
+ * one file per account (snapshotFileFor()), in a gitignored directory.
+ */
+const SNAPSHOT_DIR = path.join(__dirname, '.auth');
+
+/** A snapshot file's name, as snapshotFileFor() builds it. */
+const SNAPSHOT_NAME = /^rail-prefs-[0-9a-f]{10}-user-\d+\.json$/;
+
+/** Where each suite kept its one snapshot before the files named an account. */
+const LEGACY_SNAPSHOT_FILES = [
+  path.join(__dirname, '.auth', 'rail-prefs-snapshot.json'),
+  path.join(__dirname, '..', 'e2e-sr', 'rail-prefs-snapshot.json'),
+];
 
 /** The rail's own keys: what a test resets. Extension keys are not touched. */
 const RAIL_PREF_KEYS = [
@@ -106,18 +121,29 @@ async function apiForPage(page) {
 }
 
 /**
+ * The logged-in account: its user ID and its whole persisted preferences
+ * object.
+ *
+ * @param {{ctx, nonce}} api From openApi() or apiForPage().
+ * @return {Promise<{id: number, prefs: Object}>}
+ */
+async function readAccount(api) {
+  const res = await api.ctx.get(USERS_ME, { headers: { 'X-WP-Nonce': api.nonce } });
+  if (!res.ok()) {
+    throw new Error(`Reading the test account failed (HTTP ${res.status()}).`);
+  }
+  const user = await res.json();
+  return { id: user.id, prefs: (user.meta && user.meta.persisted_preferences) || {} };
+}
+
+/**
  * The account's whole persisted preferences object.
  *
  * @param {{ctx, nonce}} api From openApi() or apiForPage().
  * @return {Promise<Object>}
  */
 async function readPrefs(api) {
-  const res = await api.ctx.get(USERS_ME, { headers: { 'X-WP-Nonce': api.nonce } });
-  if (!res.ok()) {
-    throw new Error(`Reading the test account failed (HTTP ${res.status()}).`);
-  }
-  const user = await res.json();
-  return (user.meta && user.meta.persisted_preferences) || {};
+  return (await readAccount(api)).prefs;
 }
 
 /** Order-independent comparison of two flat string maps. */
@@ -278,39 +304,110 @@ async function setRailScope(page, values) {
 }
 
 /**
- * Save the account's own rail settings once per run.
+ * The snapshot file for one account on one site.
+ *
+ * One file per account, not one per suite: a leftover snapshot can then
+ * never be restored into a different account (PR #38 review), and the e2e
+ * and NVDA suites share a file when they log in as the same account, so the
+ * run lock in snapshotRailPrefs() covers both suites. The site is hashed
+ * because a URL is not a safe file name.
+ *
+ * @param {string} baseURL Site root.
+ * @param {number} userId  The account's user ID.
+ * @return {string} Absolute path inside SNAPSHOT_DIR.
+ */
+function snapshotFileFor(baseURL, userId) {
+  if (!Number.isInteger(userId) || userId <= 0) {
+    throw new Error(`The test account has no usable user ID (${userId}).`);
+  }
+  const site = crypto.createHash('sha1').update(String(baseURL).replace(/\/+$/, '')).digest('hex').slice(0, 10);
+  return path.join(SNAPSHOT_DIR, `rail-prefs-${site}-user-${userId}.json`);
+}
+
+/** A snapshot file's contents, or null when it is missing or unreadable. */
+function readSnapshot(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Whether a process is running. EPERM means it exists but belongs to
+ * another user, which still counts.
+ *
+ * @param {number} pid Process ID.
+ * @return {boolean}
+ */
+function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
+}
+
+/**
+ * Save the account's own rail settings once per run, and lock them to this
+ * run.
  *
  * A snapshot left by an earlier run that never restored it is KEPT: it holds
- * the developer's real settings, and the account now holds a test's. One
- * from a different site is replaced.
+ * the developer's real settings, and the account now holds a test's. Only a
+ * snapshot of the same account on the same site is kept; another account's
+ * has its own file and is never touched.
  *
- * @param {string} file         Snapshot path (gitignored).
+ * The run lock: the snapshot records the test runner's process ID. While
+ * that process is alive, another run on the same account stops here. Two
+ * runs at once overwrote each other's snapshot on 2026-10-01: one run's
+ * teardown restored and deleted the file, the other's setup then saved the
+ * test defaults as the developer's settings, and its teardown "restored"
+ * them. A dead process means an interrupted run, and its snapshot is kept.
+ *
  * @param {string} baseURL      Site root.
  * @param {string} storageState Saved login for that site.
+ * @param {number} runnerPid    The test runner's process ID. restoreRailPrefs()
+ *                              finds the snapshot by it.
  * @param {string} tag          Log prefix, e.g. "[editrail e2e]".
  * @return {Promise<void>}
  */
-async function snapshotRailPrefs(file, baseURL, storageState, tag) {
-  if (fs.existsSync(file)) {
-    try {
-      const kept = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (kept && kept.baseURL === baseURL && kept.scope) {
-        console.log(`${tag} Keeping the rail settings saved at ${kept.takenAt} by a run that did not restore them: ${describeScope(kept.scope)}. They are restored at the end of this run.`);
-        return;
-      }
-    } catch (e) {
-      /* Unreadable: replace it below. */
-    }
-  }
+async function snapshotRailPrefs(baseURL, storageState, runnerPid, tag) {
   const api = await openApi(baseURL, storageState);
   try {
-    const prefs = await readPrefs(api);
-    const scope = prefs.toolrail || {};
+    const account = await readAccount(api);
+    const file = snapshotFileFor(baseURL, account.id);
+
+    // A snapshot from before the files named their account. Whose it is
+    // cannot be known, so stop rather than restore it into the wrong
+    // account or replace the only copy of someone's settings.
+    LEGACY_SNAPSHOT_FILES.forEach((legacy) => {
+      if (fs.existsSync(legacy)) {
+        throw new Error(`${tag} ${legacy} was left by an older test run, and it does not say which account it belongs to. If it holds the rail settings of user ${account.id} on ${baseURL}, move it to ${file}. If not, delete it. Then run the tests again.`);
+      }
+    });
+
+    const kept = fs.existsSync(file) ? readSnapshot(file) : null;
+    // A file adopted by a rename has no userId yet; its name names the account.
+    if (kept && kept.scope && kept.baseURL === baseURL && (kept.userId === undefined || kept.userId === account.id)) {
+      if (kept.runnerPid !== runnerPid && processAlive(kept.runnerPid)) {
+        throw new Error(`${tag} Another test run (process ${kept.runnerPid}) is using the rail settings of user ${account.id} on ${baseURL}. Two runs at once overwrite each other's saved settings. Wait for it to finish. If no test run is going, the process ID was reused by another program: delete the "runnerPid" line from ${file} and run again.`);
+      }
+      fs.writeFileSync(file, JSON.stringify({ ...kept, userId: account.id, runnerPid }, null, 2));
+      console.log(`${tag} Keeping the rail settings saved at ${kept.takenAt} by a run that did not restore them: ${describeScope(kept.scope)}. They are restored at the end of this run.`);
+      return;
+    }
+
+    // Nothing kept (or an unreadable file): save the account as it is now.
+    const scope = account.prefs.toolrail || {};
     // Core's editor mode rides along: tests force the visual editor.
     // null records "not set" (JSON drops undefined).
-    const editorMode = prefs.core && prefs.core.editorMode !== undefined ? prefs.core.editorMode : null;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify({ takenAt: new Date().toISOString(), baseURL, scope, editorMode }, null, 2));
+    const editorMode = account.prefs.core && account.prefs.core.editorMode !== undefined ? account.prefs.core.editorMode : null;
+    fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ takenAt: new Date().toISOString(), baseURL, userId: account.id, runnerPid, scope, editorMode }, null, 2));
     console.log(`${tag} Saved your rail settings (${describeScope(scope)}). Tests run from the defaults; your settings are restored at the end.`);
   } finally {
     await api.ctx.dispose();
@@ -318,43 +415,57 @@ async function snapshotRailPrefs(file, baseURL, storageState, tag) {
 }
 
 /**
- * Put the start-of-run snapshot back, confirm it, then delete the file.
- * Test-only keys are dropped. Throws when the server will not keep it, so a
- * run that could not restore the account says so loudly, and the file stays
- * for the next run.
+ * Put this run's snapshot back, confirm it, then delete the file.
  *
- * @param {string} file         Snapshot path.
+ * The snapshot is the one that holds this run's runner process ID. Before
+ * any write, the logged-in account must be the one the snapshot names; when
+ * it is not, nothing is written and the file stays (PR #38 review). Test-only
+ * keys are dropped. Throws when the server will not keep it, so a run that
+ * could not restore the account says so loudly, and the file stays for the
+ * next run.
+ *
  * @param {string} storageState Saved login for the snapshot's site.
+ * @param {number} runnerPid    This test runner's process ID.
  * @param {string} tag          Log prefix.
  * @return {Promise<void>}
  */
-async function restoreRailPrefs(file, storageState, tag) {
-  if (!fs.existsSync(file)) {
+async function restoreRailPrefs(storageState, runnerPid, tag) {
+  if (!fs.existsSync(SNAPSHOT_DIR)) {
     return;
   }
-  const snap = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const scope = {};
-  Object.keys(snap.scope || {}).forEach((k) => {
-    if (!TEST_ONLY_KEY.test(k)) {
-      scope[k] = snap.scope[k];
+  const held = fs.readdirSync(SNAPSHOT_DIR)
+    .filter((name) => SNAPSHOT_NAME.test(name))
+    .map((name) => ({ file: path.join(SNAPSHOT_DIR, name), snap: readSnapshot(path.join(SNAPSHOT_DIR, name)) }))
+    .filter((s) => s.snap && s.snap.runnerPid === runnerPid);
+  // None: this run's setup stopped before it saved anything.
+  for (const { file, snap } of held) {
+    const scope = {};
+    Object.keys(snap.scope || {}).forEach((k) => {
+      if (!TEST_ONLY_KEY.test(k)) {
+        scope[k] = snap.scope[k];
+      }
+    });
+    const api = await openApi(snap.baseURL, storageState);
+    try {
+      const account = await readAccount(api);
+      if (account.id !== snap.userId) {
+        throw new Error(`${tag} Not restored: ${file} holds the rail settings of user ${snap.userId}, but this run is logged in as user ${account.id}. The file is kept.`);
+      }
+      await writeToolrailScope(api, scope);
+      // Older snapshots have no editorMode field: leave the mode alone then.
+      if (Object.prototype.hasOwnProperty.call(snap, 'editorMode')) {
+        await writeEditorMode(api, snap.editorMode === null ? undefined : snap.editorMode);
+      }
+    } finally {
+      await api.ctx.dispose();
     }
-  });
-  const api = await openApi(snap.baseURL, storageState);
-  try {
-    await writeToolrailScope(api, scope);
-    // Older snapshots have no editorMode field: leave the mode alone then.
-    if (Object.prototype.hasOwnProperty.call(snap, 'editorMode')) {
-      await writeEditorMode(api, snap.editorMode === null ? undefined : snap.editorMode);
-    }
-  } finally {
-    await api.ctx.dispose();
+    fs.unlinkSync(file);
+    console.log(`${tag} Restored your rail settings: ${describeScope(scope)}.`);
   }
-  fs.unlinkSync(file);
-  console.log(`${tag} Restored your rail settings: ${describeScope(scope)}.`);
 }
 
 module.exports = {
-  SNAPSHOT_FILE,
+  SNAPSHOT_DIR,
   RAIL_PREF_KEYS,
   BASELINE,
   TEST_ONLY_KEY,

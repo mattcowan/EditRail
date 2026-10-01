@@ -4,8 +4,9 @@
  * this writes through the REST API and confirms the server copy.
  */
 const path = require('path');
-const { SNAPSHOT_FILE, restoreRailPrefs } = require('./prefs-account');
+const { restoreRailPrefs } = require('./prefs-account');
 
 module.exports = async () => {
-  await restoreRailPrefs(SNAPSHOT_FILE, path.join(__dirname, '.auth', 'admin.json'), '[editrail e2e]');
+  // The teardown runs in the runner process, whose ID auth.setup.js saved.
+  await restoreRailPrefs(path.join(__dirname, '.auth', 'admin.json'), process.pid, '[editrail e2e]');
 };

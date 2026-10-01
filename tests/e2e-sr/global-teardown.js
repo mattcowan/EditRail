@@ -8,5 +8,6 @@ const path = require('path');
 const { restoreRailPrefs } = require('../e2e/prefs-account');
 
 module.exports = async () => {
-  await restoreRailPrefs(path.join(__dirname, 'rail-prefs-snapshot.json'), path.join(__dirname, 'auth.json'), '[editrail test:sr]');
+  // The same runner process ran global-setup.js, which saved its ID.
+  await restoreRailPrefs(path.join(__dirname, 'auth.json'), process.pid, '[editrail test:sr]');
 };

@@ -69,7 +69,7 @@ The suite and `scripts/screenshots.js` read these variables from the environment
 | `TOOLRAIL_ADMIN_USER` | The admin login. It defaults to `admin`. |
 | `TOOLRAIL_ADMIN_PASS` | The admin password. It defaults to `password`, the wp-env default. |
 
-The suite changes the rail settings of the account it logs in with. It saves your own settings when it logs in, runs every test from the defaults, and restores your settings when the run ends. It prints what it saved and what it restored. If a run stops before the restore, the next run keeps the saved copy and restores it at its end.
+The suite changes the rail settings of the account it logs in with. It saves your own settings when it logs in, runs every test from the defaults, and restores your settings when the run ends. It prints what it saved and what it restored. If a run stops before the restore, the next run keeps the saved copy and restores it at its end. The saved copy is one file per account in `tests/e2e/.auth/`, and the restore writes only to the account that the file names. Run one suite at a time on one account: a run stops at login while another run (e2e or NVDA) is using the same account, because two runs at once overwrite each other's saved copy.
 
 The default site is a loopback address, so the login cannot send a password to another machine when no variable is set. To use your own WordPress site, copy `.env.example` to `.env` and set the three values. The site you set receives the admin password. A plain `http://` URL for a host that is not local stops the login before the password is typed; use `https://`, or set `WP_ALLOW_HTTP=1` for a trusted intranet host. The NVDA journeys below apply the same rule.
 
