@@ -3229,9 +3229,45 @@ var DASHICON_NAMES = [
   }
 
   /**
+   * The selected block a keyboard insert REPLACES, or null. Core's inserter
+   * replaces a lone selected block that is an unmodified default block
+   * (the empty paragraph Enter leaves behind) instead of inserting after it
+   * (block-editor's onInsertBlocks, measured on WP 7.1). The keyboard
+   * insert anchors on the selection the same way, so it does the same
+   * (review 2026-10-01, owner decision the same day). The armed click does
+   * not: it anchors on the pointer, not the selection.
+   *
+   * Only when the empty block's parent accepts every block — core's
+   * replaceBlocks() silently does nothing otherwise — and when the block
+   * may be removed, so a template lock is never broken; either way the
+   * caller falls back to inserting after it.
+   *
+   * @param {Object}   sel        The core/block-editor selectors.
+   * @param {string[]} blockNames The top-level block names the tool inserts.
+   * @return {string|null} The clientId to replace.
+   */
+  function replaceableSelection(sel, blockNames) {
+    var block = typeof sel.getSelectedBlock === 'function' ? sel.getSelectedBlock() : null;
+    if (!block || typeof wp.blocks.isUnmodifiedDefaultBlock !== 'function'
+      || !wp.blocks.isUnmodifiedDefaultBlock(block, 'content')) {
+      return null;
+    }
+    if (typeof sel.canRemoveBlock === 'function' && !sel.canRemoveBlock(block.clientId)) {
+      return null;
+    }
+    var root = sel.getBlockRootClientId(block.clientId) || '';
+    if (typeof sel.canInsertBlockType === 'function'
+      && !blockNames.every(function (name) { return sel.canInsertBlockType(name, root); })) {
+      return null;
+    }
+    return block.clientId;
+  }
+
+  /**
    * Where a keyboard insert lands, as {rootClientId, index}: right after
    * the selected block (the last one of a multi-selection), inside that
-   * block's own parent — the slot core's own inserter uses. With nothing
+   * block's own parent — the slot core's own inserter uses (an empty
+   * default block is replaced instead; replaceableSelection). With nothing
    * selected, the end of the document, the same as core's inserter and an
    * armed click on the empty canvas (owner decision 2026-09-30, #37).
    *
@@ -3330,9 +3366,10 @@ var DASHICON_NAMES = [
 
     var sel = wp.data.select('core/block-editor');
     var blockNames = blocks.map(function (b) { return b.name; });
-    var point = climbToAllowedParent(sel, blockNames, keyboardInsertionPoint(sel));
+    var replaceId = replaceableSelection(sel, blockNames);
+    var point = replaceId ? null : climbToAllowedParent(sel, blockNames, keyboardInsertionPoint(sel));
     var label = toolInsertLabel(tool, blocks);
-    if (!point) {
+    if (!replaceId && !point) {
       notifyCannotInsert(label);
       return true;
     }
@@ -3342,7 +3379,12 @@ var DASHICON_NAMES = [
     // default block, absent from that click's snapshot.
     gestureGeneration++;
     preGestureIds = null;
-    wp.data.dispatch('core/block-editor').insertBlocks(blocks, point.index, point.rootClientId);
+    var dispatch = wp.data.dispatch('core/block-editor');
+    if (replaceId) {
+      dispatch.replaceBlocks(replaceId, blocks);
+    } else {
+      dispatch.insertBlocks(blocks, point.index, point.rootClientId);
+    }
 
     if (e.shiftKey) {
       speak(sprintf(
@@ -5774,7 +5816,7 @@ var DASHICON_NAMES = [
         body: [
           __('Select a tool, then click in the canvas. The tool\'s block is inserted at the click point and the toolbar returns to Select. You can also drag a tool from the toolbar into the canvas and drop it where you want it.', 'editrail'),
           __('Shift-click in the canvas to keep the tool armed for repeat inserts. Press Escape to return to Select at any time.', 'editrail'),
-          __('With the keyboard: press Enter on a tool to arm it, then press Ctrl+Enter (Cmd+Enter on a Mac), on the toolbar or in the canvas. The block goes after the selected block, or at the end of the post when no block is selected. Ctrl+Shift+Enter keeps the tool armed.', 'editrail'),
+          __('With the keyboard: press Enter on a tool to arm it, then press Ctrl+Enter (Cmd+Enter on a Mac), on the toolbar or in the canvas. The block goes after the selected block, or at the end of the post when no block is selected. A selected empty paragraph is replaced. Ctrl+Shift+Enter keeps the tool armed.', 'editrail'),
           __('While a tool is armed, the editor\'s own "+" buttons are hidden, so your click goes to the tool. A checkbox under "Inserting" in Toolbar settings turns this off.', 'editrail')
         ]
       },
@@ -9701,8 +9743,13 @@ var DASHICON_NAMES = [
       // A second press on the ARMED tool disarms it — a pressed button
       // that stays pressed when pressed again reads as stuck, and it was
       // the keyboard author's only way back besides Select (QA
-      // 2026-09-11, C8; owner decision the same day).
-      if (!tool.select && activeTool === tool.id) {
+      // 2026-09-11, C8; owner decision the same day). A parent shows as
+      // pressed while one of its flyout children is armed (syncPressed),
+      // so a press on it disarms too: arming a child returns focus here,
+      // and the press used to arm the parent instead, silently (review
+      // 2026-10-01, owner decision the same day).
+      var childArmed = !!(tool.children && tool.children.some(function (c) { return c.id === activeTool; }));
+      if (!tool.select && (activeTool === tool.id || childArmed)) {
         setActiveTool('select');
         speak(__('Tool disarmed. Select is active.', 'editrail'));
         return;

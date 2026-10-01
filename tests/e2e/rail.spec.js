@@ -440,6 +440,77 @@ test.describe('keyboard insertion (#37)', () => {
     await expect.poll(async () => await blockNames(page)).toEqual(['core/paragraph', 'core/quote', 'core/paragraph']);
   });
 
+  test('Enter on a flyout parent disarms its armed child, as the help text says', async ({ page }) => {
+    await openNewPost(page);
+    await seedTwoParagraphsSelectFirst(page);
+    await page.evaluate(() => {
+      window.toolrail.registerTool({
+        id: 'e2e-kbd-flyout-disarm',
+        label: 'E2E Keyboard Flyout Disarm',
+        parent: 'text',
+        insertBlock: 'core/quote',
+      });
+    });
+
+    await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').focus();
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('Enter');
+    // Focus is back on the parent, which shows as pressed for its child.
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveAttribute('aria-pressed', 'true');
+
+    // A second Enter disarms. It used to arm the parent instead, silently,
+    // so the next Ctrl+Enter inserted a Paragraph, not the Quote.
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#toolrail-rail [data-tool="select"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveAttribute('aria-pressed', 'false');
+    await expect.poll(() => politeText(page)).toContain('Tool disarmed. Select is active.');
+    await page.keyboard.press('Control+Enter');
+    expect(await blockNames(page)).toEqual(['core/paragraph', 'core/paragraph']);
+  });
+
+  test('a selected empty paragraph is replaced, the way core\'s inserter does', async ({ page }) => {
+    await openNewPost(page);
+    const empty = await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      const a = createBlock('core/paragraph', { content: 'A' });
+      const e = createBlock('core/paragraph');
+      window.wp.data.dispatch('core/block-editor').resetBlocks([a, e]);
+      window.wp.data.dispatch('core/block-editor').selectBlock(e.clientId);
+      return e.clientId;
+    });
+
+    await armByKeyboard(page, 'pin:core/heading');
+    await page.keyboard.press('Control+Enter');
+
+    // "A, heading" — not "A, empty paragraph, heading".
+    await expect.poll(async () => await blockNames(page)).toEqual(['core/paragraph', 'core/heading']);
+    const state = await page.evaluate((emptyId) => {
+      const sel = window.wp.data.select('core/block-editor');
+      return {
+        emptyGone: !sel.getBlock(emptyId),
+        selectedIsHeading: sel.getSelectedBlock() && sel.getSelectedBlock().name === 'core/heading',
+      };
+    }, empty);
+    expect(state).toEqual({ emptyGone: true, selectedIsHeading: true });
+    await expect.poll(() => politeText(page)).toContain('Heading inserted. Select is active.');
+  });
+
+  test('an empty paragraph that cannot be removed is kept; the block goes after it', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      const a = createBlock('core/paragraph', { content: 'A' });
+      const e = createBlock('core/paragraph', { lock: { remove: true } });
+      window.wp.data.dispatch('core/block-editor').resetBlocks([a, e]);
+      window.wp.data.dispatch('core/block-editor').selectBlock(e.clientId);
+    });
+
+    await armByKeyboard(page, 'pin:core/heading');
+    await page.keyboard.press('Control+Enter');
+
+    await expect.poll(async () => await blockNames(page)).toEqual(['core/paragraph', 'core/paragraph', 'core/heading']);
+  });
+
   test('a block no parent accepts is announced and the tool stays armed', async ({ page }) => {
     await openNewPost(page);
     await seedTwoParagraphsSelectFirst(page);

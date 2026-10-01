@@ -65,8 +65,8 @@ The plugin folder is now editrail. After a zip upgrade, delete the old toolrail 
 == Changelog ==
 
 = 1.0.4 =
-* A keyboard user can now insert an armed tool's block. Arm the tool with Enter, then press Ctrl+Enter (Cmd+Enter on a Mac) on the toolbar or in the canvas. The block goes after the selected block, or at the end of the post when no block is selected. The new block is selected, and screen readers announce the insert. Ctrl+Shift+Enter keeps the tool armed. Before, only a click in the canvas inserted the block.
-* After you arm a tool in a flyout with the keyboard, focus goes back to the toolbar button that opened the flyout. Before, focus moved to the page body.
+* A keyboard user can now insert an armed tool's block. Arm the tool with Enter, then press Ctrl+Enter (Cmd+Enter on a Mac) on the toolbar or in the canvas. The block goes after the selected block, or at the end of the post when no block is selected. A selected empty paragraph is replaced, the same as with the block inserter. The new block is selected, and screen readers announce the insert. Ctrl+Shift+Enter keeps the tool armed. Before, only a click in the canvas inserted the block.
+* After you arm a tool in a flyout with the keyboard, focus goes back to the toolbar button that opened the flyout. Before, focus moved to the page body. A press on that button now disarms the tool.
 
 = 1.0.3 =
 * Section overview: when a section's box is too narrow to hold the reorder controls, the controls now sit beside or above the box instead of over the next section. On a theme that sizes a short paragraph to its text, the controls covered the next section and you could not click it. In a group selection, the controls also stay on top of the other selected sections.

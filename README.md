@@ -10,7 +10,7 @@ The block editor's inserter is a menu: open it, find the block, and it lands whe
 
 Two things set it apart from other toolbar plugins:
 
-- **Arm, then click.** A tool stays selected until the next click in the canvas. Shift-click keeps it selected for more inserts.
+- **Arm, then click.** A tool stays selected until the next click in the canvas, or until Ctrl+Enter inserts its block. Shift-click or Ctrl+Shift+Enter keeps it selected for more inserts.
 - **Only core blocks come out.** The toolbar inserts the same blocks the inserter does. Deactivate the plugin and nothing about the content changes. Delete the plugin and it removes its own preferences from each user account.
 
 ## Requirements
@@ -67,7 +67,7 @@ Every action has a keyboard path, and screen readers hear every state change. A 
 
 **The toolbar is plain DOM inside the editor's own layout.** `assets/editor-rail.js` inserts the toolbar into the editor's skeleton, so the canvas reflows around it and is not under it. The toolbar lives outside the React tree, and a debounced MutationObserver puts it back when the editor re-renders. That is why it survives the round trip through the code editor.
 
-**A tool arms.** The active tool is a mode, not an action. The next click in the canvas resolves where the block goes, inserts it with the editor's own insert action, and returns the toolbar to Select. The saved post is what the inserter would have written. Ctrl+Enter is the keyboard form of the click. It puts the block after the selected block, which is where the inserter puts it.
+**A tool arms.** The active tool is a mode, not an action. The next click in the canvas resolves where the block goes, inserts it with the editor's own insert action, and returns the toolbar to Select. The saved post is what the inserter would have written. Ctrl+Enter is the keyboard form of the click. It puts the block after the selected block, which is where the inserter puts it. Like the inserter, it replaces a selected empty paragraph.
 
 **Preferences are per user, per site.** The toolbar position, pins, saved sets, colors and toggles go through the `core/preferences` store under the `toolrail` scope. WordPress persists that store to the user's account and preloads it into every editor page, so a setup follows the author across browsers and devices. The plugin writes no options and no post data. A localStorage fallback covers a browser whose storage fails mid-session.
 
