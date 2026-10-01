@@ -320,8 +320,27 @@ function snapshotFileFor(baseURL, userId) {
   if (!Number.isInteger(userId) || userId <= 0) {
     throw new Error(`The test account has no usable user ID (${userId}).`);
   }
-  const site = crypto.createHash('sha1').update(String(baseURL).replace(/\/+$/, '')).digest('hex').slice(0, 10);
+  const site = crypto.createHash('sha1').update(normalizeBaseURL(baseURL)).digest('hex').slice(0, 10);
   return path.join(SNAPSHOT_DIR, `rail-prefs-${site}-user-${userId}.json`);
+}
+
+/**
+ * One spelling per site, for the file name AND every comparison:
+ * "http://Site/" and "http://site" are the same site. Each suite has its
+ * own URL variable (TOOLRAIL_URL, WP_BASE_URL), so both spellings occur, and
+ * a comparison that disagreed with the file name treated a kept snapshot
+ * as someone else's (PR #38 review, round 2).
+ *
+ * @param {string} baseURL Site root.
+ * @return {string} Scheme and host in lower case, no trailing slash.
+ */
+function normalizeBaseURL(baseURL) {
+  try {
+    const u = new URL(String(baseURL));
+    return (u.origin + u.pathname).replace(/\/+$/, '');
+  } catch (e) {
+    return String(baseURL).replace(/\/+$/, '');
+  }
 }
 
 /** A snapshot file's contents, or null when it is missing or unreadable. */
@@ -331,6 +350,28 @@ function readSnapshot(file) {
   } catch (e) {
     return null;
   }
+}
+
+/**
+ * A snapshot file that exists, read once another run has finished writing
+ * it. A write is not atomic, so a second run can read a half-written file;
+ * a few short retries tell that apart from a file that is really damaged.
+ * Throws for a damaged file instead of letting a caller replace it: it may
+ * be the only copy of someone's settings.
+ *
+ * @param {string} file Snapshot path; must exist.
+ * @param {string} tag  Log prefix.
+ * @return {Promise<Object>}
+ */
+async function readSnapshotSettled(file, tag) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const snap = readSnapshot(file);
+    if (snap) {
+      return snap;
+    }
+    await pause(200);
+  }
+  throw new Error(`${tag} ${file} cannot be read. It may hold a developer's saved rail settings, so it is not replaced. Check it, then delete it, and run the tests again.`);
 }
 
 /**
@@ -367,6 +408,10 @@ function processAlive(pid) {
  * teardown restored and deleted the file, the other's setup then saved the
  * test defaults as the developer's settings, and its teardown "restored"
  * them. A dead process means an interrupted run, and its snapshot is kept.
+ * The first snapshot is created exclusively, and every claim is re-read
+ * after a pause, so two runs that start together cannot both pass. An
+ * existing file is never replaced; one that cannot be read, or that names
+ * another account or site, stops the run instead.
  *
  * @param {string} baseURL      Site root.
  * @param {string} storageState Saved login for that site.
@@ -390,24 +435,58 @@ async function snapshotRailPrefs(baseURL, storageState, runnerPid, tag) {
       }
     });
 
-    const kept = fs.existsSync(file) ? readSnapshot(file) : null;
-    // A file adopted by a rename has no userId yet; its name names the account.
-    if (kept && kept.scope && kept.baseURL === baseURL && (kept.userId === undefined || kept.userId === account.id)) {
+    const lockError = (pid) => new Error(`${tag} Another test run (process ${pid}) is using the rail settings of user ${account.id} on ${baseURL}. Two runs at once overwrite each other's saved settings. Wait for it to finish. If no test run is going, the process ID was reused by another program: delete the "runnerPid" line from ${file} and run again.`);
+
+    // Two runs can reach this point together; the file is the lock. After
+    // this run writes its process ID, a short pause and a re-read show
+    // whether another run wrote after it — then that run owns the snapshot,
+    // and this one stops.
+    const confirmOwnership = async () => {
+      await pause(300);
+      const now = readSnapshot(file);
+      if (!now || now.runnerPid !== runnerPid) {
+        throw lockError(now ? now.runnerPid : 'unknown');
+      }
+    };
+
+    // An existing file is never replaced: it is a kept snapshot, another
+    // run's lock, or a file this code cannot vouch for. Replacing any of
+    // them can destroy the only copy of a developer's settings (PR #38
+    // review, round 2).
+    if (fs.existsSync(file)) {
+      const kept = await readSnapshotSettled(file, tag);
+      // A file adopted by a rename has no userId yet; its name names the account.
+      if (!kept.scope || normalizeBaseURL(kept.baseURL) !== normalizeBaseURL(baseURL)
+        || (kept.userId !== undefined && kept.userId !== account.id)) {
+        throw new Error(`${tag} ${file} does not hold the rail settings of user ${account.id} on ${baseURL}, so it is not used or replaced. Check it, then delete it, and run the tests again.`);
+      }
       if (kept.runnerPid !== runnerPid && processAlive(kept.runnerPid)) {
-        throw new Error(`${tag} Another test run (process ${kept.runnerPid}) is using the rail settings of user ${account.id} on ${baseURL}. Two runs at once overwrite each other's saved settings. Wait for it to finish. If no test run is going, the process ID was reused by another program: delete the "runnerPid" line from ${file} and run again.`);
+        throw lockError(kept.runnerPid);
       }
       fs.writeFileSync(file, JSON.stringify({ ...kept, userId: account.id, runnerPid }, null, 2));
+      await confirmOwnership();
       console.log(`${tag} Keeping the rail settings saved at ${kept.takenAt} by a run that did not restore them: ${describeScope(kept.scope)}. They are restored at the end of this run.`);
       return;
     }
 
-    // Nothing kept (or an unreadable file): save the account as it is now.
+    // No snapshot: save the account as it is now. The file is CREATED
+    // exclusively ('wx'), so of two runs that both found no file, only one
+    // gets it; the other stops on EEXIST.
     const scope = account.prefs.toolrail || {};
     // Core's editor mode rides along: tests force the visual editor.
     // null records "not set" (JSON drops undefined).
     const editorMode = account.prefs.core && account.prefs.core.editorMode !== undefined ? account.prefs.core.editorMode : null;
     fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
-    fs.writeFileSync(file, JSON.stringify({ takenAt: new Date().toISOString(), baseURL, userId: account.id, runnerPid, scope, editorMode }, null, 2));
+    try {
+      fs.writeFileSync(file, JSON.stringify({ takenAt: new Date().toISOString(), baseURL, userId: account.id, runnerPid, scope, editorMode }, null, 2), { flag: 'wx' });
+    } catch (e) {
+      if (e.code !== 'EEXIST') {
+        throw e;
+      }
+      const other = await readSnapshotSettled(file, tag);
+      throw lockError(other.runnerPid);
+    }
+    await confirmOwnership();
     console.log(`${tag} Saved your rail settings (${describeScope(scope)}). Tests run from the defaults; your settings are restored at the end.`);
   } finally {
     await api.ctx.dispose();
