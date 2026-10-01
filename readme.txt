@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.0.3
+Stable tag: 1.0.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -12,7 +12,7 @@ A movable, graphics-editor-style toolbar for the block editor. Click a tool, the
 
 == Description ==
 
-EditRail adds a toolbar to the post editor, docked to the left edge by default, movable to any edge or floating as a palette. Selecting a tool arms it: the next click in the canvas inserts that tool's block at the click point, then the rail returns to Select (Shift-click keeps the tool armed).
+EditRail adds a toolbar to the post editor, docked to the left edge by default, movable to any edge or floating as a palette. Selecting a tool arms it: the next click in the canvas inserts that tool's block at the click point, then the rail returns to Select (Shift-click keeps the tool armed). With the keyboard, Ctrl+Enter (Cmd+Enter on a Mac) inserts the armed tool's block after the selected block.
 
 Everything the rail inserts is an ordinary core block. Deactivating this plugin changes nothing about how authored content renders or stays editable.
 
@@ -26,7 +26,7 @@ Everything the rail inserts is an ordinary core block. Deactivating this plugin 
 * Section overview: one tool zooms the canvas out and draws an outline around every top-level block, with a small name tag in the corner. Drag an outline to reorder it, or click it to reveal reorder controls inside the lines — arrows to move it, and a "Reorder inside" button to step into a section and reorder its blocks the same way, with a breadcrumb back out. Select several outlines at once — Shift+click for a range, Ctrl+click (Cmd on Mac) to add or remove one, or a rectangle dragged from empty space — and the arrows or a drag then move the whole group; locked blocks show a padlock and stay where they are. Zoom with the +/− buttons and pan long documents with the mouse wheel. Every move works by keyboard and is announced to screen readers — dragging is a shortcut, never the only way — and closing centers and selects the block you last picked, moved or stepped into (if you touched nothing, it returns you to where you were scrolled). Reordering is an ordinary editing action — the saved post is exactly what the List View would have written.
 * Save pinned arrangements as named sets, and move them between sites as small JSON files (Export/Import in Toolbar settings). A set may name blocks a site doesn't have — those stay in the set and appear when their plugin or theme is active.
 * Move the toolbar where you want it: it starts on the left edge, and can dock to the right edge (past the settings side panel), to a full-width bar across the top or the bottom, or float free as a tool palette. Drag it by the grip and release near an edge to snap it there, or pick a position in Toolbar settings. Flyouts and panels open away from the docked edge — a top toolbar opens downward, a bottom one upward.
-* Full keyboard operability: one tab stop, arrow keys, Home/End, Escape disarms. Toolbar settings and the tool flyouts close on Escape and when you tab past them, so they never sit open behind you. Arrow keys follow the toolbar's orientation — Up/Down along a vertical rail with ArrowRight opening a tool's flyout, Left/Right along a horizontal one with ArrowDown opening the flyout. Repositioning has a keyboard path of its own in Toolbar settings, so it never depends on dragging.
+* Full keyboard operability: one tab stop, arrow keys, Home/End, Escape disarms. Enter arms a tool. Then Ctrl+Enter (Cmd+Enter on a Mac), on the toolbar or in the canvas, inserts its block after the selected block, or at the end of the post when no block is selected. Ctrl+Shift+Enter keeps the tool armed. Screen readers announce the insert. Toolbar settings and the tool flyouts close on Escape and when you tab past them, so they never sit open behind you. Arrow keys follow the toolbar's orientation — Up/Down along a vertical rail with ArrowRight opening a tool's flyout, Left/Right along a horizontal one with ArrowDown opening the flyout. Repositioning has a keyboard path of its own in Toolbar settings, so it never depends on dragging.
 * Show tool names beside the icons: a "Tool names" checkbox in Toolbar settings widens a vertical or floating toolbar into icon + name rows. Icon-only toolbars ask you to learn the icons; this is the way around that. If you switch often, a second checkbox adds an expand/contract button to the toolbar itself.
 * Pick the toolbar's colors: Dark (default), Light and Gray presets, or your own background + text pair. Every preset meets the WCAG contrast minimums, and with custom colors the focus ring and pressed markers are adjusted automatically so they stay visible.
 * A Help panel ("?" next to the gear) explains inserting, pinning, moving the toolbar, the keyboard model, saved sets, and what a highlighted tool means. It never opens by itself; open it from the "?" or from Toolbar settings. You can hide the "?" from the toolbar — the panel stays available from Toolbar settings.
@@ -63,6 +63,10 @@ Its own preferences, and nothing else. The plugin stores no options and writes n
 The plugin folder is now editrail. After a zip upgrade, delete the old toolrail folder so two copies do not load. After a git deploy, activate EditRail again once in the Plugins screen. Pinned tools and saved sets are kept.
 
 == Changelog ==
+
+= 1.0.4 =
+* A keyboard user can now insert an armed tool's block. Arm the tool with Enter, then press Ctrl+Enter (Cmd+Enter on a Mac) on the toolbar or in the canvas. The block goes after the selected block, or at the end of the post when no block is selected. The new block is selected, and screen readers announce the insert. Ctrl+Shift+Enter keeps the tool armed. Before, only a click in the canvas inserted the block.
+* After you arm a tool in a flyout with the keyboard, focus goes back to the toolbar button that opened the flyout. Before, focus moved to the page body.
 
 = 1.0.3 =
 * Section overview: when a section's box is too narrow to hold the reorder controls, the controls now sit beside or above the box instead of over the next section. On a theme that sizes a short paragraph to its text, the controls covered the next section and you could not click it. In a group selection, the controls also stay on top of the other selected sections.

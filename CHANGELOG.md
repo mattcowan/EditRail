@@ -2,6 +2,12 @@
 
 Every version of EditRail (Editor Tool Rail before 1.0.1). The 0.1.x versions were development builds that were never listed on WordPress.org. The WordPress.org listing (`readme.txt`) shows only listed versions.
 
+## 1.0.4
+
+* A keyboard user can insert an armed tool's block (#37). While a tool is armed, Ctrl+Enter (Cmd+Enter on a Mac) inserts its block after the selected block (after the last block of a multi-selection), in that block's parent. With no block selected, the block goes to the end of the post, the same as core's inserter. The key works on the toolbar and in the canvas, and nowhere else, so core's Notes form keeps its own Ctrl+Enter. Ctrl+Shift+Enter keeps the tool armed. A parent that refuses the block is handled the same as for a click: the insert moves up to the first parent that accepts it, or the toolbar says the block cannot be inserted and stays armed. The new block is selected, and the insert is announced ("Heading inserted. Select is active."). Before, the canvas click was the only insert, so a tool armed with Enter was a dead end for keyboard and screen-reader users. Enter still arms and a second Enter still disarms, so the insert has its own key instead of a guess about how the arming press was made.
+* Arming a flyout tool now returns focus to the toolbar button that opened the flyout. The flyout closed without moving focus, and its menu was removed from the page, so focus fell to the page body. Tools with an `onActivate` action are unchanged, because the action can move focus itself.
+* The help panel describes the keyboard insert under "Inserting with a tool" and "Keyboard".
+
 ## 1.0.3
 
 * Section overview: the picked section's reorder controls are seated where they obstruct no other section's box. The strip is about 213x58px and sat inside the box's top-left corner, so on a layout with narrow boxes — a theme whose canvas sizes a one-line paragraph to its content — it spilled over the next box and swallowed that box's pick button. It now tries inside, right, left and above, and takes the first spot that covers no other box's center (falling back to the least-covering spot). Wide boxes are unchanged.

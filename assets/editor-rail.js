@@ -3,7 +3,8 @@
  *
  * Unlike a launcher rail, tools here ARM: selecting a tool means the next
  * click in the canvas inserts that tool's block at the click point, then the
- * rail returns to Select (Shift-click keeps the tool armed). Every insertion
+ * rail returns to Select (Shift-click keeps the tool armed). Ctrl+Enter is
+ * the keyboard form of that click (insertOnKey). Every insertion
  * produces ordinary core blocks — deactivating this plugin changes nothing
  * about how authored content renders or edits.
  *
@@ -3203,13 +3204,6 @@ var DASHICON_NAMES = [
   }
 
   /**
-   * Escape disarms from inside the canvas, so the author never has to go
-   * back to the rail to put a tool down.
-   *
-   * @param {KeyboardEvent} e The canvas keydown.
-   * @return {void}
-   */
-  /**
    * Escape returns the rail to Select from ANYWHERE: the canvas, the rail
    * itself, the block toolbar, the sidebar. Until 1.0.2 only the canvas
    * document had a handler, so the keyboard author who had just armed a
@@ -3234,8 +3228,150 @@ var DASHICON_NAMES = [
     return true;
   }
 
+  /**
+   * Where a keyboard insert lands, as {rootClientId, index}: right after
+   * the selected block (the last one of a multi-selection), inside that
+   * block's own parent — the slot core's own inserter uses. With nothing
+   * selected, the end of the document, the same as core's inserter and an
+   * armed click on the empty canvas (owner decision 2026-09-30, #37).
+   *
+   * @param {Object} sel The core/block-editor selectors.
+   * @return {{rootClientId: string, index: number}}
+   */
+  function keyboardInsertionPoint(sel) {
+    var ids = typeof sel.getSelectedBlockClientIds === 'function'
+      ? sel.getSelectedBlockClientIds()
+      : [];
+    var last = ids.length ? ids[ids.length - 1] : sel.getSelectedBlockClientId();
+    if (last && sel.getBlock(last)) {
+      return {
+        rootClientId: sel.getBlockRootClientId(last) || '',
+        index: sel.getBlockIndex(last) + 1
+      };
+    }
+    return { rootClientId: '', index: sel.getBlockCount('') };
+  }
+
+  /**
+   * Whether a keydown came from a place the insert key belongs to: the
+   * rail's own region, the canvas, or nowhere (focus fell to the body).
+   * Anywhere else — the sidebar, the block toolbar, a modal — keeps its
+   * own Ctrl+Enter; core's Notes form submits on it.
+   *
+   * @param {KeyboardEvent} e The keydown.
+   * @return {boolean}
+   */
+  function insertKeyTargetAllowed(e) {
+    var t = e.target;
+    if (!t || !t.ownerDocument) {
+      return false;
+    }
+    if (t.ownerDocument !== document) {
+      return true;
+    }
+    if (t === document.body || t === document.documentElement) {
+      return true;
+    }
+    var region = document.getElementById('toolrail-region');
+    if (region && region.contains(t)) {
+      return true;
+    }
+    // A non-iframed editor keeps the canvas in the top document.
+    return !!(t.closest && t.closest('.editor-styles-wrapper'));
+  }
+
+  /**
+   * The keyboard insert (#37): while a tool is armed, Ctrl+Enter (Cmd+Enter
+   * on a Mac) inserts its block after the selected block, from the rail or
+   * from the canvas. Before this the only insert was the canvas click, so
+   * a tool armed with Enter was a dead end for a keyboard or screen-reader
+   * user. An explicit key, not a keyboard-vs-pointer guess on the arming
+   * press: screen readers in browse mode send synthetic clicks, and Enter
+   * on the armed tool is already "disarm".
+   *
+   * Otherwise the armed click's contract: Shift keeps the tool armed, and
+   * a block no parent accepts is announced while the tool STAYS armed.
+   * The insert is announced too; core's insertBlocks() says nothing.
+   *
+   * @param {KeyboardEvent} e A keydown from the canvas or the top document.
+   * @return {boolean} Whether the key was taken.
+   */
+  function insertOnKey(e) {
+    if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || e.altKey) {
+      return false;
+    }
+    // A non-iframed canvas IS the top document, so this can be bound to one
+    // document twice; the first handler to take the key wins.
+    if (e.defaultPrevented || e.repeat || e.isComposing || activeTool === 'select') {
+      return false;
+    }
+    if (openFlyout || settingsOpen || helpOpen || addDialogOpen || overviewOpen) {
+      return false;
+    }
+    if (!insertKeyTargetAllowed(e)) {
+      return false;
+    }
+    var tool = findTool(activeTool);
+    if (!isArmingTool(tool) || !toolAvailable(tool)) {
+      return false;
+    }
+
+    // Taken from here on: without preventDefault, Ctrl+Enter on a rail
+    // button would also click it — and a click on the armed tool disarms.
+    e.preventDefault();
+    e.stopPropagation();
+
+    var blocks = makeBlocksFor(tool);
+    if (!blocks.length) {
+      setActiveTool('select');
+      speak(__('Tool disarmed. Select is active.', 'editrail'));
+      return true;
+    }
+
+    var sel = wp.data.select('core/block-editor');
+    var blockNames = blocks.map(function (b) { return b.name; });
+    var point = climbToAllowedParent(sel, blockNames, keyboardInsertionPoint(sel));
+    var label = toolInsertLabel(tool, blocks);
+    if (!point) {
+      notifyCannotInsert(label);
+      return true;
+    }
+
+    // A new gesture: a sweep still pending from an earlier armed click
+    // must not judge this insert — a pinned Paragraph is an unmodified
+    // default block, absent from that click's snapshot.
+    gestureGeneration++;
+    preGestureIds = null;
+    wp.data.dispatch('core/block-editor').insertBlocks(blocks, point.index, point.rootClientId);
+
+    if (e.shiftKey) {
+      speak(sprintf(
+        /* translators: %s: block or pattern title. */
+        __('%s inserted. The tool stays armed.', 'editrail'),
+        label
+      ));
+      return true;
+    }
+    setActiveTool('select');
+    speak(sprintf(
+      /* translators: %s: block or pattern title. */
+      __('%s inserted. Select is active.', 'editrail'),
+      label
+    ));
+    return true;
+  }
+
+  /**
+   * The canvas keys: Ctrl+Enter inserts the armed tool's block, and Escape
+   * disarms, so the author never has to go back to the rail for either.
+   *
+   * @param {KeyboardEvent} e The canvas keydown.
+   * @return {void}
+   */
   function handleCanvasKeydown(e) {
-    disarmOnEscape(e);
+    if (!insertOnKey(e)) {
+      disarmOnEscape(e);
+    }
   }
 
   /**
@@ -3288,6 +3424,7 @@ var DASHICON_NAMES = [
    */
   var boundDoc = null;
   var documentEscapeBound = false;
+  var documentInsertKeyBound = false;
 
   /**
    * Remove the canvas handlers from a document bindCanvas() bound earlier.
@@ -3358,6 +3495,13 @@ var DASHICON_NAMES = [
     if (!documentEscapeBound && doc !== document) {
       documentEscapeBound = true;
       document.addEventListener('keydown', disarmOnEscape, true);
+    }
+    // The insert key (#37) reaches the rail through the top document. It is
+    // bound even when the canvas IS the top document; insertOnKey skips a
+    // key another binding already took, so the two never double-insert.
+    if (!documentInsertKeyBound) {
+      documentInsertKeyBound = true;
+      document.addEventListener('keydown', insertOnKey, true);
     }
 
     // Armed-cursor style lives INSIDE the canvas document.
@@ -3499,8 +3643,9 @@ var DASHICON_NAMES = [
       // keep announcing; only the action is inert.
       return;
     }
-    closeFlyout(false);
     if (child.onActivate) {
+      // No refocus: the action may move focus itself (a panel it opens).
+      closeFlyout(false);
       try {
         child.onActivate();
       } catch (e) {
@@ -3509,6 +3654,10 @@ var DASHICON_NAMES = [
       syncPressed(true);
       return;
     }
+    // Arming: focus goes back to the button that opened the menu. Without
+    // it, removing the menu dropped focus to the page body, so the keyboard
+    // author who armed a flyout tool had lost their place (#37).
+    closeFlyout(true);
     setActiveTool(child.id);
   }
 
@@ -5625,6 +5774,7 @@ var DASHICON_NAMES = [
         body: [
           __('Select a tool, then click in the canvas. The tool\'s block is inserted at the click point and the toolbar returns to Select. You can also drag a tool from the toolbar into the canvas and drop it where you want it.', 'editrail'),
           __('Shift-click in the canvas to keep the tool armed for repeat inserts. Press Escape to return to Select at any time.', 'editrail'),
+          __('With the keyboard: press Enter on a tool to arm it, then press Ctrl+Enter (Cmd+Enter on a Mac), on the toolbar or in the canvas. The block goes after the selected block, or at the end of the post when no block is selected. Ctrl+Shift+Enter keeps the tool armed.', 'editrail'),
           __('While a tool is armed, the editor\'s own "+" buttons are hidden, so your click goes to the tool. A checkbox under "Inserting" in Toolbar settings turns this off.', 'editrail')
         ]
       },
@@ -5656,7 +5806,8 @@ var DASHICON_NAMES = [
         title: __('Keyboard', 'editrail'),
         body: [
           __('The toolbar is one Tab stop. Arrow keys move between tools, following the toolbar\'s orientation; Home and End jump to the ends.', 'editrail'),
-          __('ArrowRight opens a tool\'s flyout on a vertical toolbar; ArrowDown opens it on a horizontal one. Escape closes any open panel.', 'editrail')
+          __('ArrowRight opens a tool\'s flyout on a vertical toolbar; ArrowDown opens it on a horizontal one. Escape closes any open panel.', 'editrail'),
+          __('Enter arms an insert tool, and a second Enter disarms it. While a tool is armed, Ctrl+Enter (Cmd+Enter on a Mac) inserts its block after the selected block.', 'editrail')
         ]
       },
       {
@@ -5670,7 +5821,7 @@ var DASHICON_NAMES = [
         // R10: the three kinds of "blue" on the rail, named. STE.
         title: __('What a highlighted tool means', 'editrail'),
         body: [
-          __('A highlighted insert tool is armed: your next click in the canvas inserts its block. Select is highlighted whenever no tool is armed.', 'editrail'),
+          __('A highlighted insert tool is armed: your next click in the canvas, or Ctrl+Enter, inserts its block. Select is highlighted whenever no tool is armed.', 'editrail'),
           __('A highlighted Section overview means that view is open, not that a tool is armed. Tools that need a canvas click are dimmed while the overview is open, and become available again when you close it.', 'editrail')
         ]
       }
@@ -9436,7 +9587,7 @@ var DASHICON_NAMES = [
    * name, in `title` as the description (SR-1, QA 2026-09-11). The help
    * panel holds the how-to. An arming tool is also draggable into the
    * canvas, carrying the payload core's own inserter sends so core's drop
-   * zone owns the rest; the keyboard path stays arm-then-click.
+   * zone owns the rest; the keyboard path stays arm, then Ctrl+Enter.
    *
    * @param {Object}      tool    A railModel() entry.
    * @param {HTMLElement} wrapper The positioned region, for flyout placing.
@@ -9509,7 +9660,8 @@ var DASHICON_NAMES = [
     // the canvas, the way core's inserter items can. The payload is the
     // one core's inserter sends, so core's drop zone owns the rest —
     // the drop line, the target, the insert — and nothing arms. The
-    // keyboard and screen-reader path stays arm-then-click.
+    // keyboard and screen-reader path stays arm, then Ctrl+Enter
+    // (insertOnKey).
     if (isArmingTool(tool)) {
       btn.draggable = true;
       btn.addEventListener('dragstart', function (e) {

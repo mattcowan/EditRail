@@ -311,6 +311,178 @@ test.describe('armed-tool insertion', () => {
   });
 });
 
+/**
+ * Two paragraphs, "A" and "B", with A selected — a keyboard insert has a
+ * known "after" to land on.
+ *
+ * @return {Promise<string[]>} The two clientIds, A first.
+ */
+async function seedTwoParagraphsSelectFirst(page) {
+  return page.evaluate(() => {
+    const { createBlock } = window.wp.blocks;
+    const a = createBlock('core/paragraph', { content: 'A' });
+    const b = createBlock('core/paragraph', { content: 'B' });
+    window.wp.data.dispatch('core/block-editor').resetBlocks([a, b]);
+    window.wp.data.dispatch('core/block-editor').selectBlock(a.clientId);
+    return [a.clientId, b.clientId];
+  });
+}
+
+/** Text of wp.a11y's polite live region (the rail's speak() writes there). */
+async function politeText(page) {
+  return page.evaluate(() => {
+    const el = document.getElementById('a11y-speak-polite');
+    return el ? el.textContent : '';
+  });
+}
+
+/** Arm a rail tool by keyboard: focus reaches it, Enter arms it. */
+async function armByKeyboard(page, toolId) {
+  await page.locator('#toolrail-rail [data-tool="' + toolId + '"]').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#toolrail-rail [data-tool="' + toolId + '"]')).toHaveAttribute('aria-pressed', 'true');
+}
+
+test.describe('keyboard insertion (#37)', () => {
+  test('Ctrl+Enter on the rail inserts after the selected block, selects it, announces it and disarms', async ({ page }) => {
+    await openNewPost(page);
+    const [a] = await seedTwoParagraphsSelectFirst(page);
+
+    await armByKeyboard(page, 'pin:core/heading');
+    await page.keyboard.press('Control+Enter');
+
+    await expect.poll(async () => await blockNames(page)).toEqual(['core/paragraph', 'core/heading', 'core/paragraph']);
+    const state = await page.evaluate((firstId) => {
+      const sel = window.wp.data.select('core/block-editor');
+      const blocks = sel.getBlocks();
+      return {
+        selected: sel.getSelectedBlockClientId(),
+        heading: blocks[1].clientId,
+        firstStill: blocks[0].clientId === firstId,
+      };
+    }, a);
+    expect(state.selected).toBe(state.heading);
+    expect(state.firstStill).toBe(true);
+    await expect.poll(() => politeText(page)).toContain('Heading inserted. Select is active.');
+    await expect(page.locator('#toolrail-rail [data-tool="select"]')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('with no block selected, the keyboard insert goes to the end of the post', async ({ page }) => {
+    await openNewPost(page);
+    await seedTwoParagraphsSelectFirst(page);
+    await page.evaluate(() => window.wp.data.dispatch('core/block-editor').clearSelectedBlock());
+
+    await armByKeyboard(page, 'pin:core/heading');
+    await page.keyboard.press('Control+Enter');
+
+    await expect.poll(async () => await blockNames(page)).toEqual(['core/paragraph', 'core/paragraph', 'core/heading']);
+  });
+
+  test('Ctrl+Shift+Enter keeps the tool armed, and the key works again from the canvas', async ({ page }) => {
+    await openNewPost(page);
+    await seedTwoParagraphsSelectFirst(page);
+
+    await armByKeyboard(page, 'pin:core/heading');
+    await page.keyboard.press('Control+Shift+Enter');
+    await expect.poll(async () => await blockNames(page)).toEqual(['core/paragraph', 'core/heading', 'core/paragraph']);
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/heading"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(() => politeText(page)).toContain('Heading inserted. The tool stays armed.');
+
+    // Core moves focus into the new block, inside the canvas iframe. The
+    // same key there inserts after it, and a plain press disarms.
+    await expect.poll(() => page.evaluate(() => document.activeElement && document.activeElement.name)).toBe('editor-canvas');
+    await page.keyboard.press('Control+Enter');
+    await expect.poll(async () => await blockNames(page)).toEqual(['core/paragraph', 'core/heading', 'core/heading', 'core/paragraph']);
+    await expect(page.locator('#toolrail-rail [data-tool="select"]')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('an extension createBlock tool inserts by keyboard only', async ({ page }) => {
+    await openNewPost(page);
+    await seedTwoParagraphsSelectFirst(page);
+    await page.evaluate(() => {
+      window.toolrail.registerTool({
+        id: 'e2e-kbd-create',
+        label: 'E2E Keyboard Create',
+        createBlock: () => window.wp.blocks.createBlock('core/quote'),
+      });
+    });
+
+    await armByKeyboard(page, 'e2e-kbd-create');
+    await page.keyboard.press('Control+Enter');
+
+    await expect.poll(async () => await blockNames(page)).toEqual(['core/paragraph', 'core/quote', 'core/paragraph']);
+    await expect.poll(() => politeText(page)).toContain('Quote inserted.');
+  });
+
+  test('a flyout tool armed by keyboard keeps focus on the rail and inserts by keyboard', async ({ page }) => {
+    await openNewPost(page);
+    await seedTwoParagraphsSelectFirst(page);
+    await page.evaluate(() => {
+      window.toolrail.registerTool({
+        id: 'e2e-kbd-flyout-child',
+        label: 'E2E Keyboard Flyout Child',
+        parent: 'text',
+        insertBlock: 'core/quote',
+      });
+    });
+
+    await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(page.locator('.toolrail-flyout')).toBeVisible();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.toolrail-flyout')).toHaveCount(0);
+
+    // The menu that held focus is gone. Focus goes back to the button that
+    // opened it, not to the page body (APG menu button).
+    expect(await page.evaluate(() => document.activeElement.dataset && document.activeElement.dataset.tool)).toBe('pin:core/paragraph');
+
+    await page.keyboard.press('Control+Enter');
+    await expect.poll(async () => await blockNames(page)).toEqual(['core/paragraph', 'core/quote', 'core/paragraph']);
+  });
+
+  test('a block no parent accepts is announced and the tool stays armed', async ({ page }) => {
+    await openNewPost(page);
+    await seedTwoParagraphsSelectFirst(page);
+    // core/column is allowed only inside core/columns, so no parent on the
+    // way up from the selected paragraph accepts it.
+    await page.evaluate(() => {
+      window.toolrail.registerTool({
+        id: 'e2e-kbd-column',
+        label: 'E2E Keyboard Column',
+        insertBlock: 'core/column',
+      });
+    });
+
+    await armByKeyboard(page, 'e2e-kbd-column');
+    await page.keyboard.press('Control+Enter');
+
+    await expect.poll(() => page.evaluate(() =>
+      window.wp.data.select('core/notices').getNotices().some((n) => n.id === 'toolrail-cannot-insert')
+    )).toBe(true);
+    expect(await blockNames(page)).toEqual(['core/paragraph', 'core/paragraph']);
+    await expect(page.locator('#toolrail-rail [data-tool="e2e-kbd-column"]')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('Ctrl+Enter with Select active inserts nothing; Enter on the armed tool still disarms', async ({ page }) => {
+    await openNewPost(page);
+    await seedTwoParagraphsSelectFirst(page);
+
+    await page.locator('#toolrail-rail [data-tool="pin:core/heading"]').focus();
+    await page.keyboard.press('Control+Enter');
+    // Nothing armed, so the key is not ours and no block appears. (What
+    // the browser does with it on a button is its own business; Escape
+    // puts the rail back to Select either way.)
+    expect(await blockNames(page)).toEqual(['core/paragraph', 'core/paragraph']);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#toolrail-rail [data-tool="select"]')).toHaveAttribute('aria-pressed', 'true');
+
+    await armByKeyboard(page, 'pin:core/heading');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#toolrail-rail [data-tool="select"]')).toHaveAttribute('aria-pressed', 'true');
+    expect(await blockNames(page)).toEqual(['core/paragraph', 'core/paragraph']);
+  });
+});
+
 test.describe('tool flyouts', () => {
   // The Shape tool — the only built-in flyout — is shelved with Phase 4,
   // so the flyout machinery is exercised the way a provider reaches it:
