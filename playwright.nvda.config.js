@@ -44,4 +44,6 @@ module.exports = defineConfig({
   ],
 
   globalSetup: require.resolve('./tests/e2e-sr/global-setup.js'),
+  // Restores the developer's own rail settings that global-setup.js saved.
+  globalTeardown: require.resolve('./tests/e2e-sr/global-teardown.js'),
 });

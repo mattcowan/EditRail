@@ -10,7 +10,7 @@ The block editor's inserter is a menu: open it, find the block, and it lands whe
 
 Two things set it apart from other toolbar plugins:
 
-- **Arm, then click.** A tool stays selected until the next click in the canvas. Shift-click keeps it selected for more inserts.
+- **Arm, then click.** A tool stays selected until the next click in the canvas, or until Ctrl+Enter inserts its block. Shift-click or Ctrl+Shift+Enter keeps it selected for more inserts.
 - **Only core blocks come out.** The toolbar inserts the same blocks the inserter does. Deactivate the plugin and nothing about the content changes. Delete the plugin and it removes its own preferences from each user account.
 
 ## Requirements
@@ -53,6 +53,7 @@ The PHP files use no feature above 7.4. The JavaScript is ES5 with no build step
 Open a post in the editor. The toolbar is on the left edge. `readme.txt` describes every control. In short:
 
 - Click a tool, then click the canvas. The block lands at the click point.
+- With the keyboard, press Enter on a tool to arm it, then Ctrl+Enter (Cmd+Enter on a Mac). The block goes after the selected block, or at the end of the post when no block is selected. Ctrl+Shift+Enter keeps the tool armed.
 - Drag a tool into the canvas to put its block where you drop it.
 - Pin any block type or pattern as a tool. Open Toolbar settings from the gear, or drag a block from the inserter or the canvas onto the toolbar.
 - Give a pinned tool your own name, description or icon with Edit beside it in Toolbar settings.
@@ -66,7 +67,7 @@ Every action has a keyboard path, and screen readers hear every state change. A 
 
 **The toolbar is plain DOM inside the editor's own layout.** `assets/editor-rail.js` inserts the toolbar into the editor's skeleton, so the canvas reflows around it and is not under it. The toolbar lives outside the React tree, and a debounced MutationObserver puts it back when the editor re-renders. That is why it survives the round trip through the code editor.
 
-**A tool arms.** The active tool is a mode, not an action. The next click in the canvas resolves where the block goes, inserts it with the editor's own insert action, and returns the toolbar to Select. The saved post is what the inserter would have written.
+**A tool arms.** The active tool is a mode, not an action. The next click in the canvas resolves where the block goes, inserts it with the editor's own insert action, and returns the toolbar to Select. The saved post is what the inserter would have written. Ctrl+Enter is the keyboard form of the click. It puts the block after the selected block, which is where the inserter puts it. Like the inserter, it replaces a selected empty paragraph.
 
 **Preferences are per user, per site.** The toolbar position, pins, saved sets, colors and toggles go through the `core/preferences` store under the `toolrail` scope. WordPress persists that store to the user's account and preloads it into every editor page, so a setup follows the author across browsers and devices. The plugin writes no options and no post data. A localStorage fallback covers a browser whose storage fails mid-session.
 
@@ -107,7 +108,7 @@ window.toolrail.registerTool({
 });
 ```
 
-A tool gives one of three actions. `insertBlock` names a block type to insert at the click point. `createBlock` is a function that returns a block. `onActivate` is a function that runs at once, with no canvas click. A tool with `insertBlock` or `createBlock` defaults to `supports.canvas: true`. An `onActivate` tool defaults to `false`. While a mode captures the canvas, the rail dims every canvas tool, and the tool stays in the keyboard order.
+A tool gives one of three actions. `insertBlock` names a block type to insert at the click point, or after the selected block on Ctrl+Enter. `createBlock` is a function that returns a block. `onActivate` is a function that runs at once, with no canvas click. A tool with `insertBlock` or `createBlock` defaults to `supports.canvas: true`. An `onActivate` tool defaults to `false`. While a mode captures the canvas, the rail dims every canvas tool, and the tool stays in the keyboard order.
 
 `parent` accepts a slot id, a block name such as `core/paragraph`, or one of the aliases `text`, `heading`, `image` and `section`. Screen readers hear a flyout tool that has `isActive` as a checked menu item.
 

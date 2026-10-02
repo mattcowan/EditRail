@@ -22,23 +22,10 @@ const SETTINGS = '#toolrail-region [role="dialog"][aria-labelledby="toolrail-set
 const HELP = '#toolrail-region [role="dialog"][aria-labelledby="toolrail-help-title"]';
 const OVERVIEW = '#toolrail-overview';
 
-const BASELINE = {
-  'toolrail-quick-slots': JSON.stringify(['core/group', 'core/paragraph', 'core/heading', 'core/image']),
-  'toolrail-slots-migrated': '1',
-  'toolrail-group-seeded': '1',
-};
-const RAIL_KEYS = ['toolrail-help-seen', 'toolrail-position', 'toolrail-quick-slots', 'toolrail-slot-configs', 'toolrail-slots-migrated', 'toolrail-help-hidden', 'toolrail-wide', 'toolrail-wide-toggle', 'toolrail-appearance', 'toolrail-group-seeded', 'toolrail-hide-core-inserter', 'toolrail-pin-meta', 'toolrail-set-meta'];
+// The four default pins, and the server-confirmed reset, shared with the
+// e2e suite (tests/e2e/prefs-account.js).
+const { BASELINE, setRailScope } = require('../e2e/prefs-account');
 
-/** Reset the shared account to the fresh-install baseline (the e2e suite's teardown shape). */
-async function resetPrefs(page) {
-  await page.evaluate(({ keys, base }) => {
-    keys.forEach((k) => { try { window.localStorage.removeItem(k); } catch (e) { /* ignore */ } });
-    const d = wp.data.dispatch('core/preferences');
-    keys.forEach((k) => d.set('toolrail', k, undefined));
-    Object.entries(base).forEach(([k, v]) => d.set('toolrail', k, v));
-  }, { keys: RAIL_KEYS, base: BASELINE });
-  await page.waitForTimeout(2500);
-}
 
 /**
  * What NVDA said for ONE command: the log entries added since before it.
@@ -86,6 +73,11 @@ async function activateFocused(page, nvda, openSelector, wait) {
 
 async function open(page) {
   await h.openNewPost(page);
+  // Every journey starts from the four default pins, confirmed on the
+  // server; the developer's own settings come back in global-teardown.js.
+  if (await setRailScope(page, BASELINE)) {
+    await page.reload();
+  }
   await page.waitForSelector(RAIL, { timeout: 30000 });
   await page.waitForTimeout(800);
 }
@@ -96,10 +88,10 @@ test.describe('EditRail with NVDA', () => {
     // cleanup is reported, never swallowed (review 2026-09-13, finding 6).
     // Reported, not thrown: a teardown throw would hide the journey's own
     // result.
-    const resetError = await resetPrefs(page).then(() => null, (e) => e.message);
+    // The account's rail settings are restored once, in global-teardown.js.
     const deleted = await h.deleteCurrentPost(page);
-    if (resetError || !deleted) {
-      const note = `[editrail test:sr] cleanup after "${testInfo.title}": prefs reset ${resetError ? 'FAILED: ' + resetError : 'ok'}; post ${deleted ? 'deleted (' + deleted + ')' : 'NOT deleted'}`;
+    if (!deleted) {
+      const note = `[editrail test:sr] cleanup after "${testInfo.title}": post NOT deleted`;
       console.warn(note);
       testInfo.annotations.push({ type: 'cleanup', description: note });
     }

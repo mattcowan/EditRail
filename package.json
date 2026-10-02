@@ -1,6 +1,6 @@
 {
   "name": "editrail",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "description": "EditRail — a graphics-editor-style left toolbar for the WordPress block editor.",
   "scripts": {

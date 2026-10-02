@@ -11,6 +11,7 @@ const { chromium } = require('@playwright/test');
 // The plain-HTTP rule is shared with scripts/screenshots.js and the e2e
 // login, so all three refuse the same hosts with the same message.
 const { assertSafeBaseUrl, assertSafeLoginPage } = require('../../scripts/lib/safe-base-url');
+const { snapshotRailPrefs } = require('../e2e/prefs-account');
 
 module.exports = async () => {
   const baseURL = process.env.WP_BASE_URL || 'http://localhost:8888';
@@ -39,6 +40,9 @@ module.exports = async () => {
       page.click('#wp-submit'),
     ]);
     await page.context().storageState({ path: path.join(__dirname, 'auth.json') });
+    // Save the account's own rail settings before any journey changes them.
+    // Global setup and teardown both run in the runner process.
+    await snapshotRailPrefs(baseURL, path.join(__dirname, 'auth.json'), process.pid, '[editrail test:sr]');
   } finally {
     // Always, or a failed login leaves a headless Chromium running until
     // the process exits (PR #35 review).
