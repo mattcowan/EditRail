@@ -59,6 +59,7 @@ Open a post in the editor. The toolbar is on the left edge. `readme.txt` describ
 - Give a pinned tool your own name, description or icon with Edit beside it in Toolbar settings.
 - Save pinned arrangements as named sets. Export a set as a JSON file and import it on a different site.
 - Move the toolbar to any edge, or float it. Change its colors. Show tool names beside the icons.
+- Drag the inner edge of the editor's settings sidebar to make it wider, up to 640px or half the window. The edge is also a keyboard separator: the Left and Right arrow keys change the width. A double-click, or a button in Toolbar settings, resets it to 280px.
 - Open the Section overview to zoom out, outline every top-level block, and reorder blocks by drag or by keyboard.
 
 Every action has a keyboard path, and screen readers hear every state change. A drag is a shortcut, never the only way.
@@ -69,9 +70,11 @@ Every action has a keyboard path, and screen readers hear every state change. A 
 
 **A tool arms.** The active tool is a mode, not an action. The next click in the canvas resolves where the block goes, inserts it with the editor's own insert action, and returns the toolbar to Select. The saved post is what the inserter would have written. Ctrl+Enter is the keyboard form of the click. It puts the block after the selected block, which is where the inserter puts it. Like the inserter, it replaces a selected empty paragraph.
 
-**Preferences are per user, per site.** The toolbar position, pins, saved sets, colors and toggles go through the `core/preferences` store under the `toolrail` scope. WordPress persists that store to the user's account and preloads it into every editor page, so a setup follows the author across browsers and devices. The plugin writes no options and no post data. A localStorage fallback covers a browser whose storage fails mid-session.
+**Preferences are per user, per site.** The toolbar position, pins, saved sets, colors, toggles and the settings sidebar width go through the `core/preferences` store under the `toolrail` scope. WordPress persists that store to the user's account and preloads it into every editor page, so a setup follows the author across browsers and devices. The plugin writes no options and no post data. A localStorage fallback covers a browser whose storage fails mid-session.
 
 **Delete removes the preferences.** `uninstall.php` strips the `toolrail` scope from every user's preferences on every site of a network. Each write is conditional on the value that was read, so a save from an open editor tab at the same moment survives. Deactivation keeps the preferences. The docblock of `includes/uninstall.php` gives the details.
+
+**The sidebar width is a stylesheet override.** The handle sits in the sidebar region of the editor's skeleton, next to the canvas. A width other than core's 280px sets one custom property and one body class, and the stylesheet overrides the sidebar's width from there. At 280px, and below the 782px breakpoint where core shows the sidebar full screen, nothing is overridden. The canvas and a docked toolbar are in the same flex row, so they take the space that is left.
 
 **The plugin emits nothing for the front end.** It registers one script and one stylesheet, for the post editor only. It has no REST routes, no shortcodes, no blocks of its own, and no output on the public site.
 

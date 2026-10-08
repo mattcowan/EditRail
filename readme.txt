@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.0.4
+Stable tag: 1.0.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -28,6 +28,7 @@ Everything the rail inserts is an ordinary core block. Deactivating this plugin 
 * Move the toolbar where you want it: it starts on the left edge, and can dock to the right edge (past the settings side panel), to a full-width bar across the top or the bottom, or float free as a tool palette. Drag it by the grip and release near an edge to snap it there, or pick a position in Toolbar settings. Flyouts and panels open away from the docked edge — a top toolbar opens downward, a bottom one upward.
 * Full keyboard operability: one tab stop, arrow keys, Home/End, Escape disarms. Enter arms a tool. Then Ctrl+Enter (Cmd+Enter on a Mac), on the toolbar or in the canvas, inserts its block after the selected block, or at the end of the post when no block is selected. Ctrl+Shift+Enter keeps the tool armed. Screen readers announce the insert. Toolbar settings and the tool flyouts close on Escape and when you tab past them, so they never sit open behind you. Arrow keys follow the toolbar's orientation — Up/Down along a vertical rail with ArrowRight opening a tool's flyout, Left/Right along a horizontal one with ArrowDown opening the flyout. Repositioning has a keyboard path of its own in Toolbar settings, so it never depends on dragging.
 * Show tool names beside the icons: a "Tool names" checkbox in Toolbar settings widens a vertical or floating toolbar into icon + name rows. Icon-only toolbars ask you to learn the icons; this is the way around that. If you switch often, a second checkbox adds an expand/contract button to the toolbar itself.
+* Make the editor's settings sidebar wider: drag its inner edge, up to 640 pixels or half the window. With the keyboard, Tab to the edge (the first stop in the sidebar) and use the Left and Right arrow keys; screen readers announce the width. A double-click on the edge, or "Reset to default width" in Toolbar settings, returns it to 280 pixels. The width is saved to your user account. With the sidebar closed, nothing changes.
 * Pick the toolbar's colors: Dark (default), Light and Gray presets, or your own background + text pair. Every preset meets the WCAG contrast minimums, and with custom colors the focus ring and pressed markers are adjusted automatically so they stay visible.
 * A Help panel ("?" next to the gear) explains inserting, pinning, moving the toolbar, the keyboard model, saved sets, and what a highlighted tool means. It never opens by itself; open it from the "?" or from Toolbar settings. You can hide the "?" from the toolbar — the panel stays available from Toolbar settings.
 * Tools that need a canvas click are dimmed while the Section overview is open, with the reason in their tooltip. They stay in the keyboard order and keep their names for screen readers. Tools that open a panel stay available.
@@ -45,7 +46,7 @@ Yes. Open Toolbar settings from the gear at the end of the toolbar and choose a 
 
 = What does deleting the plugin remove? =
 
-Its own preferences, and nothing else. The plugin stores no options and writes nothing into posts. Deleting it from the Plugins screen removes the pinned tools, toolbar position, saved sets and colors from every user account on the site. Deactivating it keeps them, so the toolbar comes back as you left it when you activate the plugin again. In rare cases a browser holds an older local copy of the pins, the toolbar position or the saved sets (from a session where the browser's storage failed, or from a version before 0.1.6). If you install the plugin again in that browser, that copy comes back one time. Unpin what you do not want; it does not return again.
+Its own preferences, and nothing else. The plugin stores no options and writes nothing into posts. Deleting it from the Plugins screen removes the pinned tools, toolbar position, saved sets, colors and sidebar width from every user account on the site. Deactivating it keeps them, so the toolbar comes back as you left it when you activate the plugin again. In rare cases a browser holds an older local copy of the pins, the toolbar position or the saved sets (from a session where the browser's storage failed, or from a version before 0.1.6). If you install the plugin again in that browser, that copy comes back one time. Unpin what you do not want; it does not return again.
 
 == Screenshots ==
 
@@ -63,6 +64,9 @@ Its own preferences, and nothing else. The plugin stores no options and writes n
 The plugin folder is now editrail. After a zip upgrade, delete the old toolrail folder so two copies do not load. After a git deploy, activate EditRail again once in the Plugins screen. Pinned tools and saved sets are kept.
 
 == Changelog ==
+
+= 1.0.5 =
+* Make the editor's settings sidebar wider. Drag its inner edge, or Tab to the edge and use the Left and Right arrow keys. Screen readers announce the width. A double-click on the edge, or "Reset to default width" in Toolbar settings, returns it to 280 pixels. The width is saved to your user account, and the canvas and the toolbar take the space that is left.
 
 = 1.0.4 =
 * A keyboard user can now insert an armed tool's block. Arm the tool with Enter, then press Ctrl+Enter (Cmd+Enter on a Mac) on the toolbar or in the canvas. The block goes after the selected block, or at the end of the post when no block is selected. A selected empty paragraph is replaced, the same as with the block inserter. The new block is selected, and screen readers announce the insert. Ctrl+Shift+Enter keeps the tool armed. Before, only a click in the canvas inserted the block.

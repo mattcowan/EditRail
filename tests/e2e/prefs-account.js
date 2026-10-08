@@ -67,6 +67,7 @@ const RAIL_PREF_KEYS = [
   'toolrail-hide-core-inserter',
   'toolrail-pin-meta',
   'toolrail-set-meta',
+  'toolrail-sidebar-width',
 ];
 
 /** A fresh install after its one-time migrations: the four default pins. */

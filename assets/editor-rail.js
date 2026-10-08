@@ -134,6 +134,7 @@
   var APPEARANCE_KEY = 'toolrail-appearance';
   var PIN_META_KEY = 'toolrail-pin-meta';
   var SET_META_KEY = 'toolrail-set-meta';
+  var SIDEBAR_WIDTH_KEY = 'toolrail-sidebar-width';
   var PREFS_SCOPE = 'toolrail';
   var SHAPE_FILL = '#b9b9b9';
 
@@ -719,6 +720,425 @@
     // The region's width just changed; a floating palette re-clamps so
     // widening it cannot push it off the editor.
     applyFloatPosition();
+  }
+
+  // -------------------------------------------------------------------
+  // Settings sidebar width (issue #28). A focusable separator on the
+  // sidebar's inner edge changes the width of the editor's own settings
+  // sidebar (the Post and Block tabs, and any plugin sidebar in the same
+  // slot). The width is a per-user preference, like the rail position.
+  // It is editor chrome only: nothing goes into the post.
+  //
+  // Core's markup, checked against @wordpress/interface 5.28.6 (WP 6.5),
+  // 9.x (WP 6.6-7.0) and 10.3.0, and in a WordPress 7.1.3 editor:
+  //
+  //   .interface-interface-skeleton__sidebar    region, overflow:hidden,
+  //                                             position:relative >=782px
+  //     .interface-complementary-area__fill     6.6+ only: a framer-motion
+  //                                             div that animates width
+  //       .interface-complementary-area         280px wide >=782px
+  //
+  // 6.5 and interface 10.x size the area from the stylesheet. 6.6-7.1
+  // put an inline width:280px on the area AND hold the fill at an
+  // animated inline 280px. So the stylesheet overrides the area with
+  // !important, and overrides the fill a moment after the sidebar starts
+  // to open (toolrail-sidebar-settled): a CSS transition then carries the
+  // fill from wherever core's animation is to the custom width, so the
+  // open reads as one movement. The fill must exist first, or the
+  // transition has no start value. Interface 10.x animates the fill to
+  // `auto`, so there it also follows the area. On close the fill goes to
+  // 0 through the same transition (toolrail-sidebar-closing) instead of
+  // jumping back to core's 280px first; the class comes off once core
+  // has removed the fill.
+  //
+  // With the stored width at the default, nothing is overridden: the
+  // sidebar is exactly core's. Below the 782px breakpoint core shows the
+  // sidebar full screen, so the handle hides and nothing is overridden.
+  // -------------------------------------------------------------------
+
+  var SIDEBAR_DEFAULT_WIDTH = 280;
+  var SIDEBAR_MAX_WIDTH = 640;
+  // The sidebar never takes more than this share of the window, so the
+  // canvas keeps room on a small screen.
+  var SIDEBAR_MAX_SHARE = 0.5;
+  var SIDEBAR_STEP = 10;
+  var SIDEBAR_BIG_STEP = 50;
+  var SIDEBAR_MEDIA = '(min-width: 782px)';
+  // How long after the store opens the sidebar the fill override goes
+  // on: long enough for core to render the fill (see above).
+  var SIDEBAR_SETTLE_MS = 100;
+  // Core removes the fill 300ms after a close (ANIMATION_DURATION in
+  // complementary-area); the closing override stays a little longer.
+  var SIDEBAR_CLOSE_MS = 400;
+
+  var sidebarDrag = null;
+  var sidebarDragFrame = null;
+  var sidebarSettleTimer = null;
+  var sidebarCloseTimer = null;
+  var sidebarSynced = false;
+  var sidebarLastSeen = '';
+
+  /** The widest the sidebar can be in this window. */
+  function sidebarMaxWidth() {
+    var share = Math.floor((window.innerWidth || 0) * SIDEBAR_MAX_SHARE);
+    return Math.max(SIDEBAR_DEFAULT_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, share));
+  }
+
+  /**
+   * @param {number} px A width in pixels.
+   * @return {number} The width, rounded and held between the default
+   *                  (the minimum) and sidebarMaxWidth().
+   */
+  function clampSidebarWidth(px) {
+    var n = Math.round(px);
+    if (!isFinite(n)) {
+      n = SIDEBAR_DEFAULT_WIDTH;
+    }
+    return Math.min(sidebarMaxWidth(), Math.max(SIDEBAR_DEFAULT_WIDTH, n));
+  }
+
+  /** The stored width, before the window clamps it. */
+  function storedSidebarWidth() {
+    var n = parseInt(readKey(SIDEBAR_WIDTH_KEY), 10);
+    return isFinite(n) ? n : SIDEBAR_DEFAULT_WIDTH;
+  }
+
+  /** The width to show now: a drag in progress, else the stored one. */
+  function sidebarWidth() {
+    return clampSidebarWidth(sidebarDrag ? sidebarDrag.width : storedSidebarWidth());
+  }
+
+  function sidebarRegion() {
+    return document.querySelector('.interface-interface-skeleton__sidebar');
+  }
+
+  function sidebarHandle() {
+    return document.getElementById('toolrail-sidebar-handle');
+  }
+
+  function sidebarViewportWide() {
+    return window.matchMedia ? window.matchMedia(SIDEBAR_MEDIA).matches : true;
+  }
+
+  /**
+   * Whether the store says a sidebar is open. 'core' is the scope on
+   * WP 6.6+; 6.5 used 'core/edit-post'. Null when the store is missing,
+   * so the caller falls back to the DOM alone.
+   *
+   * @return {boolean|null}
+   */
+  function sidebarStoreOpen() {
+    try {
+      var sel = wp.data.select('core/interface');
+      if (!sel || typeof sel.getActiveComplementaryArea !== 'function') {
+        return null;
+      }
+      return !!(sel.getActiveComplementaryArea('core') || sel.getActiveComplementaryArea('core/edit-post'));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * Whether the sidebar is open at a width this feature applies to, by
+   * the store alone — it changes before core renders. Falls back to the
+   * DOM where the store is missing.
+   */
+  function sidebarOpening() {
+    if (!sidebarViewportWide()) {
+      return false;
+    }
+    var stored = sidebarStoreOpen();
+    return stored === null ? sidebarOpen() : stored;
+  }
+
+  /**
+   * Whether the sidebar is open and on the page, which is when the
+   * handle shows. The store goes false the moment the author closes the
+   * sidebar, while core's close animation still shows the area.
+   */
+  function sidebarOpen() {
+    if (!sidebarViewportWide()) {
+      return false;
+    }
+    var region = sidebarRegion();
+    if (!region || !region.querySelector('.interface-complementary-area')) {
+      return false;
+    }
+    return sidebarStoreOpen() !== false;
+  }
+
+  function sidebarIsRtl(region) {
+    return window.getComputedStyle(region || document.documentElement).direction === 'rtl';
+  }
+
+  /** "400 pixels", or "280 pixels, default". */
+  function sidebarWidthText(width) {
+    return width === SIDEBAR_DEFAULT_WIDTH
+      ? sprintf(
+        /* translators: %d: the settings sidebar width in pixels. */
+        __('%d pixels, default', 'editrail'),
+        width
+      )
+      : sprintf(
+        /* translators: %d: the settings sidebar width in pixels. */
+        __('%d pixels', 'editrail'),
+        width
+      );
+  }
+
+  /**
+   * Store a new width and apply it.
+   *
+   * @param {number}  width    Requested width in pixels; clamped.
+   * @param {boolean} announce Whether to speak the result.
+   * @return {number} The width applied.
+   */
+  function setSidebarWidth(width, announce) {
+    var next = clampSidebarWidth(width);
+    writeKey(SIDEBAR_WIDTH_KEY, String(next));
+    syncSidebarWidth();
+    if (announce) {
+      speak(sprintf(
+        /* translators: %s: the width, such as "400 pixels". */
+        __('Settings sidebar width: %s.', 'editrail'),
+        sidebarWidthText(next)
+      ));
+    }
+    return next;
+  }
+
+  /**
+   * Arrow keys move the separator the way they point (the APG window
+   * splitter pattern): on a right-hand sidebar, Left makes it wider. Home
+   * and End go to the minimum and the maximum. Shift takes bigger steps.
+   */
+  function onSidebarHandleKeydown(e) {
+    if (e.key === 'Escape' && sidebarDrag) {
+      e.preventDefault();
+      e.stopPropagation();
+      endSidebarDrag(false);
+      return;
+    }
+    if (e.altKey || e.ctrlKey || e.metaKey) {
+      return;
+    }
+    var current = sidebarWidth();
+    var step = e.shiftKey ? SIDEBAR_BIG_STEP : SIDEBAR_STEP;
+    var wider = sidebarIsRtl(sidebarRegion()) ? 'ArrowRight' : 'ArrowLeft';
+    var next;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      next = current + (e.key === wider ? step : -step);
+    } else if (e.key === 'Home') {
+      next = SIDEBAR_DEFAULT_WIDTH;
+    } else if (e.key === 'End') {
+      next = sidebarMaxWidth();
+    } else {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    setSidebarWidth(next, true);
+  }
+
+  function onSidebarHandlePointerdown(e) {
+    if (e.button !== 0 || sidebarDrag) {
+      return;
+    }
+    var handle = e.currentTarget;
+    e.preventDefault();
+    handle.focus({ preventScroll: true });
+    sidebarDrag = {
+      handle: handle,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startWidth: sidebarWidth(),
+      width: sidebarWidth(),
+      rtl: sidebarIsRtl(sidebarRegion())
+    };
+    try {
+      handle.setPointerCapture(e.pointerId);
+    } catch (err) {
+      /* No capture — the move still works while the pointer stays over the handle. */
+    }
+    document.body.classList.add('toolrail-sidebar-resizing');
+    handle.addEventListener('pointermove', onSidebarHandlePointermove);
+    handle.addEventListener('pointerup', onSidebarHandlePointerup);
+    handle.addEventListener('pointercancel', onSidebarHandlePointercancel);
+  }
+
+  function onSidebarHandlePointermove(e) {
+    if (!sidebarDrag || e.pointerId !== sidebarDrag.pointerId) {
+      return;
+    }
+    var delta = sidebarDrag.rtl ? e.clientX - sidebarDrag.startX : sidebarDrag.startX - e.clientX;
+    sidebarDrag.width = clampSidebarWidth(sidebarDrag.startWidth + delta);
+    // One layout per frame: each width change reflows the canvas.
+    if (sidebarDragFrame === null) {
+      sidebarDragFrame = window.requestAnimationFrame(function () {
+        sidebarDragFrame = null;
+        syncSidebarWidth();
+      });
+    }
+  }
+
+  function onSidebarHandlePointerup(e) {
+    if (sidebarDrag && e.pointerId === sidebarDrag.pointerId) {
+      endSidebarDrag(true);
+    }
+  }
+
+  function onSidebarHandlePointercancel(e) {
+    if (sidebarDrag && e.pointerId === sidebarDrag.pointerId) {
+      endSidebarDrag(false);
+    }
+  }
+
+  /**
+   * @param {boolean} commit True stores the dragged width; false puts the
+   *                         width back where the drag started (Escape, or
+   *                         a canceled pointer).
+   */
+  function endSidebarDrag(commit) {
+    var drag = sidebarDrag;
+    if (!drag) {
+      return;
+    }
+    sidebarDrag = null;
+    if (sidebarDragFrame !== null) {
+      window.cancelAnimationFrame(sidebarDragFrame);
+      sidebarDragFrame = null;
+    }
+    drag.handle.removeEventListener('pointermove', onSidebarHandlePointermove);
+    drag.handle.removeEventListener('pointerup', onSidebarHandlePointerup);
+    drag.handle.removeEventListener('pointercancel', onSidebarHandlePointercancel);
+    try {
+      drag.handle.releasePointerCapture(drag.pointerId);
+    } catch (err) {
+      /* Already released. */
+    }
+    document.body.classList.remove('toolrail-sidebar-resizing');
+    // A click without a move (and each half of a double-click) writes
+    // nothing.
+    if (commit && drag.width !== drag.startWidth) {
+      setSidebarWidth(drag.width, true);
+    } else {
+      syncSidebarWidth();
+    }
+  }
+
+  function buildSidebarHandle() {
+    var handle = document.createElement('div');
+    handle.id = 'toolrail-sidebar-handle';
+    handle.className = 'toolrail-sidebar-handle';
+    handle.setAttribute('role', 'separator');
+    handle.setAttribute('aria-orientation', 'vertical');
+    handle.setAttribute('aria-label', __('Settings sidebar width', 'editrail'));
+    handle.setAttribute('aria-valuemin', String(SIDEBAR_DEFAULT_WIDTH));
+    handle.tabIndex = 0;
+    handle.addEventListener('keydown', onSidebarHandleKeydown);
+    handle.addEventListener('pointerdown', onSidebarHandlePointerdown);
+    handle.addEventListener('dblclick', function (e) {
+      e.preventDefault();
+      setSidebarWidth(SIDEBAR_DEFAULT_WIDTH, true);
+    });
+    return handle;
+  }
+
+  /**
+   * Bring the page in line with the stored width and the sidebar's state:
+   * the custom property and body classes the stylesheet reads, and the
+   * handle — first in the sidebar region, so it is the first Tab stop in
+   * the sidebar, between the canvas and the panel (APG window splitter).
+   * Runs from the store subscription, the mutation observer and window
+   * resizes; each run is cheap and idempotent.
+   */
+  function syncSidebarWidth() {
+    var body = document.body;
+    if (!body) {
+      return;
+    }
+    var open = sidebarOpen();
+    var opening = sidebarOpening();
+    var width = sidebarWidth();
+
+    body.style.setProperty('--toolrail-sidebar-width', width + 'px');
+    body.classList.toggle('toolrail-sidebar-sized', width !== SIDEBAR_DEFAULT_WIDTH);
+
+    if (opening) {
+      if (body.classList.contains('toolrail-sidebar-closing')) {
+        // Opened again before the close finished.
+        window.clearTimeout(sidebarCloseTimer);
+        sidebarCloseTimer = null;
+        body.classList.remove('toolrail-sidebar-closing');
+      }
+      if (!body.classList.contains('toolrail-sidebar-settled') && sidebarSettleTimer === null) {
+        if (!sidebarSynced) {
+          // Open at page load: core does not animate the first render.
+          body.classList.add('toolrail-sidebar-settled');
+        } else {
+          sidebarSettleTimer = window.setTimeout(function () {
+            sidebarSettleTimer = null;
+            if (sidebarOpening()) {
+              document.body.classList.add('toolrail-sidebar-settled');
+            }
+          }, SIDEBAR_SETTLE_MS);
+        }
+      }
+    } else {
+      if (sidebarSettleTimer !== null) {
+        window.clearTimeout(sidebarSettleTimer);
+        sidebarSettleTimer = null;
+      }
+      if (body.classList.contains('toolrail-sidebar-settled')) {
+        body.classList.remove('toolrail-sidebar-settled');
+        body.classList.add('toolrail-sidebar-closing');
+        sidebarCloseTimer = window.setTimeout(function () {
+          sidebarCloseTimer = null;
+          document.body.classList.remove('toolrail-sidebar-closing');
+        }, SIDEBAR_CLOSE_MS);
+      }
+    }
+    sidebarSynced = true;
+    sidebarLastSeen = sidebarStoreOpen() + '|' + storedSidebarWidth();
+
+    var region = sidebarRegion();
+    var handle = sidebarHandle();
+    if (!region) {
+      return;
+    }
+    if (!handle) {
+      handle = buildSidebarHandle();
+    }
+    if (handle.parentNode !== region || region.firstChild !== handle) {
+      region.insertBefore(handle, region.firstChild);
+    }
+    if (handle.hidden === open) {
+      handle.hidden = !open;
+    }
+    handle.setAttribute('aria-valuenow', String(width));
+    handle.setAttribute('aria-valuemax', String(sidebarMaxWidth()));
+    handle.setAttribute('aria-valuetext', sidebarWidthText(width));
+    var area = region.querySelector('.interface-complementary-area[id]');
+    if (area) {
+      handle.setAttribute('aria-controls', area.id);
+    } else {
+      handle.removeAttribute('aria-controls');
+    }
+  }
+
+  /**
+   * The store subscription's cheap check: a full sync only when the open
+   * state or the stored width moved. The mutation observer covers the
+   * DOM side (the area mounting a moment after the store opens it).
+   */
+  function onSidebarStoreChange() {
+    if (sidebarDrag) {
+      return;
+    }
+    if (sidebarStoreOpen() + '|' + storedSidebarWidth() !== sidebarLastSeen) {
+      syncSidebarWidth();
+    }
   }
 
   // -------------------------------------------------------------------
@@ -4322,6 +4742,45 @@ var DASHICON_NAMES = [
     return fieldset;
   }
 
+  /**
+   * Settings sidebar width (issue #28). The handle on the sidebar's edge
+   * is the control, for the pointer and the keyboard; this section says
+   * where it is, shows the width in text, and gives the reset a button.
+   */
+  function buildSidebarWidthControl() {
+    var group = document.createElement('div');
+    group.className = 'toolrail-settings-sidebarwidth';
+
+    var head = settingsRow('h3', 'toolrail-settings-subtitle');
+    head.textContent = __('Settings sidebar width', 'editrail');
+    group.appendChild(head);
+
+    var current = settingsRow('p', '');
+    current.id = 'toolrail-settings-sidebarwidth-value';
+    current.textContent = sprintf(
+      /* translators: %s: the width, such as "400 pixels". */
+      __('Width: %s.', 'editrail'),
+      sidebarWidthText(sidebarWidth())
+    );
+    group.appendChild(current);
+
+    var row = settingsRow('div', 'toolrail-settings-helprow');
+    var reset = settingsButton(__('Reset to default width', 'editrail'), function () {
+      setSidebarWidth(SIDEBAR_DEFAULT_WIDTH, true);
+      refreshSettings('#toolrail-settings-sidebarwidth-reset');
+    }, '');
+    reset.id = 'toolrail-settings-sidebarwidth-reset';
+    reset.setAttribute('aria-describedby', current.id);
+    row.appendChild(reset);
+    group.appendChild(row);
+
+    var hint = settingsRow('p', 'toolrail-settings-empty');
+    hint.textContent = __('Drag the inner edge of the settings sidebar to make it wider. With the keyboard, Tab to the edge (the first stop in the sidebar) and use the Left and Right arrow keys. Double-click the edge to reset it.', 'editrail');
+    group.appendChild(hint);
+
+    return group;
+  }
+
   /** One line reporting the custom pair's contrast, warning below 4.5:1
       — the pair is applied either way (the author's choice, stated
       honestly), with the ring and pressed markers auto-derived so state
@@ -5378,6 +5837,8 @@ var DASHICON_NAMES = [
     node.appendChild(buildWideControl());
     node.appendChild(settingsDivider());
     node.appendChild(buildAppearanceControl());
+    node.appendChild(settingsDivider());
+    node.appendChild(buildSidebarWidthControl());
 
     // --- Saved sets ---
     node.appendChild(settingsDivider());
@@ -5842,6 +6303,21 @@ var DASHICON_NAMES = [
         body: [
           __('Drag the toolbar by its grip and release near an edge to dock it there, or let go anywhere to float it over the editor.', 'editrail'),
           __('The keyboard path: pick a position under "Toolbar position" in Toolbar settings.', 'editrail')
+        ]
+      },
+      {
+        title: __('Settings sidebar width', 'editrail'),
+        body: [
+          sprintf(
+            /* translators: %d: the widest the settings sidebar can be, in pixels. */
+            __('Drag the inner edge of the editor\'s settings sidebar to make it wider, up to %d pixels or half the window. The width is saved to your account.', 'editrail'),
+            SIDEBAR_MAX_WIDTH
+          ),
+          sprintf(
+            /* translators: %d: the default settings sidebar width, in pixels. */
+            __('With the keyboard: Tab to the edge, the first stop in the sidebar, and use the Left and Right arrow keys. Shift takes bigger steps, and Home and End go to the narrowest and widest. Double-click the edge, or use "Reset to default width" in Toolbar settings, to go back to %d pixels.', 'editrail'),
+            SIDEBAR_DEFAULT_WIDTH
+          )
         ]
       },
       {
@@ -9606,11 +10082,13 @@ var DASHICON_NAMES = [
     setDock(startDock, { x: startX, y: startY });
   }
 
-  // Keep a floating rail inside the editor when the window resizes.
+  // Keep a floating rail inside the editor when the window resizes, and
+  // re-clamp the settings sidebar, whose maximum follows the window.
   window.addEventListener('resize', function () {
     if (position.dock === 'float') {
       applyFloatPosition();
     }
+    syncSidebarWidth();
   });
 
   // -------------------------------------------------------------------
@@ -10961,8 +11439,12 @@ var DASHICON_NAMES = [
     if (wp.data.subscribe) {
       // Wrapped, not passed by reference: a subscriber must never receive
       // an argument that could read as `force` and defeat the change guard.
-      wp.data.subscribe(function () { syncPressed(); });
+      wp.data.subscribe(function () {
+        syncPressed();
+        onSidebarStoreChange();
+      });
     }
+    syncSidebarWidth();
   }
 
   /**
@@ -10986,6 +11468,7 @@ var DASHICON_NAMES = [
         mount();
         syncLayer();
         healOverview();
+        syncSidebarWidth();
       }, 100);
     });
     observer.observe(document.body, { childList: true, subtree: true });

@@ -1712,6 +1712,124 @@ body.toolrail-hides-inserter .block-editor-block-list__block-side-inserter-popov
     display: none !important;
 }
 
+/* --- Settings sidebar width (issue #28) ---
+   editor-rail.js keeps --toolrail-sidebar-width on the body and adds
+   .toolrail-sidebar-sized only when the stored width is not core's
+   280px, so at the default nothing here applies. The area carries an
+   inline width:280px on WP 6.6-7.1, so it needs !important. The fill
+   (6.6+) holds an animated inline width; it is overridden a moment
+   after the sidebar starts to open (.toolrail-sidebar-settled), and
+   the transition carries it from core's animation to the custom width.
+   On close (.toolrail-sidebar-closing) the same transition takes it to
+   0, instead of a jump back to 280px before core's close animation.
+   Below core's own breakpoint the sidebar is full screen and is left
+   alone. */
+@media (min-width: 782px) {
+    body.toolrail-sidebar-sized .interface-interface-skeleton__sidebar .interface-complementary-area {
+        width: var(--toolrail-sidebar-width, 280px) !important;
+    }
+
+    /* Core's open animation aims at 280px on 6.6-7.1; the transition
+       takes over from it, so the open reads as one movement instead of
+       a stop and a jump. Not while dragging, where the edge must follow
+       the pointer. */
+    body.toolrail-sidebar-sized.toolrail-sidebar-settled .interface-interface-skeleton__sidebar .interface-complementary-area__fill {
+        width: var(--toolrail-sidebar-width, 280px) !important;
+        transition: width 0.2s ease-out;
+    }
+
+    body.toolrail-sidebar-sized.toolrail-sidebar-closing .interface-interface-skeleton__sidebar .interface-complementary-area__fill {
+        width: 0 !important;
+        transition: width 0.25s ease-in;
+    }
+
+    body.toolrail-sidebar-resizing .interface-interface-skeleton__sidebar .interface-complementary-area__fill {
+        transition: none;
+    }
+}
+
+@media (min-width: 782px) and (prefers-reduced-motion: reduce) {
+    body.toolrail-sidebar-sized.toolrail-sidebar-settled .interface-interface-skeleton__sidebar .interface-complementary-area__fill,
+    body.toolrail-sidebar-sized.toolrail-sidebar-closing .interface-interface-skeleton__sidebar .interface-complementary-area__fill {
+        transition: none;
+    }
+}
+
+/* The separator on the sidebar's inner edge: an 8px hit strip over the
+   panel's padding, drawn as a 2px line in the admin color on hover,
+   while dragging and on keyboard focus. Logical properties put it on
+   the left in LTR and on the right in RTL, which is the edge next to the
+   canvas in both. */
+.toolrail-sidebar-handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    inset-inline-start: 0;
+    z-index: 2;
+    width: 8px;
+    cursor: col-resize;
+    touch-action: none;
+}
+
+.toolrail-sidebar-handle[hidden] {
+    display: none;
+}
+
+.toolrail-sidebar-handle::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    inset-inline-start: 0;
+    width: 2px;
+    background: transparent;
+}
+
+.toolrail-sidebar-handle:hover::after,
+body.toolrail-sidebar-resizing .toolrail-sidebar-handle::after,
+.toolrail-sidebar-handle:focus-visible::after {
+    background: var(--wp-admin-theme-color, #3858e9);
+}
+
+.toolrail-sidebar-handle:focus {
+    outline: none;
+}
+
+/* Keyboard focus: the line plus a ring around the whole strip, inset
+   because the sidebar region clips anything outside it. */
+.toolrail-sidebar-handle:focus-visible {
+    box-shadow: inset 0 0 0 2px var(--wp-admin-theme-color, #3858e9);
+}
+
+/* While dragging, the pointer keeps the resize cursor over the canvas
+   and no text is selected. */
+body.toolrail-sidebar-resizing,
+body.toolrail-sidebar-resizing * {
+    cursor: col-resize !important;
+    user-select: none !important;
+}
+
+@media (max-width: 781px) {
+    .toolrail-sidebar-handle {
+        display: none;
+    }
+}
+
+/* Forced colors erase backgrounds and box-shadows, so the line and the
+   ring are borders and an outline in system colors here. */
+@media (forced-colors: active) {
+    .toolrail-sidebar-handle:hover::after,
+    body.toolrail-sidebar-resizing .toolrail-sidebar-handle::after,
+    .toolrail-sidebar-handle:focus-visible::after {
+        border-inline-start: 2px solid Highlight;
+    }
+
+    .toolrail-sidebar-handle:focus-visible {
+        outline: 2px solid Highlight;
+        outline-offset: -2px;
+    }
+}
+
 /* --- Pin metadata (1.0.1): the inline Edit form under a pinned row, and
    the author-chosen text glyph on a tool button. --- */
 
