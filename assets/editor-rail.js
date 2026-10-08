@@ -135,6 +135,7 @@
   var PIN_META_KEY = 'toolrail-pin-meta';
   var SET_META_KEY = 'toolrail-set-meta';
   var SIDEBAR_WIDTH_KEY = 'toolrail-sidebar-width';
+  var SIDEBAR_RESIZE_KEY = 'toolrail-sidebar-resize';
   var PREFS_SCOPE = 'toolrail';
   var SHAPE_FILL = '#b9b9b9';
 
@@ -729,6 +730,12 @@
   // slot). The width is a per-user preference, like the rail position.
   // It is editor chrome only: nothing goes into the post.
   //
+  // OPT-IN (owner decision 2026-10-08): the feature is off until the
+  // author turns it on in Toolbar settings. It reaches into core's own
+  // sidebar, not the toolbar, and the handle adds a Tab stop to the
+  // sidebar. While it is off there is no handle and no override, even
+  // with a stored width.
+  //
   // Core's markup, checked against @wordpress/interface 5.28.6 (WP 6.5),
   // 9.x (WP 6.6-7.0) and 10.3.0, and in a WordPress 7.1.3 editor:
   //
@@ -777,6 +784,23 @@
   var sidebarCloseTimer = null;
   var sidebarSynced = false;
   var sidebarLastSeen = '';
+
+  /** Whether the author turned the feature on (off by default). */
+  function isSidebarResizeOn() {
+    return readKey(SIDEBAR_RESIZE_KEY) === '1';
+  }
+
+  /**
+   * Turn the feature on or off. Off takes the handle and every override
+   * away at once, so the sidebar is exactly core's.
+   *
+   * @param {boolean} on Whether the handle shows.
+   * @return {void}
+   */
+  function setSidebarResize(on) {
+    writeKey(SIDEBAR_RESIZE_KEY, on ? '1' : '0');
+    syncSidebarWidth();
+  }
 
   /** The widest the sidebar can be in this window. */
   function sidebarMaxWidth() {
@@ -1058,6 +1082,25 @@
     if (!body) {
       return;
     }
+    var firstSync = !sidebarSynced;
+    sidebarSynced = true;
+    sidebarLastSeen = sidebarSignature();
+    if (!isSidebarResizeOn()) {
+      if (sidebarDrag) {
+        endSidebarDrag(false);
+      }
+      window.clearTimeout(sidebarSettleTimer);
+      window.clearTimeout(sidebarCloseTimer);
+      sidebarSettleTimer = null;
+      sidebarCloseTimer = null;
+      body.classList.remove('toolrail-sidebar-sized', 'toolrail-sidebar-settled', 'toolrail-sidebar-closing');
+      body.style.removeProperty('--toolrail-sidebar-width');
+      var stale = sidebarHandle();
+      if (stale) {
+        stale.remove();
+      }
+      return;
+    }
     var open = sidebarOpen();
     var opening = sidebarOpening();
     var width = sidebarWidth();
@@ -1073,7 +1116,7 @@
         body.classList.remove('toolrail-sidebar-closing');
       }
       if (!body.classList.contains('toolrail-sidebar-settled') && sidebarSettleTimer === null) {
-        if (!sidebarSynced) {
+        if (firstSync) {
           // Open at page load: core does not animate the first render.
           body.classList.add('toolrail-sidebar-settled');
         } else {
@@ -1099,8 +1142,6 @@
         }, SIDEBAR_CLOSE_MS);
       }
     }
-    sidebarSynced = true;
-    sidebarLastSeen = sidebarStoreOpen() + '|' + storedSidebarWidth();
 
     var region = sidebarRegion();
     var handle = sidebarHandle();
@@ -1127,6 +1168,11 @@
     }
   }
 
+  /** What the store subscription compares between runs. */
+  function sidebarSignature() {
+    return readKey(SIDEBAR_RESIZE_KEY) + '|' + sidebarStoreOpen() + '|' + storedSidebarWidth();
+  }
+
   /**
    * The store subscription's cheap check: a full sync only when the open
    * state or the stored width moved. The mutation observer covers the
@@ -1136,7 +1182,7 @@
     if (sidebarDrag) {
       return;
     }
-    if (sidebarStoreOpen() + '|' + storedSidebarWidth() !== sidebarLastSeen) {
+    if (sidebarSignature() !== sidebarLastSeen) {
       syncSidebarWidth();
     }
   }
@@ -4755,6 +4801,29 @@ var DASHICON_NAMES = [
     head.textContent = __('Settings sidebar width', 'editrail');
     group.appendChild(head);
 
+    var onRow = settingsRow('label', 'toolrail-settings-positionrow');
+    var onInput = document.createElement('input');
+    onInput.type = 'checkbox';
+    onInput.id = 'toolrail-settings-sidebarresize';
+    onInput.checked = isSidebarResizeOn();
+    onInput.addEventListener('change', function () {
+      setSidebarResize(onInput.checked);
+      // The width and reset rows show only while it is on.
+      refreshSettings('#toolrail-settings-sidebarresize');
+    });
+    var onText = settingsRow('span', '');
+    onText.textContent = __('Let me drag the settings sidebar wider', 'editrail');
+    onRow.appendChild(onInput);
+    onRow.appendChild(onText);
+    group.appendChild(onRow);
+
+    if (!isSidebarResizeOn()) {
+      var offHint = settingsRow('p', 'toolrail-settings-empty');
+      offHint.textContent = __('Adds a handle to the inner edge of the editor\'s settings sidebar (the Post and Block tabs). Off, the sidebar is the editor\'s own.', 'editrail');
+      group.appendChild(offHint);
+      return group;
+    }
+
     var current = settingsRow('p', '');
     current.id = 'toolrail-settings-sidebarwidth-value';
     current.textContent = sprintf(
@@ -6310,7 +6379,7 @@ var DASHICON_NAMES = [
         body: [
           sprintf(
             /* translators: %d: the widest the settings sidebar can be, in pixels. */
-            __('Drag the inner edge of the editor\'s settings sidebar to make it wider, up to %d pixels or half the window. The width is saved to your account.', 'editrail'),
+            __('Turn on "Let me drag the settings sidebar wider" in Toolbar settings. Then drag the inner edge of the editor\'s settings sidebar to make it wider, up to %d pixels or half the window. The width is saved to your account.', 'editrail'),
             SIDEBAR_MAX_WIDTH
           ),
           sprintf(

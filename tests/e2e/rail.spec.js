@@ -37,6 +37,7 @@ const RAIL_PREF_KEYS = [
   'toolrail-pin-meta',
   'toolrail-set-meta',
   'toolrail-sidebar-width',
+  'toolrail-sidebar-resize',
 ];
 
 /**
@@ -7128,6 +7129,17 @@ test.describe('review 2026-09-13 follow-ups (1.0.2)', () => {
 });
 
 test.describe('settings sidebar width (#28)', () => {
+  /** Turn the feature on with its checkbox in Toolbar settings (it is off by default). */
+  async function turnOn(page) {
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    const box = page.locator('#toolrail-settings-sidebarresize');
+    await expect(box).not.toBeChecked();
+    await box.check();
+    await expect(page.locator('#toolrail-settings-sidebarwidth-reset')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.toolrail-settings')).toHaveCount(0);
+  }
+
   /** Open core's settings sidebar on the Post tab, and wait for the handle. */
   async function openSidebar(page) {
     await page.evaluate(() => window.wp.data.dispatch('core/interface').enableComplementaryArea('core', 'edit-post/document'));
@@ -7167,8 +7179,39 @@ test.describe('settings sidebar width (#28)', () => {
     await expect(page.locator('.interface-complementary-area')).toHaveJSProperty('offsetWidth', width);
   }
 
+  test('off by default: no handle and no override, even with a stored width; the checkbox turns it on and off', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => window.wp.data.dispatch('core/interface').enableComplementaryArea('core', 'edit-post/document'));
+    await expect(page.locator('.interface-complementary-area')).toBeVisible();
+    await expect(page.locator('#toolrail-sidebar-handle')).toHaveCount(0);
+    // A width stored while the feature was on does nothing while it is off.
+    await page.evaluate(() => window.wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-sidebar-width', '500'));
+    await expectSidebarWidth(page, 280);
+    await expect(page.locator('#toolrail-sidebar-handle')).toHaveCount(0);
+    expect(await page.evaluate(() => [...document.body.classList].filter((c) => c.startsWith('toolrail-sidebar')))).toEqual([]);
+
+    // Toolbar settings: the checkbox alone, unchecked, with a hint.
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    const box = page.locator('#toolrail-settings-sidebarresize');
+    await expect(box).not.toBeChecked();
+    await expect(page.locator('#toolrail-settings-sidebarwidth-reset')).toHaveCount(0);
+    await box.check();
+    await expect(box).toBeFocused();
+    await expect(page.locator('#toolrail-settings-sidebarwidth-value')).toHaveText('Width: 500 pixels.');
+    expect(await getPref(page, 'toolrail-sidebar-resize')).toBe('1');
+    await expect(page.locator('#toolrail-sidebar-handle')).toHaveCount(1);
+    await expectSidebarWidth(page, 500);
+
+    // Off again: the handle goes and the sidebar is core's own.
+    await box.uncheck();
+    await expect(page.locator('#toolrail-sidebar-handle')).toHaveCount(0);
+    await expectSidebarWidth(page, 280);
+    expect(await getPref(page, 'toolrail-sidebar-resize')).toBe('0');
+  });
+
   test('the handle is a focusable separator on the inner edge; arrow keys, Home and End change the width and announce it', async ({ page }) => {
     await openNewPost(page);
+    await turnOn(page);
     await openSidebar(page);
     const handle = page.locator('#toolrail-sidebar-handle');
 
@@ -7229,6 +7272,7 @@ test.describe('settings sidebar width (#28)', () => {
 
   test('a drag sets the width, the account keeps it across a reload, Escape cancels a drag and a double-click resets', async ({ page }) => {
     await openNewPost(page);
+    await turnOn(page);
     await openSidebar(page);
     const handle = page.locator('#toolrail-sidebar-handle');
 
@@ -7245,6 +7289,7 @@ test.describe('settings sidebar width (#28)', () => {
     await expect(handle).toBeFocused();
     await expect.poll(() => politeText(page)).toContain('400 pixels');
     await waitForSavedPref(page, 'toolrail-sidebar-width', (v) => v === '400');
+    await waitForSavedPref(page, 'toolrail-sidebar-resize', (v) => v === '1');
 
     // The width comes back from the account on the next editor load.
     // A plain reload: openNewPost would reset the preferences.
@@ -7279,6 +7324,7 @@ test.describe('settings sidebar width (#28)', () => {
 
   test('with the sidebar closed nothing changes; it still opens and closes, at the stored width', async ({ page }) => {
     await openNewPost(page);
+    await turnOn(page);
     await openSidebar(page);
     await page.locator('#toolrail-sidebar-handle').focus();
     await page.keyboard.press('Shift+ArrowLeft');
@@ -7300,6 +7346,7 @@ test.describe('settings sidebar width (#28)', () => {
 
   test('a right-docked rail stays past the wider sidebar', async ({ page }) => {
     await openNewPost(page);
+    await turnOn(page);
     await page.locator('#toolrail-rail [data-tool="settings"]').click();
     await page.locator('input[data-dock="right"]').check();
     await expect(page.locator('#toolrail-region')).toHaveAttribute('data-dock', 'right');
@@ -7315,6 +7362,7 @@ test.describe('settings sidebar width (#28)', () => {
 
   test('Toolbar settings shows the width in text and resets it with a button', async ({ page }) => {
     await openNewPost(page);
+    await turnOn(page);
     await openSidebar(page);
     await page.locator('#toolrail-sidebar-handle').focus();
     await page.keyboard.press('Shift+ArrowLeft');
@@ -7335,6 +7383,7 @@ test.describe('settings sidebar width (#28)', () => {
 
   test('below the 782px breakpoint the handle hides and core\'s full-screen sidebar is left alone', async ({ page }) => {
     await openNewPost(page);
+    await turnOn(page);
     await openSidebar(page);
     await page.locator('#toolrail-sidebar-handle').focus();
     await page.keyboard.press('End');

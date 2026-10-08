@@ -68,6 +68,7 @@ const RAIL_PREF_KEYS = [
   'toolrail-pin-meta',
   'toolrail-set-meta',
   'toolrail-sidebar-width',
+  'toolrail-sidebar-resize',
 ];
 
 /** A fresh install after its one-time migrations: the four default pins. */
