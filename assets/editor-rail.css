@@ -1743,7 +1743,9 @@ body.toolrail-hides-inserter .block-editor-block-list__block-side-inserter-popov
         transition: width 0.25s ease-in;
     }
 
-    body.toolrail-sidebar-resizing .interface-interface-skeleton__sidebar .interface-complementary-area__fill {
+    /* The settled class is in the selector so this outranks the settled
+       rule above; without it the edge trailed the pointer by 0.2s. */
+    body.toolrail-sidebar-sized.toolrail-sidebar-settled.toolrail-sidebar-resizing .interface-interface-skeleton__sidebar .interface-complementary-area__fill {
         transition: none;
     }
 }

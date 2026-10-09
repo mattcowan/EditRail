@@ -944,7 +944,9 @@
       endSidebarDrag(false);
       return;
     }
-    if (e.altKey || e.ctrlKey || e.metaKey) {
+    // The pointer owns the width until it lets go: a key here would store
+    // and announce a width that the release then replaces.
+    if (e.altKey || e.ctrlKey || e.metaKey || sidebarDrag) {
       return;
     }
     var current = sidebarWidth();
@@ -989,6 +991,9 @@
     handle.addEventListener('pointermove', onSidebarHandlePointermove);
     handle.addEventListener('pointerup', onSidebarHandlePointerup);
     handle.addEventListener('pointercancel', onSidebarHandlePointercancel);
+    // On the document: a handle that leaves the DOM gets no event; the
+    // browser fires lostpointercapture at the document instead.
+    document.addEventListener('lostpointercapture', onSidebarLostCapture, true);
   }
 
   function onSidebarHandlePointermove(e) {
@@ -1019,9 +1024,24 @@
   }
 
   /**
+   * The handle lost the pointer before a pointerup reached it: core
+   * re-rendered the sidebar region mid-drag (the distraction-free
+   * shortcut does this) and detached the handle. Without this the drag
+   * never ended: the resize cursor and user-select:none stayed on every
+   * element, and the rebuilt handle refused new drags. After a normal
+   * pointerup the drag is already over, so this does nothing.
+   */
+  function onSidebarLostCapture(e) {
+    if (sidebarDrag && e.pointerId === sidebarDrag.pointerId) {
+      endSidebarDrag(false);
+    }
+  }
+
+  /**
    * @param {boolean} commit True stores the dragged width; false puts the
-   *                         width back where the drag started (Escape, or
-   *                         a canceled pointer).
+   *                         width back where the drag started (Escape, a
+   *                         canceled pointer, or a handle that lost the
+   *                         pointer mid-drag).
    */
   function endSidebarDrag(commit) {
     var drag = sidebarDrag;
@@ -1036,6 +1056,7 @@
     drag.handle.removeEventListener('pointermove', onSidebarHandlePointermove);
     drag.handle.removeEventListener('pointerup', onSidebarHandlePointerup);
     drag.handle.removeEventListener('pointercancel', onSidebarHandlePointercancel);
+    document.removeEventListener('lostpointercapture', onSidebarLostCapture, true);
     try {
       drag.handle.releasePointerCapture(drag.pointerId);
     } catch (err) {
@@ -6161,6 +6182,12 @@ var DASHICON_NAMES = [
     var node = settingsRow('div', 'toolrail-settings');
     node.setAttribute('role', 'dialog');
     node.setAttribute('aria-labelledby', 'toolrail-settings-title');
+    // Focusable but not a Tab stop, like the help panel: a click on text
+    // in the dialog (a label, a heading), or on any control in a browser
+    // that does not focus buttons and checkboxes on click, then focuses
+    // the dialog itself. Without it the focus went to the rail region,
+    // outside the dialog, and onSettingsFocusin closed the dialog.
+    node.tabIndex = -1;
 
     buildSettingsContent(node, '');
     wrapper.appendChild(node);
@@ -11175,6 +11202,8 @@ var DASHICON_NAMES = [
     var node = settingsRow('div', 'toolrail-settings toolrail-adddialog');
     node.setAttribute('role', 'dialog');
     node.setAttribute('aria-labelledby', 'toolrail-adddialog-title');
+    // Keeps a click on the dialog's text inside the dialog; see openSettings().
+    node.tabIndex = -1;
     node.dataset.clientId = ids[0];
 
     var head = settingsRow('div', 'toolrail-settings-head');

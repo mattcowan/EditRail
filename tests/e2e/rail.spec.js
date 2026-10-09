@@ -808,6 +808,26 @@ test.describe('toolbar settings dialog', () => {
     });
   });
 
+  test('a click on text in the dialog keeps it open, and a click on a label toggles its checkbox', async ({ page }) => {
+    await openNewPost(page);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    const dialog = page.locator('.toolrail-settings');
+    await expect(dialog).toBeVisible();
+
+    // A heading is not focusable. The click used to focus the rail region,
+    // outside the dialog, and the focus listener closed the dialog. In
+    // WebKit every checkbox and button click did the same (QA 2026-10-09).
+    await dialog.locator('h3.toolrail-settings-subtitle').first().click();
+    await expect(dialog).toBeVisible();
+
+    const box = page.locator('#toolrail-settings-sidebarresize');
+    await expect(box).not.toBeChecked();
+    await page.locator('label:has(#toolrail-settings-sidebarresize) span').click();
+    await expect(dialog).toBeVisible();
+    await expect(box).toBeChecked();
+    expect(await getPref(page, 'toolrail-sidebar-resize')).toBe('1');
+  });
+
   test('a half-typed set name survives an update from elsewhere', async ({ page }) => {
     await openNewPost(page);
 
@@ -5780,6 +5800,11 @@ test.describe('pattern pins and drag (0.1.23)', () => {
     await expect(dialog.locator('#toolrail-adddialog-name')).toHaveValue('Quote');
     await expect(dialog.locator('#toolrail-adddialog-name')).toBeFocused();
 
+    // A click on the dialog's own text keeps it open: the dialog takes the
+    // focus, not the rail region behind it (QA 2026-10-09).
+    await dialog.locator('#toolrail-adddialog-title').click();
+    await expect(dialog).toBeVisible();
+
     await dialog.locator('.toolrail-adddialog-pintype').click();
     await expect(dialog).toHaveCount(0);
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/quote"]')).toBeVisible();
@@ -7322,6 +7347,68 @@ test.describe('settings sidebar width (#28)', () => {
     expect(await getPref(page, 'toolrail-sidebar-width')).toBe('280');
   });
 
+  test('during a drag the edge follows the pointer, arrow keys wait, and a handle that leaves the page ends the drag', async ({ page }) => {
+    await openNewPost(page);
+    await turnOn(page);
+    await page.evaluate(() => window.wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-sidebar-width', '400'));
+    await openSidebar(page);
+    await expectSidebarWidth(page, 400);
+    const handle = page.locator('#toolrail-sidebar-handle');
+    const fillState = () => page.evaluate(() => {
+      const fill = document.querySelector('.interface-complementary-area__fill');
+      const area = document.querySelector('.interface-complementary-area');
+      return {
+        transition: getComputedStyle(fill).transitionDuration,
+        fill: Math.round(fill.getBoundingClientRect().width),
+        area: Math.round(area.getBoundingClientRect().width),
+      };
+    });
+
+    let box = await handle.boundingBox();
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x + 4, y);
+    await page.mouse.down();
+    await page.mouse.move(box.x - 36, y, { steps: 4 });
+    await expect(handle).toHaveAttribute('aria-valuenow', '440');
+    // No transition while dragging: the drag rule used to lose to the
+    // settled rule on specificity, and the edge trailed the pointer.
+    const mid = await fillState();
+    expect(mid.transition).toBe('0s');
+    expect(mid.fill).toBe(mid.area);
+
+    // An arrow key mid-drag stores and announces nothing; the release does.
+    await page.keyboard.press('ArrowLeft');
+    expect(await getPref(page, 'toolrail-sidebar-width')).toBe('400');
+    await expect(handle).toHaveAttribute('aria-valuenow', '440');
+    await page.mouse.up();
+    await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('440');
+
+    // The handle leaves the page mid-drag, as when core rebuilds the
+    // sidebar region (the distraction-free shortcut does). The drag ends
+    // without a write, and the rebuilt handle takes a new drag.
+    box = await handle.boundingBox();
+    await page.mouse.move(box.x + 4, y);
+    await page.mouse.down();
+    await page.mouse.move(box.x - 36, y, { steps: 4 });
+    await page.evaluate(() => document.getElementById('toolrail-sidebar-handle').remove());
+    // The browser sends lostpointercapture with the next pointer event.
+    // Let go over the sidebar: over the canvas, Firefox counts the release
+    // as a click there, selects a block, and core rebuilds the sidebar on
+    // its Block tab, which replaces the handle again mid-test.
+    await page.mouse.move(box.x + 4, y);
+    await page.mouse.up();
+    await expect.poll(() => page.evaluate(() => document.body.classList.contains('toolrail-sidebar-resizing'))).toBe(false);
+    expect(await getPref(page, 'toolrail-sidebar-width')).toBe('440');
+    // The rebuilt handle answers again. The key handler ignores width keys
+    // while a drag is active, so this also proves the drag state cleared.
+    // (A key, not a second pointer drag: in Playwright's Firefox that drag
+    // sometimes went to the canvas instead, 2 runs in 7.)
+    await expect(handle).toBeVisible();
+    await handle.focus();
+    await page.keyboard.press('ArrowLeft');
+    await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('450');
+  });
+
   test('with the sidebar closed nothing changes; it still opens and closes, at the stored width', async ({ page }) => {
     await openNewPost(page);
     await turnOn(page);
@@ -7391,7 +7478,9 @@ test.describe('settings sidebar width (#28)', () => {
 
     await page.setViewportSize({ width: 700, height: 720 });
     // Core closes the sidebar when the window gets this narrow; open it
-    // again, full screen.
+    // again, full screen. Wait for the close first: in WebKit it can land
+    // after an early reopen and close the sidebar again.
+    await expect(page.locator('.interface-complementary-area')).toHaveCount(0);
     await page.evaluate(() => window.wp.data.dispatch('core/interface').enableComplementaryArea('core', 'edit-post/document'));
     await expect(page.locator('.interface-complementary-area')).toBeVisible();
     await expect(page.locator('#toolrail-sidebar-handle')).toBeHidden();

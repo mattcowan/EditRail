@@ -67,6 +67,7 @@ The plugin folder is now editrail. After a zip upgrade, delete the old toolrail 
 
 = 1.0.5 =
 * Optional, off by default: make the editor's settings sidebar wider. Turn on "Let me drag the settings sidebar wider" in Toolbar settings. Then drag the sidebar's inner edge, or Tab to the edge and use the Left and Right arrow keys. Screen readers announce the width. A double-click on the edge, or "Reset to default width" in Toolbar settings, returns it to 280 pixels. The width is saved to your user account, and the canvas and the toolbar take the space that is left.
+* Toolbar settings and "Add to toolbar" stay open when you click a label or a heading in them. In some browsers, they also stay open when you click a checkbox or a button. Before, these clicks closed the dialog.
 
 = 1.0.4 =
 * A keyboard user can now insert an armed tool's block. Arm the tool with Enter, then press Ctrl+Enter (Cmd+Enter on a Mac) on the toolbar or in the canvas. The block goes after the selected block, or at the end of the post when no block is selected. A selected empty paragraph is replaced, the same as with the block inserter. The new block is selected, and screen readers announce the insert. Ctrl+Shift+Enter keeps the tool armed. Before, only a click in the canvas inserted the block.
