@@ -4616,7 +4616,9 @@ var DASHICON_NAMES = [
   /**
    * Rebuild the dialog's content, preserving both text fields, and hand
    * focus to the first candidate in `focusSelectors` that survives the
-   * rebuild in a focusable state (search field as the last resort).
+   * rebuild in a focusable state, then to the control that had focus, then
+   * to the dialog itself when it had focus (search field as the last
+   * resort).
    *
    * @param {string|string[]} focusSelectors Ordered focus candidates.
    */
@@ -4678,12 +4680,20 @@ var DASHICON_NAMES = [
     if (activeSelector) {
       candidates.push(activeSelector);
     }
-    candidates.push('#toolrail-settings-search');
     var target = null;
     candidates.some(function (sel) {
       target = focusableIn(node, sel);
       return !!target;
     });
+    // The dialog itself had focus (a click on its text, or on a control in
+    // a browser that does not focus controls on click; see openSettings).
+    // The node survives the rebuild, so focus stays on it.
+    if (!target && active === node) {
+      target = node;
+    }
+    if (!target) {
+      target = focusableIn(node, '#toolrail-settings-search');
+    }
     if (target) {
       target.focus();
       if (caret && activeSelector && target === node.querySelector(activeSelector) && typeof target.setSelectionRange === 'function') {

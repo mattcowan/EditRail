@@ -819,6 +819,14 @@ test.describe('toolbar settings dialog', () => {
     // WebKit every checkbox and button click did the same (QA 2026-10-09).
     await dialog.locator('h3.toolrail-settings-subtitle').first().click();
     await expect(dialog).toBeVisible();
+    await expect(dialog).toBeFocused();
+
+    // A rebuild from elsewhere (a pin added outside the dialog) keeps the
+    // focus on the dialog. It used to fall back to the search field.
+    await page.evaluate(() => window.toolrail.pinBlock('core/quote'));
+    await expect(dialog.locator('.toolrail-settings-pinnedrow[data-block="core/quote"]')).toHaveCount(1);
+    await expect(dialog).toBeFocused();
+    await page.evaluate(() => window.toolrail.unpinBlock('core/quote'));
 
     const box = page.locator('#toolrail-settings-sidebarresize');
     await expect(box).not.toBeChecked();
