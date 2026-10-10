@@ -7477,6 +7477,7 @@ test.describe('settings sidebar width (#28)', () => {
   });
 
   test('a typed width and the Narrower and Wider buttons set the width without a drag (WCAG 2.5.7)', async ({ page }) => {
+    test.slow(); // about twenty saved widths, then a wait for the server copy, on a slow site
     await openNewPost(page);
     await turnOn(page);
     await openSidebar(page);
@@ -7487,13 +7488,28 @@ test.describe('settings sidebar width (#28)', () => {
     const wider = page.locator('#toolrail-settings-sidebarwidth-wider');
     const value = page.locator('#toolrail-settings-sidebarwidth-value');
     await expect(field).toHaveValue('280');
-    await expect(narrower).toBeDisabled();
-    await expect(wider).toBeEnabled();
+    // At a limit a button is aria-disabled, not disabled: it keeps its Tab stop.
+    await expect(narrower).toHaveAttribute('aria-disabled', 'true');
+    await expect(wider).not.toHaveAttribute('aria-disabled');
+
+    // An open, idle dialog does not change its own DOM. A rewrite of the
+    // same width text was a childList mutation that the body observer
+    // answered with another sync, about ten times a second (review
+    // 2026-10-10).
+    const idleMutations = await page.evaluate(() => new Promise((resolve) => {
+      let count = 0;
+      const mo = new MutationObserver((records) => { count += records.length; });
+      mo.observe(document.querySelector('.toolrail-settings'), { childList: true, subtree: true, characterData: true });
+      setTimeout(() => { mo.disconnect(); resolve(count); }, 1500);
+    }));
+    expect(idleMutations).toBe(0);
 
     // Keyboard order: the field, then Narrower, Wider and Reset.
     await field.focus();
     await page.keyboard.press('Tab');
-    await expect(wider).toBeFocused(); // Narrower is disabled at 280.
+    await expect(narrower).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(wider).toBeFocused();
     await page.keyboard.press('Tab');
     await expect(page.locator('#toolrail-settings-sidebarwidth-reset')).toBeFocused();
 
@@ -7518,17 +7534,28 @@ test.describe('settings sidebar width (#28)', () => {
     await field.press('Enter');
     await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('640');
     await expect(field).toHaveValue('640');
-    await expect(wider).toBeDisabled();
+    await expect(wider).toHaveAttribute('aria-disabled', 'true');
 
-    // A button that reaches its limit hands focus to the other one.
+    // The field reads what a number field accepts, and rounds.
+    await field.fill('500.6');
+    await field.press('Enter');
+    await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('501');
+    await field.fill('1e3');
+    await field.press('Enter');
+    await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('640');
+
+    // A button that reaches its limit keeps focus, and a press there does
+    // nothing.
     await field.fill('600');
     await field.press('Enter');
     await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('600');
     await wider.focus();
     await page.keyboard.press('Enter');
     await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('640');
-    await expect(wider).toBeDisabled();
-    await expect(narrower).toBeFocused();
+    await expect(wider).toHaveAttribute('aria-disabled', 'true');
+    await expect(wider).toBeFocused();
+    await page.keyboard.press('Enter');
+    expect(await getPref(page, 'toolrail-sidebar-width')).toBe('640');
 
     // Empty text changes nothing and says what to type.
     await field.fill('');
@@ -7544,10 +7571,19 @@ test.describe('settings sidebar width (#28)', () => {
     await expect(narrower).toBeFocused();
     await expect(dialog).toBeVisible();
 
+    // Tab out of the field to the minimum: the change marks Narrower, the
+    // next stop, as at its limit. A disabled Narrower dropped focus to the
+    // page here (review 2026-10-10).
+    await field.fill('100');
+    await page.keyboard.press('Tab');
+    await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('280');
+    await expect(narrower).toBeFocused();
+    await expect(narrower).toHaveAttribute('aria-disabled', 'true');
+
     // Let core's debounced save of this burst land before the page
     // closes. A late save reached the account after the next test's reset
     // and turned the feature on there (2026-10-10).
-    await waitForSavedPref(page, 'toolrail-sidebar-width', (v) => v === '420');
+    await waitForSavedPref(page, 'toolrail-sidebar-width', (v) => v === '280');
     await waitForSavedPref(page, 'toolrail-sidebar-resize', (v) => v === '1');
   });
 

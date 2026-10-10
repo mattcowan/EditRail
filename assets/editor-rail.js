@@ -936,14 +936,17 @@
    * Apply the width typed in Toolbar settings. Out-of-range values are
    * held to the range, and the field shows the width actually applied.
    * Text that is not a number puts the field back and says what to type.
-   * A value that changes nothing writes and says nothing, so the change
-   * event that follows an Enter is silent.
+   * Number() reads what the number field accepts (1e3 is 1000), and the
+   * clamp rounds a fraction the way the other controls do. A value that
+   * changes nothing writes nothing and says nothing, so the change event
+   * that follows an Enter is silent.
    *
    * @param {HTMLInputElement} field The width field.
    * @return {void}
    */
   function applyTypedSidebarWidth(field) {
-    var typed = parseInt(field.value, 10);
+    var raw = field.value.trim();
+    var typed = raw === '' ? NaN : Number(raw);
     if (!isFinite(typed)) {
       field.value = String(sidebarWidth());
       speak(__('Type a width in pixels.', 'editrail'));
@@ -959,10 +962,15 @@
 
   /**
    * Bring the open dialog's width controls in line with the width, in
-   * place (see buildSidebarWidthControl). A button that reaches its limit
-   * is disabled; when it had focus, focus goes to the other button, so
-   * the keyboard never sits on a disabled control. The field keeps what
-   * the author is typing while it has focus.
+   * place (see buildSidebarWidthControl). A button at its limit is
+   * aria-disabled, not disabled, the same as a dimmed rail tool: it stays
+   * focusable and does nothing. A disabled button dropped focus to the
+   * page when a Tab out of the field chose it as the next stop and the
+   * field's change then disabled it. Text is written only when it
+   * changes: each write is a childList mutation, and the body observer
+   * runs this function again 100ms later, which looped while the dialog
+   * was open. The field keeps what the author is typing while it has
+   * focus.
    *
    * @param {number} width The width shown now.
    * @return {void}
@@ -972,11 +980,14 @@
     if (!value) {
       return;
     }
-    value.textContent = sprintf(
+    var text = sprintf(
       /* translators: %s: the width, such as "400 pixels". */
       __('Width: %s.', 'editrail'),
       sidebarWidthText(width)
     );
+    if (value.textContent !== text) {
+      value.textContent = text;
+    }
     var max = sidebarMaxWidth();
     var field = document.getElementById('toolrail-settings-sidebarwidth-input');
     if (field) {
@@ -990,14 +1001,26 @@
     if (!narrower || !wider) {
       return;
     }
-    var focused = document.activeElement;
-    narrower.disabled = width <= SIDEBAR_DEFAULT_WIDTH;
-    wider.disabled = width >= max;
-    if (focused === narrower && narrower.disabled) {
-      wider.focus();
-    } else if (focused === wider && wider.disabled) {
-      narrower.focus();
+    setStepButtonInert(narrower, width <= SIDEBAR_DEFAULT_WIDTH);
+    setStepButtonInert(wider, width >= max);
+  }
+
+  /**
+   * @param {HTMLButtonElement} btn   Narrower or Wider.
+   * @param {boolean}           inert True at the button's limit.
+   * @return {void}
+   */
+  function setStepButtonInert(btn, inert) {
+    if (inert) {
+      btn.setAttribute('aria-disabled', 'true');
+    } else {
+      btn.removeAttribute('aria-disabled');
     }
+  }
+
+  /** Whether a Narrower or Wider button is at its limit. */
+  function isStepButtonInert(btn) {
+    return btn.getAttribute('aria-disabled') === 'true';
   }
 
   /**
@@ -4967,6 +4990,9 @@ var DASHICON_NAMES = [
     widthRow.appendChild(field);
 
     var narrower = settingsButton(__('Narrower', 'editrail'), function () {
+      if (isStepButtonInert(narrower)) {
+        return;
+      }
       setSidebarWidth(sidebarWidth() - SIDEBAR_BIG_STEP, true);
     }, '');
     narrower.id = 'toolrail-settings-sidebarwidth-narrower';
@@ -4974,14 +5000,17 @@ var DASHICON_NAMES = [
     widthRow.appendChild(narrower);
 
     var wider = settingsButton(__('Wider', 'editrail'), function () {
+      if (isStepButtonInert(wider)) {
+        return;
+      }
       setSidebarWidth(sidebarWidth() + SIDEBAR_BIG_STEP, true);
     }, '');
     wider.id = 'toolrail-settings-sidebarwidth-wider';
     wider.setAttribute('aria-describedby', current.id);
     widthRow.appendChild(wider);
     group.appendChild(widthRow);
-    narrower.disabled = sidebarWidth() <= SIDEBAR_DEFAULT_WIDTH;
-    wider.disabled = sidebarWidth() >= sidebarMaxWidth();
+    setStepButtonInert(narrower, sidebarWidth() <= SIDEBAR_DEFAULT_WIDTH);
+    setStepButtonInert(wider, sidebarWidth() >= sidebarMaxWidth());
 
     var row = settingsRow('div', 'toolrail-settings-helprow');
     var reset = settingsButton(__('Reset to default width', 'editrail'), function () {

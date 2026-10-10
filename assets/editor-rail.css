@@ -843,7 +843,10 @@ body.toolrail-dragging * {
     outline-offset: 1px;
 }
 
-.toolrail-settings-btn:disabled {
+/* Narrower and Wider at their limits are aria-disabled, so they keep
+   their place in the Tab order (editor-rail.js, setStepButtonInert). */
+.toolrail-settings-btn:disabled,
+.toolrail-settings-btn[aria-disabled="true"] {
     opacity: 0.4;
     cursor: default;
 }
@@ -1602,7 +1605,8 @@ body.toolrail-ov-dragging * {
 
     /* Dimmed tools take the system's own "inactive" colour. */
     .toolrail-tool[aria-disabled="true"],
-    .toolrail-flyout-item[aria-disabled="true"] {
+    .toolrail-flyout-item[aria-disabled="true"],
+    .toolrail-settings-btn[aria-disabled="true"] {
         color: GrayText;
     }
 
