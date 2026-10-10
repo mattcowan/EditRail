@@ -6569,7 +6569,7 @@ var DASHICON_NAMES = [
         body: [
           sprintf(
             /* translators: %d: the widest the settings sidebar can be, in pixels. */
-            __('Turn on "Let me make the settings sidebar wider" in Toolbar settings. Then type a width there, use its Narrower and Wider buttons, or drag the inner edge of the editor\'s settings sidebar. The width goes up to %d pixels or half the window, and it is saved to your account.', 'editrail'),
+            __('Turn on "Let me make the settings sidebar wider" in Toolbar settings. Then type a width there, use its Narrower and Wider buttons, or drag the inner edge of the editor\'s settings sidebar. The width goes up to %d pixels or half the window, whichever is less, and it is saved to your account.', 'editrail'),
             SIDEBAR_MAX_WIDTH
           ),
           sprintf(
