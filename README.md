@@ -59,7 +59,7 @@ Open a post in the editor. The toolbar is on the left edge. `readme.txt` describ
 - Give a pinned tool your own name, description or icon with Edit beside it in Toolbar settings.
 - Save pinned arrangements as named sets. Export a set as a JSON file and import it on a different site.
 - Move the toolbar to any edge, or float it. Change its colors. Show tool names beside the icons.
-- Optional, off by default: turn on "Let me drag the settings sidebar wider" in Toolbar settings, then drag the inner edge of the editor's settings sidebar to make it wider, up to 640px or half the window. The edge is also a keyboard separator: the Left and Right arrow keys change the width. A double-click, or a button in Toolbar settings, resets it to 280px.
+- Optional, off by default: turn on "Let me make the settings sidebar wider" in Toolbar settings. Then type a width in Toolbar settings, use its Narrower and Wider buttons (50px a step), or drag the inner edge of the editor's settings sidebar. The width goes up to 640px or half the window. The edge is also a keyboard separator: the Left and Right arrow keys change the width. A double-click, or a button in Toolbar settings, resets it to 280px.
 - Open the Section overview to zoom out, outline every top-level block, and reorder blocks by drag or by keyboard.
 
 Every action has a keyboard path, and screen readers hear every state change. A drag is a shortcut, never the only way.

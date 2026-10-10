@@ -933,6 +933,74 @@
   }
 
   /**
+   * Apply the width typed in Toolbar settings. Out-of-range values are
+   * held to the range, and the field shows the width actually applied.
+   * Text that is not a number puts the field back and says what to type.
+   * A value that changes nothing writes and says nothing, so the change
+   * event that follows an Enter is silent.
+   *
+   * @param {HTMLInputElement} field The width field.
+   * @return {void}
+   */
+  function applyTypedSidebarWidth(field) {
+    var typed = parseInt(field.value, 10);
+    if (!isFinite(typed)) {
+      field.value = String(sidebarWidth());
+      speak(__('Type a width in pixels.', 'editrail'));
+      return;
+    }
+    var next = clampSidebarWidth(typed);
+    field.value = String(next);
+    if (next === sidebarWidth() && next === typed) {
+      return;
+    }
+    setSidebarWidth(next, true);
+  }
+
+  /**
+   * Bring the open dialog's width controls in line with the width, in
+   * place (see buildSidebarWidthControl). A button that reaches its limit
+   * is disabled; when it had focus, focus goes to the other button, so
+   * the keyboard never sits on a disabled control. The field keeps what
+   * the author is typing while it has focus.
+   *
+   * @param {number} width The width shown now.
+   * @return {void}
+   */
+  function syncSidebarWidthControls(width) {
+    var value = document.getElementById('toolrail-settings-sidebarwidth-value');
+    if (!value) {
+      return;
+    }
+    value.textContent = sprintf(
+      /* translators: %s: the width, such as "400 pixels". */
+      __('Width: %s.', 'editrail'),
+      sidebarWidthText(width)
+    );
+    var max = sidebarMaxWidth();
+    var field = document.getElementById('toolrail-settings-sidebarwidth-input');
+    if (field) {
+      field.max = String(max);
+      if (document.activeElement !== field) {
+        field.value = String(width);
+      }
+    }
+    var narrower = document.getElementById('toolrail-settings-sidebarwidth-narrower');
+    var wider = document.getElementById('toolrail-settings-sidebarwidth-wider');
+    if (!narrower || !wider) {
+      return;
+    }
+    var focused = document.activeElement;
+    narrower.disabled = width <= SIDEBAR_DEFAULT_WIDTH;
+    wider.disabled = width >= max;
+    if (focused === narrower && narrower.disabled) {
+      wider.focus();
+    } else if (focused === wider && wider.disabled) {
+      narrower.focus();
+    }
+  }
+
+  /**
    * Arrow keys move the separator the way they point (the APG window
    * splitter pattern): on a right-hand sidebar, Left makes it wider. Home
    * and End go to the minimum and the maximum. Shift takes bigger steps.
@@ -1128,6 +1196,7 @@
 
     body.style.setProperty('--toolrail-sidebar-width', width + 'px');
     body.classList.toggle('toolrail-sidebar-sized', width !== SIDEBAR_DEFAULT_WIDTH);
+    syncSidebarWidthControls(width);
 
     if (opening) {
       if (body.classList.contains('toolrail-sidebar-closing')) {
@@ -4614,7 +4683,7 @@ var DASHICON_NAMES = [
   }
 
   /**
-   * Rebuild the dialog's content, preserving both text fields, and hand
+   * Rebuild the dialog's content, preserving its text fields, and hand
    * focus to the first candidate in `focusSelectors` that survives the
    * rebuild in a focusable state, then to the control that had focus, then
    * to the dialog itself when it had focus (search field as the last
@@ -4636,6 +4705,7 @@ var DASHICON_NAMES = [
     var textFields = [
       '#toolrail-settings-search',
       '#toolrail-settings-setname',
+      '#toolrail-settings-sidebarwidth-input',
       '#toolrail-editform-title',
       '#toolrail-editform-description',
       '#toolrail-editform-icon'
@@ -4820,9 +4890,11 @@ var DASHICON_NAMES = [
   }
 
   /**
-   * Settings sidebar width (issue #28). The handle on the sidebar's edge
-   * is the control, for the pointer and the keyboard; this section says
-   * where it is, shows the width in text, and gives the reset a button.
+   * Settings sidebar width (issue #28). The on/off checkbox and, while it
+   * is on, the width in text, a width field, Narrower and Wider buttons,
+   * and Reset. The field and the buttons are the ways to set a width
+   * without the drag handle on the sidebar's edge (WCAG 2.5.7). They and
+   * Reset update the section in place; see syncSidebarWidthControls().
    */
   function buildSidebarWidthControl() {
     var group = document.createElement('div');
@@ -4843,7 +4915,7 @@ var DASHICON_NAMES = [
       refreshSettings('#toolrail-settings-sidebarresize');
     });
     var onText = settingsRow('span', '');
-    onText.textContent = __('Let me drag the settings sidebar wider', 'editrail');
+    onText.textContent = __('Let me make the settings sidebar wider', 'editrail');
     onRow.appendChild(onInput);
     onRow.appendChild(onText);
     group.appendChild(onRow);
@@ -4864,10 +4936,58 @@ var DASHICON_NAMES = [
     );
     group.appendChild(current);
 
+    // Ways to set the width without a drag (WCAG 2.5.7): type it, or step
+    // it with the buttons. They also make the 8px handle an equivalent
+    // control under 2.5.8. Both update the dialog in place through
+    // syncSidebarWidthControls(): the field applies on change, which also
+    // fires as Tab leaves it, and a rebuild there would pull focus back.
+    var fieldLabel = settingsRow('label', 'toolrail-settings-label');
+    fieldLabel.setAttribute('for', 'toolrail-settings-sidebarwidth-input');
+    fieldLabel.textContent = __('Width in pixels', 'editrail');
+    group.appendChild(fieldLabel);
+
+    var widthRow = settingsRow('div', 'toolrail-settings-saverow');
+    var field = document.createElement('input');
+    field.type = 'number';
+    field.id = 'toolrail-settings-sidebarwidth-input';
+    field.className = 'toolrail-settings-search';
+    field.min = String(SIDEBAR_DEFAULT_WIDTH);
+    field.max = String(sidebarMaxWidth());
+    field.step = '1';
+    field.value = String(sidebarWidth());
+    field.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        applyTypedSidebarWidth(field);
+      }
+    });
+    field.addEventListener('change', function () {
+      applyTypedSidebarWidth(field);
+    });
+    widthRow.appendChild(field);
+
+    var narrower = settingsButton(__('Narrower', 'editrail'), function () {
+      setSidebarWidth(sidebarWidth() - SIDEBAR_BIG_STEP, true);
+    }, '');
+    narrower.id = 'toolrail-settings-sidebarwidth-narrower';
+    narrower.setAttribute('aria-describedby', current.id);
+    widthRow.appendChild(narrower);
+
+    var wider = settingsButton(__('Wider', 'editrail'), function () {
+      setSidebarWidth(sidebarWidth() + SIDEBAR_BIG_STEP, true);
+    }, '');
+    wider.id = 'toolrail-settings-sidebarwidth-wider';
+    wider.setAttribute('aria-describedby', current.id);
+    widthRow.appendChild(wider);
+    group.appendChild(widthRow);
+    narrower.disabled = sidebarWidth() <= SIDEBAR_DEFAULT_WIDTH;
+    wider.disabled = sidebarWidth() >= sidebarMaxWidth();
+
     var row = settingsRow('div', 'toolrail-settings-helprow');
     var reset = settingsButton(__('Reset to default width', 'editrail'), function () {
+      // In place, like the field and the buttons: no rebuild, so focus
+      // stays on this button.
       setSidebarWidth(SIDEBAR_DEFAULT_WIDTH, true);
-      refreshSettings('#toolrail-settings-sidebarwidth-reset');
     }, '');
     reset.id = 'toolrail-settings-sidebarwidth-reset';
     reset.setAttribute('aria-describedby', current.id);
@@ -4875,7 +4995,11 @@ var DASHICON_NAMES = [
     group.appendChild(row);
 
     var hint = settingsRow('p', 'toolrail-settings-empty');
-    hint.textContent = __('Drag the inner edge of the settings sidebar to make it wider. With the keyboard, Tab to the edge (the first stop in the sidebar) and use the Left and Right arrow keys. Double-click the edge to reset it.', 'editrail');
+    hint.textContent = sprintf(
+      /* translators: %d: the step of the Narrower and Wider buttons, in pixels. */
+      __('Type a width and press Enter, or use Narrower and Wider (%d pixels a step). You can also drag the inner edge of the settings sidebar, or Tab to the edge (the first stop in the sidebar) and use the Left and Right arrow keys. Double-click the edge to reset it.', 'editrail'),
+      SIDEBAR_BIG_STEP
+    );
     group.appendChild(hint);
 
     return group;
@@ -6416,7 +6540,7 @@ var DASHICON_NAMES = [
         body: [
           sprintf(
             /* translators: %d: the widest the settings sidebar can be, in pixels. */
-            __('Turn on "Let me drag the settings sidebar wider" in Toolbar settings. Then drag the inner edge of the editor\'s settings sidebar to make it wider, up to %d pixels or half the window. The width is saved to your account.', 'editrail'),
+            __('Turn on "Let me make the settings sidebar wider" in Toolbar settings. Then type a width there, use its Narrower and Wider buttons, or drag the inner edge of the editor\'s settings sidebar. The width goes up to %d pixels or half the window, and it is saved to your account.', 'editrail'),
             SIDEBAR_MAX_WIDTH
           ),
           sprintf(

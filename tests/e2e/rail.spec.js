@@ -7476,6 +7476,81 @@ test.describe('settings sidebar width (#28)', () => {
     await expect.poll(() => politeText(page)).toContain('280 pixels, default');
   });
 
+  test('a typed width and the Narrower and Wider buttons set the width without a drag (WCAG 2.5.7)', async ({ page }) => {
+    await openNewPost(page);
+    await turnOn(page);
+    await openSidebar(page);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    const dialog = page.locator('.toolrail-settings');
+    const field = page.getByLabel('Width in pixels');
+    const narrower = page.locator('#toolrail-settings-sidebarwidth-narrower');
+    const wider = page.locator('#toolrail-settings-sidebarwidth-wider');
+    const value = page.locator('#toolrail-settings-sidebarwidth-value');
+    await expect(field).toHaveValue('280');
+    await expect(narrower).toBeDisabled();
+    await expect(wider).toBeEnabled();
+
+    // Keyboard order: the field, then Narrower, Wider and Reset.
+    await field.focus();
+    await page.keyboard.press('Tab');
+    await expect(wider).toBeFocused(); // Narrower is disabled at 280.
+    await page.keyboard.press('Tab');
+    await expect(page.locator('#toolrail-settings-sidebarwidth-reset')).toBeFocused();
+
+    // A typed width applies on Enter, in place: focus stays in the field.
+    await field.fill('500');
+    await field.press('Enter');
+    await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('500');
+    await expect(field).toBeFocused();
+    await expect(value).toHaveText('Width: 500 pixels.');
+    await expectSidebarWidth(page, 500);
+    await expect.poll(() => politeText(page)).toContain('500 pixels');
+
+    // The buttons step 50px.
+    await wider.click();
+    await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('550');
+    await expect(field).toHaveValue('550');
+    await narrower.click();
+    await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('500');
+
+    // Out of range is held to the range (1280px window: 640 is the widest).
+    await field.fill('9999');
+    await field.press('Enter');
+    await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('640');
+    await expect(field).toHaveValue('640');
+    await expect(wider).toBeDisabled();
+
+    // A button that reaches its limit hands focus to the other one.
+    await field.fill('600');
+    await field.press('Enter');
+    await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('600');
+    await wider.focus();
+    await page.keyboard.press('Enter');
+    await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('640');
+    await expect(wider).toBeDisabled();
+    await expect(narrower).toBeFocused();
+
+    // Empty text changes nothing and says what to type.
+    await field.fill('');
+    await field.press('Enter');
+    await expect(field).toHaveValue('640');
+    expect(await getPref(page, 'toolrail-sidebar-width')).toBe('640');
+    await expect.poll(() => politeText(page)).toContain('Type a width in pixels.');
+
+    // Tab out of an edited field applies it, and focus goes on to Narrower.
+    await field.fill('420');
+    await page.keyboard.press('Tab');
+    await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('420');
+    await expect(narrower).toBeFocused();
+    await expect(dialog).toBeVisible();
+
+    // Let core's debounced save of this burst land before the page
+    // closes. A late save reached the account after the next test's reset
+    // and turned the feature on there (2026-10-10).
+    await waitForSavedPref(page, 'toolrail-sidebar-width', (v) => v === '420');
+    await waitForSavedPref(page, 'toolrail-sidebar-resize', (v) => v === '1');
+  });
+
   test('below the 782px breakpoint the handle hides and core\'s full-screen sidebar is left alone', async ({ page }) => {
     await openNewPost(page);
     await turnOn(page);
