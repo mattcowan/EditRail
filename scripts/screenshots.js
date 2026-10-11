@@ -117,6 +117,8 @@ const RAIL_PREF_KEYS = [
   'toolrail-hide-core-inserter',
   'toolrail-pin-meta',
   'toolrail-set-meta',
+  'toolrail-sidebar-width',
+  'toolrail-sidebar-resize',
 ];
 
 /**
