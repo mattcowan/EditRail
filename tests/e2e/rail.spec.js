@@ -7471,9 +7471,24 @@ test.describe('settings sidebar width (#28)', () => {
     await expect(reset).toHaveAttribute('aria-describedby', 'toolrail-settings-sidebarwidth-value');
     await reset.click();
     await expect(value).toHaveText('Width: 280 pixels, default.');
-    await expect(reset).toBeFocused();
+    // Focus stays in the dialog. On the button itself in most browsers; on
+    // the dialog in WebKit, which does not focus a button on a click (the
+    // reset is in place, so nothing moves focus to the button).
+    expect(await page.evaluate(() => document.querySelector('.toolrail-settings').contains(document.activeElement))).toBe(true);
     await expectSidebarWidth(page, 280);
     await expect.poll(() => politeText(page)).toContain('280 pixels, default');
+
+    // From the keyboard, focus stays on the button in every browser.
+    await page.getByLabel('Width in pixels').fill('400');
+    await page.getByLabel('Width in pixels').press('Enter');
+    await expect(value).toHaveText('Width: 400 pixels.');
+    await reset.focus();
+    await page.keyboard.press('Enter');
+    await expect(value).toHaveText('Width: 280 pixels, default.');
+    await expect(reset).toBeFocused();
+    // Let core's debounced save land before the page closes (see the typed
+    // width test below).
+    await waitForSavedPref(page, 'toolrail-sidebar-width', (v) => v === '280');
   });
 
   test('a typed width and the Narrower and Wider buttons set the width without a drag (WCAG 2.5.7)', async ({ page }) => {
