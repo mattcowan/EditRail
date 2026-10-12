@@ -1,0 +1,61 @@
+# Dependabot version updates. Everything here is dev tooling or CI: the
+# plugin ships source files only, with no node_modules and no vendor
+# (see .distignore), so no update here changes what WordPress sites run.
+#
+# - Weekly, and grouped, because each pull request runs the ~30 minute e2e
+#   job and a review.
+# - A cooldown holds back a brand-new release for a few days, so a
+#   compromised version has time to be found and pulled before it is
+#   proposed here. Security updates are not held back.
+# - Major versions come as their own pull requests, outside the groups.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+    groups:
+      dev-dependencies:
+        applies-to: version-updates
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+        # The screen-reader tooling runs only in `npm run test:sr`, never
+        # in CI, so CI cannot catch a break in it. It gets its own pull
+        # request, to be checked with an NVDA run.
+        exclude-patterns:
+          - "@guidepup/*"
+
+  - package-ecosystem: composer
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+    groups:
+      dev-dependencies:
+        applies-to: version-updates
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+
+  # The workflows pin some actions to a commit SHA; the WordPress.org
+  # deploy action runs with the SVN password. A pinned SHA never gets a
+  # fix unless something bumps it.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns:
+          - "*"
