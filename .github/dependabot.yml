@@ -8,6 +8,10 @@
 #   compromised version has time to be found and pulled before it is
 #   proposed here. Security updates are not held back.
 # - Major versions come as their own pull requests, outside the groups.
+# - Security updates come grouped too, one pull request per ecosystem
+#   (the `security` groups). This works without the repository's
+#   "Grouped security updates" setting, which needs security updates
+#   turned on first.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -29,6 +33,10 @@ updates:
         # request, to be checked with an NVDA run.
         exclude-patterns:
           - "@guidepup/*"
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: composer
     directory: /
@@ -44,6 +52,10 @@ updates:
         update-types:
           - minor
           - patch
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   # The workflows pin some actions to a commit SHA; the WordPress.org
   # deploy action runs with the SVN password. A pinned SHA never gets a
@@ -62,3 +74,7 @@ updates:
         update-types:
           - minor
           - patch
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"
