@@ -7456,6 +7456,7 @@ test.describe('settings sidebar width (#28)', () => {
   });
 
   test('Toolbar settings shows the width in text and resets it with a button', async ({ page }) => {
+    test.slow(); // two waits for the server copy of the width, on a slow site
     await openNewPost(page);
     await turnOn(page);
     await openSidebar(page);
@@ -7482,6 +7483,9 @@ test.describe('settings sidebar width (#28)', () => {
     await page.getByLabel('Width in pixels').fill('400');
     await page.getByLabel('Width in pixels').press('Enter');
     await expect(value).toHaveText('Width: 400 pixels.');
+    // The click reset already stored 280 on the server. Wait for 400 first,
+    // so the final wait for 280 can only pass on the keyboard reset's save.
+    await waitForSavedPref(page, 'toolrail-sidebar-width', (v) => v === '400');
     await reset.focus();
     await page.keyboard.press('Enter');
     await expect(value).toHaveText('Width: 280 pixels, default.');
