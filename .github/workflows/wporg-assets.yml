@@ -27,7 +27,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Do not leave the GitHub token in .git/config for the
           # credentialed third-party step that runs next.

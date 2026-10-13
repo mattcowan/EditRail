@@ -34,7 +34,7 @@ jobs:
     name: Deploy or package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Do not leave the GitHub token in .git/config for the
           # credentialed third-party deploy step. The release upload
