@@ -15,7 +15,10 @@
  */
 const fs = require('fs');
 const path = require('path');
-const archiver = require('archiver');
+// archiver 8 is an ES module with named exports (ZipArchive, TarArchive,
+// ...); the archiver('zip', ...) factory is gone. require() of an ES
+// module needs Node 20.19+ or 22.12+.
+const { ZipArchive } = require('archiver');
 const ignore = require('ignore');
 
 const pluginSlug = 'editrail';
@@ -73,7 +76,7 @@ console.log(`Staged ${fileCount} files`);
 
 console.log('Creating zip...');
 const output = fs.createWriteStream(zipFile);
-const archive = archiver('zip', { zlib: { level: 9 } });
+const archive = new ZipArchive({ zlib: { level: 9 } });
 
 output.on('close', function () {
   console.log(`Package created: ${pluginSlug}.zip (${archive.pointer()} bytes)`);
