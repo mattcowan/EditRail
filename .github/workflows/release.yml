@@ -40,7 +40,7 @@ jobs:
           # credentialed third-party deploy step. The release upload
           # authenticates through GH_TOKEN in its own env, not git.
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
