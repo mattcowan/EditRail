@@ -30,7 +30,7 @@ jobs:
     name: PHP tests (PHPUnit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Pinned to a commit: v2 is a moving tag on the one non-GitHub action.
       - uses: shivammathur/setup-php@b604ade2a87db23f8871b7182e69ec5e75effb45 # v2 (2026-08-28)
         with:
@@ -49,7 +49,7 @@ jobs:
     # A wedged run must fail here, not burn the 6-hour default.
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -67,7 +67,7 @@ jobs:
           TOOLRAIL_ADMIN_PASS: password
       - name: Upload Playwright output on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-output-${{ github.sha }}
           path: |
@@ -79,7 +79,7 @@ jobs:
     name: Version check + package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -96,7 +96,7 @@ jobs:
       # build of any branch is one click away.
       - name: Upload zip artifact
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: editrail-${{ github.sha }}
           path: editrail.zip
