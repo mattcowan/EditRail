@@ -1,0 +1,7 @@
+# Request the maintainer's review on every pull request that someone else
+# opens, Dependabot included. GitHub never requests a review from a pull
+# request's own author, so the maintainer's own pull requests do not change.
+#
+# This only requests a review. It does not require one: no branch
+# protection rule requires code owner approval (see issue #55).
+* @mattcowan
