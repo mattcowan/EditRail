@@ -12,6 +12,7 @@ How the plugin gets from a git commit to WordPress.org. GitHub is the source of 
 | A GitHub Release is **published**, pre-release unchecked | `.github/workflows/release.yml` | Version guard against the tag, then deploy to WordPress.org: SVN `trunk`, `tags/X.Y.Z`, and `assets/` from `.wordpress-org/`. The zip the action built is attached to the Release. |
 | A GitHub Release is **published**, pre-release checked | `.github/workflows/release.yml` | Version guard, then `editrail.zip` is attached to the Release. WordPress.org is not touched. |
 | Actions → WP.org Readme/Assets Sync → Run workflow | `.github/workflows/wporg-assets.yml` | Pushes `readme.txt` and `.wordpress-org/` to WordPress.org without a release. Use it for a "Tested up to" bump, a readme fix, or new screenshots. |
+| The repository owner mentions `@claude` in a PR comment or a review body | `.github/workflows/claude-review.yml` | Claude reviews the PR and comments on it. Every run is a review: Claude cannot commit or push, and a request for a fix gets a suggested change. Use it when the CodeRabbit review is rate limited. A mention from anyone else, or in a comment on a code line, does nothing. To ask about a line, name the file and line in the PR comment. It works only after the workflow is on `main`. |
 
 ## One-time setup
 
@@ -21,6 +22,12 @@ The two workflows that write to SVN need two repository secrets (GitHub → Sett
 |---|---|
 | `SVN_USERNAME` | The WordPress.org username that owns the plugin. |
 | `SVN_PASSWORD` | The SVN password from the WordPress.org profile (Account → Edit → SVN password). This is not the login password. |
+
+The Claude review workflow needs the Claude GitHub app installed on this repository and one more secret:
+
+| Secret | Value |
+|---|---|
+| `CLAUDE_CODE_OAUTH_TOKEN` | The token that `claude setup-token` prints. It uses the maintainer's Claude plan (Pro or Max). |
 
 Before the first stable release, publish a pre-release once (`v1.0.1-beta.1` with "Set as a pre-release" checked) to prove the workflow runs. A pre-release never touches SVN.
 
