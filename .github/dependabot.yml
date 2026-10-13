@@ -7,11 +7,13 @@
 # - A cooldown holds back a brand-new release for a few days, so a
 #   compromised version has time to be found and pulled before it is
 #   proposed here. Security updates are not held back.
-# - Major versions come as their own pull requests, outside the groups.
+# - Major version updates come as their own pull requests, outside the
+#   groups.
 # - Security updates come grouped too, one pull request per ecosystem
-#   (the `security` groups). This works without the repository's
-#   "Grouped security updates" setting, which needs security updates
-#   turned on first.
+#   (the `security` groups), whatever their size: a security fix that
+#   needs a major version does not wait. This works without the
+#   repository's "Grouped security updates" setting, which needs
+#   security updates turned on first.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -33,10 +35,14 @@ updates:
         # request, to be checked with an NVDA run.
         exclude-patterns:
           - "@guidepup/*"
+      # Same exclusion: a Guidepup security fix gets its own pull request,
+      # to be checked with an NVDA run.
       security:
         applies-to: security-updates
         patterns:
           - "*"
+        exclude-patterns:
+          - "@guidepup/*"
 
   - package-ecosystem: composer
     directory: /
