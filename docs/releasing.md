@@ -6,7 +6,7 @@ How the plugin gets from a git commit to WordPress.org. GitHub is the source of 
 
 | Trigger | Workflow | What happens |
 |---|---|---|
-| Any pull request (each push to it) | `.github/workflows/ci.yml` | Version check, PHPUnit, Playwright e2e on a wp-env WordPress, the blueprint check, and a packaging proof (`npm run package` must succeed). Approve a PR only when this is green. |
+| Any pull request (each push to it) | `.github/workflows/ci.yml` | Version check, PHPUnit, Playwright e2e on a wp-env WordPress, the blueprint check, and a packaging proof (`npm run package` must succeed). The e2e suite runs in Chromium, Firefox and WebKit. Each browser runs in 3 shards, so there are 9 e2e jobs in parallel, and each job name shows its browser and shard. A new push to the PR cancels the run before it. If the PR changes only Markdown files, the issue templates or `.wordpress-org/`, the e2e jobs are skipped. Approve a PR only when this is green. |
 | Push to `main` (the merge) | `.github/workflows/ci.yml` | Version check, PHPUnit, blueprint check and the packaging proof only. The e2e suite is skipped: the merged code passed it on the PR. |
 | Actions → CI → Run workflow | `.github/workflows/ci.yml` | The full set, plus `editrail.zip` is kept as a build artifact for 7 days. Use this to get a test build of any branch. |
 | A GitHub Release is **published**, pre-release unchecked | `.github/workflows/release.yml` | Version guard against the tag, then deploy to WordPress.org: SVN `trunk`, `tags/X.Y.Z`, and `assets/` from `.wordpress-org/`. The zip the action built is attached to the Release. |
@@ -75,6 +75,9 @@ The suite and `scripts/screenshots.js` read these variables from the environment
 | `TOOLRAIL_URL` | The site root. It defaults to `http://localhost:8888`, the wp-env site. |
 | `TOOLRAIL_ADMIN_USER` | The admin login. It defaults to `admin`. |
 | `TOOLRAIL_ADMIN_PASS` | The admin password. It defaults to `password`, the wp-env default. |
+| `TOOLRAIL_BROWSERS` | The browsers for the e2e suite: `chromium`, `firefox` or `webkit`, or a list with commas, for example `chromium,webkit`. It defaults to `chromium`. Install each browser once with `npx playwright install <browser>`. |
+
+To run one browser, set `TOOLRAIL_BROWSERS` to that browser. CI does this in each e2e job.
 
 The suite changes the rail settings of the account it logs in with. It saves your own settings when it logs in, runs every test from the defaults, and restores your settings when the run ends. It prints what it saved and what it restored. If a run stops before the restore, the next run keeps the saved copy and restores it at its end. The saved copy is one file per account in `tests/e2e/.auth/`, and the restore writes only to the account that the file names. Run one suite at a time on one account: a run stops at login while another run (e2e or NVDA) is using the same account, because two runs at once overwrite each other's saved copy.
 

@@ -105,16 +105,43 @@ async function openNewPost(page) {
     await page.reload();
   }
 
-  // Dismiss the welcome guide when present.
-  const closeModal = page.locator('.components-modal__header button[aria-label="Close"]');
-  try {
-    await closeModal.waitFor({ state: 'visible', timeout: 4000 });
-    await closeModal.click();
-  } catch (e) {
-    /* No modal — fine. */
+  await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+
+  // Dismiss core's welcome guide, but wait for it only when the account
+  // will show it. Closing it once saves that choice in the account, so on
+  // every later load a blind 4 s wait found nothing: about 4 s on each of
+  // ~200 loads, close to half of the CI run (measured on wp-env,
+  // 2026-10-14). The rail is up, so the stores have loaded. WordPress 7.1
+  // keeps the guide in `core/edit-post` (edit-post.js); `core` is read too
+  // in case a later release moves it.
+  const guideDue = await page.evaluate(() => {
+    const prefs = window.wp.data.select('core/preferences');
+    return prefs.get('core', 'welcomeGuide') === true || prefs.get('core/edit-post', 'welcomeGuide') === true;
+  });
+  if (guideDue) {
+    const closeModal = page.locator('.components-modal__header button[aria-label="Close"]');
+    try {
+      await closeModal.waitFor({ state: 'visible', timeout: 4000 });
+      await closeModal.click();
+    } catch (e) {
+      /* No modal — fine. */
+    }
   }
 
-  await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+  // Give the pattern catalog up to 4 s to arrive, then go on regardless.
+  // Its first arrival rebuilds an open settings dialog once, by design,
+  // which moves focus to its search field. The old 4 s guide wait gave it
+  // that time; without any wait, a test that opened the dialog early saw
+  // the rebuild (an idle-dialog check counted 68 mutations, 2026-10-14).
+  // It usually lands in ~1.5 s. It is NOT a hard wait: the patterns
+  // endpoint can call the WordPress.org pattern directory from the
+  // server, and a stall there must not fail every test. Tests that need
+  // the catalog call waitForPatternCatalog() themselves.
+  await page.waitForFunction(() => {
+    const sel = window.wp.data.select('core');
+    return sel.hasFinishedResolution('getBlockPatterns', [])
+      && sel.hasFinishedResolution('getEntityRecords', ['postType', 'wp_block', { per_page: -1, context: 'edit' }]);
+  }, null, { timeout: 4000 }).catch(() => {});
 }
 
 function canvas(page) {
@@ -372,9 +399,25 @@ test.describe('keyboard insertion (#37)', () => {
   test('with no block selected, the keyboard insert goes to the end of the post', async ({ page }) => {
     await openNewPost(page);
     await seedTwoParagraphsSelectFirst(page);
-    await page.evaluate(() => window.wp.data.dispatch('core/block-editor').clearSelectedBlock());
+    // Take the caret out of the paragraph, not only the block selection.
+    // Selecting the block put the caret in it; WebKit reports that caret
+    // in a late selectionchange, and core turns a caret in a block back
+    // into a selected block. That re-selected the first paragraph after
+    // the clear in 1 of 2 WebKit runs (PR #63, 2026-10-14). An author
+    // with no block selected has no caret in one either.
+    await page.evaluate(() => {
+      const doc = document.querySelector('iframe[name="editor-canvas"]').contentDocument;
+      doc.getSelection().removeAllRanges();
+      if (doc.activeElement) {
+        doc.activeElement.blur();
+      }
+      window.wp.data.dispatch('core/block-editor').clearSelectedBlock();
+    });
 
     await armByKeyboard(page, 'pin:core/heading');
+    expect(await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getSelectedBlockClientId()
+    )).toBeNull();
     await page.keyboard.press('Control+Enter');
 
     await expect.poll(async () => await blockNames(page)).toEqual(['core/paragraph', 'core/paragraph', 'core/heading']);
@@ -688,13 +731,15 @@ test.describe('quick slots', () => {
     // core/cover's @wordpress/icons SVG has NO width/height attributes —
     // it measured 0×0 and the slot looked empty until the CSS sized it.
     await page.evaluate(() => window.toolrail.pinBlock('core/cover'));
-    const size = await page.evaluate(() => {
+    // Poll: the rail renders a block icon through createRoot, which
+    // renders asynchronously, so the SVG can be missing for a moment after
+    // pinBlock returns (null in WebKit CI, PR #63, 2026-10-14).
+    await expect.poll(() => page.evaluate(() => {
       const svg = document.querySelector('#toolrail-rail [data-tool="pin:core/cover"] .toolrail-tool-icon svg');
       if (!svg) { return null; }
       const r = svg.getBoundingClientRect();
       return { w: Math.round(r.width), h: Math.round(r.height) };
-    });
-    expect(size).toEqual({ w: 24, h: 24 });
+    })).toEqual({ w: 24, h: 24 });
   });
 });
 
@@ -4846,22 +4891,27 @@ test.describe('overview drag stress (grids, columns, notices)', () => {
     }), ids)).toBe(true);
     // Painted boxes, in current document order. Floored boxes OVERLAP
     // and the later one paints on top, so a box's only grabbable strip
-    // is the sliver above its successor's top — press anywhere lower and
-    // the gesture drags the wrong block.
+    // is the sliver above its successor — press anywhere lower and the
+    // gesture drags the wrong block. The box itself takes no pointer
+    // (pointer-events: none); only its select button does, inset by the
+    // 2px border. So the strip runs from this button's top to the next
+    // button's top: about 3px here. The point stays fractional: aimed at
+    // the box's own top, or rounded, it lands on the border, and Firefox
+    // hit-tests that to the overview behind it (PR #63, 2026-10-14).
     const geometry = () => page.evaluate(() => {
       const sel = window.wp.data.select('core/block-editor');
       return sel.getBlockOrder('').map((id) => {
-        const r = document
-          .querySelector(`#toolrail-overview .toolrail-ov-box[data-clientid="${id}"]`)
-          .getBoundingClientRect();
-        return { id: id, top: r.top, bottom: r.bottom, height: r.height, x: r.left + r.width / 2 };
+        const box = document.querySelector(`#toolrail-overview .toolrail-ov-box[data-clientid="${id}"]`);
+        const r = box.getBoundingClientRect();
+        const btn = box.querySelector('.toolrail-ov-selectbtn').getBoundingClientRect();
+        return { id: id, top: r.top, bottom: r.bottom, height: r.height, x: r.left + r.width / 2, btnTop: btn.top };
       });
     });
     const grabPoint = (boxes, i) => ({
-      x: Math.round(boxes[i].x),
-      y: Math.round(boxes[i].top + (i + 1 < boxes.length
-        ? Math.max(1, Math.min(12, (boxes[i + 1].top - boxes[i].top) / 2))
-        : 12)),
+      x: boxes[i].x,
+      y: boxes[i].btnTop + (i + 1 < boxes.length
+        ? Math.max(0.5, Math.min(12, (boxes[i + 1].btnTop - boxes[i].btnTop) / 2))
+        : 12),
     });
 
     let boxes = await geometry();
@@ -4901,6 +4951,21 @@ test.describe('overview drag stress (grids, columns, notices)', () => {
 
     // And the same gesture carried past the last box still means "after
     // everything", the way it does for a stack of tall sections.
+    //
+    // Measure only once the boxes have settled after the first drop: in
+    // document order, and unchanged across two reads. Measured mid-move,
+    // a later box still sat above an earlier one, and the press grabbed
+    // the wrong block (WebKit, PR #63, 2026-10-14). On a slow local
+    // WebKit the boxes can also STAY out of order: both settle passes
+    // (scheduleOverviewSettle, 220 ms) ran before the canvas flush. This
+    // check then fails here, on the cause.
+    await expect.poll(async () => {
+      const first = await geometry();
+      await page.waitForTimeout(100);
+      const second = await geometry();
+      return JSON.stringify(first) === JSON.stringify(second)
+        && second.every((b, i) => i === 0 || b.top >= second[i - 1].top);
+    }, { message: 'overview boxes settle in document order after the first drop' }).toBe(true);
     boxes = await geometry();
     const again = grabPoint(boxes, landed);
     await page.mouse.move(again.x, again.y);
@@ -5768,7 +5833,14 @@ test.describe('pattern pins and drag (0.1.23)', () => {
     await page.evaluate((s) => window.toolrail.unpinBlock(s), 'pattern:' + pattern.name);
   });
 
-  test('a tool dragged from the toolbar into the canvas inserts on drop and arms nothing', async ({ page }) => {
+  test('a tool dragged from the toolbar into the canvas inserts on drop and arms nothing', async ({ page, browserName }) => {
+    // Playwright cannot drag from the page into the canvas iframe in
+    // these browsers: Firefox fires no dragstart, and WebKit drops
+    // without the page's 'wp-blocks' data. Core's own inserter, dragged
+    // the same way, inserts nothing there either (PR #63, 2026-10-14).
+    // The rail and core read the same 'wp-blocks' payload in every
+    // browser, so Chromium covers it.
+    test.skip(browserName !== 'chromium', 'Playwright cannot drag into the canvas iframe in this browser');
     await openNewPost(page);
     await page.evaluate(() => {
       const { createBlock } = window.wp.blocks;
