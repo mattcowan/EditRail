@@ -9,8 +9,9 @@
 #
 # The browser suite runs in Chromium, Firefox and WebKit (#42), each in 3
 # shards: 9 jobs side by side, each with its own wp-env site, so no two
-# jobs share an account. One serial Chromium run was ~28 min of tests
-# (2026-10-13); a shard is about a third of that, plus ~2 min of setup.
+# jobs share an account. One serial Chromium job took ~30 min (2026-10-13).
+# The first sharded run took 7.7-9.7 min per job: 5.5-7.8 min of tests
+# and ~2 min of setup (run 38594382186, 2026-10-14).
 # The repo is public, so the extra jobs cost no Actions minutes; the
 # limit that matters is the 20 jobs the free plan runs at once.
 #
@@ -95,7 +96,7 @@ jobs:
     needs: e2e-needed
     if: needs.e2e-needed.outputs.run == 'true'
     runs-on: ubuntu-latest
-    # One shard is about a third of the suite: ~10 minutes when healthy.
+    # One shard took 7.7-9.7 minutes in the first sharded run (see header).
     # A wedged run must fail here, not burn the 6-hour default.
     timeout-minutes: 25
     strategy:
