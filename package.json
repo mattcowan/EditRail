@@ -19,7 +19,7 @@
     "@guidepup/guidepup": "^0.35.0",
     "@guidepup/playwright": "^0.19.1",
     "@playwright/test": "^1.63.0",
-    "@wordpress/env": "^11.16.0",
+    "@wordpress/env": "^11.17.0",
     "archiver": "^8.0.0",
     "dotenv": "^17.4.2",
     "ignore": "^7.0.12"
