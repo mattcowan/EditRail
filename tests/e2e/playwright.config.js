@@ -27,11 +27,36 @@ require('dotenv').config({ path: path.join(__dirname, '..', '..', '.env'), quiet
 
 const baseURL = process.env.TOOLRAIL_URL || 'http://localhost:8888';
 
+/**
+ * The browsers a run uses, from TOOLRAIL_BROWSERS: a comma-separated list
+ * of chromium, firefox and webkit. The default is chromium alone, so a
+ * plain local run does not take three times as long. CI runs one job per
+ * browser and sets this to that browser (#42).
+ */
+const BROWSER_DEVICES = { chromium: 'Desktop Chrome', firefox: 'Desktop Firefox', webkit: 'Desktop Safari' };
+const browsers = (process.env.TOOLRAIL_BROWSERS || 'chromium')
+  .split(',')
+  .map((name) => name.trim().toLowerCase())
+  .filter(Boolean);
+browsers.forEach((name) => {
+  if (!BROWSER_DEVICES[name]) {
+    throw new Error(`TOOLRAIL_BROWSERS: "${name}" is not chromium, firefox or webkit.`);
+  }
+});
+if (!browsers.length) {
+  throw new Error('TOOLRAIL_BROWSERS names no browser. Use chromium, firefox or webkit.');
+}
+
 module.exports = defineConfig({
   testDir: '.',
   // Restores the developer's own rail settings once, after every test
   // (auth.setup.js saved them). See prefs-account.js.
   globalTeardown: require.resolve('./global-teardown.js'),
+  // One test at a time, always. Every test writes the same account's rail
+  // settings, so two at once change each other's state. CI passes
+  // --fully-parallel only so that --shard can split this one spec file by
+  // test; each shard is its own job with its own wp-env site.
+  workers: 1,
   timeout: 30000,
   retries: 0,
   use: {
@@ -43,13 +68,15 @@ module.exports = defineConfig({
     {
       name: 'setup',
       testMatch: /auth\.setup\.js/,
-      use: { ...devices['Desktop Chrome'] },
+      // The saved login works in every browser. It runs in the first
+      // browser listed, so a CI job installs only its own browser.
+      use: { browserName: browsers[0] },
     },
-    {
-      name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+    ...browsers.map((name) => ({
+      name,
+      use: { ...devices[BROWSER_DEVICES[name]] },
       dependencies: ['setup'],
-    },
+    })),
   ],
 });
 

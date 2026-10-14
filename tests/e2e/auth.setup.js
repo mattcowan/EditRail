@@ -1,6 +1,6 @@
 /**
  * Authenticated session setup: produce
- * .auth/admin.json once per run; the chromium project depends on it. A bad
+ * .auth/admin.json once per run; every browser project depends on it. A bad
  * login fails HERE, loudly, instead of as confusing downstream failures.
  */
 const { test: setup, expect } = require('@playwright/test');

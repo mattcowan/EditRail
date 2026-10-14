@@ -2,13 +2,17 @@
 # proof.
 #
 # The cheap jobs (PHPUnit, version check + package) run on every push to
-# main and every pull request. The browser suite (~17 min, ~90 serial
-# editor loads) runs on pull requests and on manual runs - NOT on the
-# merge commit to main: a merged PR is code that just passed on the PR,
-# and the repo is private (2,000 Actions minutes/month), so the repeat
-# run cost more than it told us. A nightly run (a `schedule:` trigger)
-# is deliberately NOT set up until the plugin is ready for submission;
-# add it then, so a WordPress core change is caught before a user does.
+# main and every pull request. The browser suite runs on pull requests and
+# on manual runs - NOT on the merge commit to main: a merged PR is code
+# that just passed on the PR. A pull request that changes only docs skips
+# it too (see e2e-needed).
+#
+# The browser suite runs in Chromium, Firefox and WebKit (#42), each in 3
+# shards: 9 jobs side by side, each with its own wp-env site, so no two
+# jobs share an account. One serial Chromium run was ~28 min of tests
+# (2026-10-13); a shard is about a third of that, plus ~2 min of setup.
+# The repo is public, so the extra jobs cost no Actions minutes; the
+# limit that matters is the 20 jobs the free plan runs at once.
 #
 # Run this workflow manually (Actions -> CI -> Run workflow) to get an
 # installable plugin zip as a build artifact. See docs/releasing.md.
@@ -19,6 +23,13 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+
+# A new push to a pull request cancels the run it replaces, so a rebase
+# (Dependabot does this often) does not leave 9 stale browser jobs queued.
+# Runs on main are never cancelled.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Read-only token for every job: nothing here writes to the repo, and the
 # jobs run third-party lifecycle scripts (npm ci, composer, Playwright).
@@ -39,15 +50,59 @@ jobs:
       - run: composer install --no-interaction --prefer-dist
       - run: vendor/bin/phpunit
 
-  e2e-tests:
-    name: Browser tests (Playwright on wp-env)
+  # Whether the browser suite has anything to test. Skipped on the push to
+  # main (see the header). On a pull request it runs unless EVERY changed
+  # file is docs: Markdown, the issue and PR templates, or the WordPress.org
+  # listing assets. Anything else, or a diff that cannot be read, runs it.
+  e2e-needed:
+    name: Browser tests needed?
     runs-on: ubuntu-latest
-    # Skipped on the push to main (see the header); every other trigger
-    # runs it.
     if: github.event_name != 'push'
-    # The suite is ~90 serial editor loads: 15-20 minutes when healthy.
+    outputs:
+      run: ${{ steps.diff.outputs.run }}
+    steps:
+      # The pull_request checkout is GitHub's merge commit: its first
+      # parent is the base branch, so HEAD^1..HEAD is exactly the PR.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - id: diff
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! files=$(git diff --name-only HEAD^1 HEAD) || [ -z "$files" ]; then
+            echo "Could not list the changed files; running the browser tests."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          code=$(printf '%s\n' "$files" | grep -vE '\.md$|^\.github/ISSUE_TEMPLATE/|^\.wordpress-org/' || true)
+          if [ -n "$code" ]; then
+            echo "Files that need the browser tests:"
+            printf '%s\n' "$code"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Only docs changed; skipping the browser tests."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  e2e-tests:
+    name: Browser tests (${{ matrix.browser }} ${{ matrix.shard }}/3)
+    needs: e2e-needed
+    if: needs.e2e-needed.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    # One shard is about a third of the suite: ~10 minutes when healthy.
     # A wedged run must fail here, not burn the 6-hour default.
-    timeout-minutes: 40
+    timeout-minutes: 25
+    strategy:
+      # Finish every shard, so one red job shows all of its failures and
+      # the other browsers still report.
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+        # Keep the 3 in --shard below and in the job name in step.
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
       # @wordpress/env needs Node 22.13 or later from the release that
@@ -58,21 +113,25 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
       # wp-env (Docker) hosts a throwaway WordPress with this checkout
       # mapped in as the plugin, per .wp-env.json. Its default admin
       # account is admin / password on port 8888.
       - run: npx wp-env start
-      - run: npm run test:e2e
+      # --fully-parallel lets --shard split the one spec file by test;
+      # without it, shard 1 gets every test. The config keeps workers: 1,
+      # so the tests in a shard still run one at a time.
+      - run: npm run test:e2e -- --shard=${{ matrix.shard }}/3 --fully-parallel
         env:
           TOOLRAIL_URL: http://localhost:8888
           TOOLRAIL_ADMIN_USER: admin
           TOOLRAIL_ADMIN_PASS: password
+          TOOLRAIL_BROWSERS: ${{ matrix.browser }}
       - name: Upload Playwright output on failure
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: playwright-output-${{ github.sha }}
+          name: playwright-output-${{ matrix.browser }}-${{ matrix.shard }}-${{ github.sha }}
           path: |
             playwright-report
             test-results

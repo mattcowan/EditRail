@@ -105,16 +105,42 @@ async function openNewPost(page) {
     await page.reload();
   }
 
-  // Dismiss the welcome guide when present.
-  const closeModal = page.locator('.components-modal__header button[aria-label="Close"]');
-  try {
-    await closeModal.waitFor({ state: 'visible', timeout: 4000 });
-    await closeModal.click();
-  } catch (e) {
-    /* No modal — fine. */
+  await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+
+  // Dismiss core's welcome guide, but wait for it only when the account
+  // will show it. Closing it once saves that choice in the account, so on
+  // every later load a blind 4 s wait found nothing: about 4 s on each of
+  // ~200 loads, close to half of the CI run (measured on wp-env,
+  // 2026-10-14). The rail is up, so the stores have loaded. WordPress moved
+  // the guide's scope from `core/edit-post` to `core`; read both.
+  const guideDue = await page.evaluate(() => {
+    const prefs = window.wp.data.select('core/preferences');
+    return prefs.get('core', 'welcomeGuide') === true || prefs.get('core/edit-post', 'welcomeGuide') === true;
+  });
+  if (guideDue) {
+    const closeModal = page.locator('.components-modal__header button[aria-label="Close"]');
+    try {
+      await closeModal.waitFor({ state: 'visible', timeout: 4000 });
+      await closeModal.click();
+    } catch (e) {
+      /* No modal — fine. */
+    }
   }
 
-  await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+  // Give the pattern catalog up to 4 s to arrive, then go on regardless.
+  // Its first arrival rebuilds an open settings dialog once, by design,
+  // which moves focus to its search field. The old 4 s guide wait gave it
+  // that time; without any wait, a test that opened the dialog early saw
+  // the rebuild (an idle-dialog check counted 68 mutations, 2026-10-14).
+  // It usually lands in ~1.5 s. It is NOT a hard wait: the patterns
+  // endpoint can call the WordPress.org pattern directory from the
+  // server, and a stall there must not fail every test. Tests that need
+  // the catalog call waitForPatternCatalog() themselves.
+  await page.waitForFunction(() => {
+    const sel = window.wp.data.select('core');
+    return sel.hasFinishedResolution('getBlockPatterns', [])
+      && sel.hasFinishedResolution('getEntityRecords', ['postType', 'wp_block', { per_page: -1, context: 'edit' }]);
+  }, null, { timeout: 4000 }).catch(() => {});
 }
 
 function canvas(page) {

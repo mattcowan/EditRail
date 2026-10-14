@@ -2,8 +2,8 @@
 # plugin ships source files only, with no node_modules and no vendor
 # (see .distignore), so no update here changes what WordPress sites run.
 #
-# - Weekly, and grouped, because each pull request runs the ~30 minute e2e
-#   job and a review.
+# - Weekly, and grouped, because each pull request runs 9 e2e jobs (3
+#   browsers, 3 shards each) and a review.
 # - A cooldown holds back a brand-new release for a few days, so a
 #   compromised version has time to be found and pulled before it is
 #   proposed here. Security updates are not held back.
