@@ -731,13 +731,15 @@ test.describe('quick slots', () => {
     // core/cover's @wordpress/icons SVG has NO width/height attributes —
     // it measured 0×0 and the slot looked empty until the CSS sized it.
     await page.evaluate(() => window.toolrail.pinBlock('core/cover'));
-    const size = await page.evaluate(() => {
+    // Poll: the rail renders a block icon through createRoot, which
+    // renders asynchronously, so the SVG can be missing for a moment after
+    // pinBlock returns (null in WebKit CI, PR #63, 2026-10-14).
+    await expect.poll(() => page.evaluate(() => {
       const svg = document.querySelector('#toolrail-rail [data-tool="pin:core/cover"] .toolrail-tool-icon svg');
       if (!svg) { return null; }
       const r = svg.getBoundingClientRect();
       return { w: Math.round(r.width), h: Math.round(r.height) };
-    });
-    expect(size).toEqual({ w: 24, h: 24 });
+    })).toEqual({ w: 24, h: 24 });
   });
 });
 
