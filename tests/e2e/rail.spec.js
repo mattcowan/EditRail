@@ -399,9 +399,25 @@ test.describe('keyboard insertion (#37)', () => {
   test('with no block selected, the keyboard insert goes to the end of the post', async ({ page }) => {
     await openNewPost(page);
     await seedTwoParagraphsSelectFirst(page);
-    await page.evaluate(() => window.wp.data.dispatch('core/block-editor').clearSelectedBlock());
+    // Take the caret out of the paragraph, not only the block selection.
+    // Selecting the block put the caret in it; WebKit reports that caret
+    // in a late selectionchange, and core turns a caret in a block back
+    // into a selected block. That re-selected the first paragraph after
+    // the clear in 1 of 2 WebKit runs (PR #63, 2026-10-14). An author
+    // with no block selected has no caret in one either.
+    await page.evaluate(() => {
+      const doc = document.querySelector('iframe[name="editor-canvas"]').contentDocument;
+      doc.getSelection().removeAllRanges();
+      if (doc.activeElement) {
+        doc.activeElement.blur();
+      }
+      window.wp.data.dispatch('core/block-editor').clearSelectedBlock();
+    });
 
     await armByKeyboard(page, 'pin:core/heading');
+    expect(await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getSelectedBlockClientId()
+    )).toBeNull();
     await page.keyboard.press('Control+Enter');
 
     await expect.poll(async () => await blockNames(page)).toEqual(['core/paragraph', 'core/paragraph', 'core/heading']);
@@ -4873,22 +4889,27 @@ test.describe('overview drag stress (grids, columns, notices)', () => {
     }), ids)).toBe(true);
     // Painted boxes, in current document order. Floored boxes OVERLAP
     // and the later one paints on top, so a box's only grabbable strip
-    // is the sliver above its successor's top — press anywhere lower and
-    // the gesture drags the wrong block.
+    // is the sliver above its successor — press anywhere lower and the
+    // gesture drags the wrong block. The box itself takes no pointer
+    // (pointer-events: none); only its select button does, inset by the
+    // 2px border. So the strip runs from this button's top to the next
+    // button's top: about 3px here. The point stays fractional: aimed at
+    // the box's own top, or rounded, it lands on the border, and Firefox
+    // hit-tests that to the overview behind it (PR #63, 2026-10-14).
     const geometry = () => page.evaluate(() => {
       const sel = window.wp.data.select('core/block-editor');
       return sel.getBlockOrder('').map((id) => {
-        const r = document
-          .querySelector(`#toolrail-overview .toolrail-ov-box[data-clientid="${id}"]`)
-          .getBoundingClientRect();
-        return { id: id, top: r.top, bottom: r.bottom, height: r.height, x: r.left + r.width / 2 };
+        const box = document.querySelector(`#toolrail-overview .toolrail-ov-box[data-clientid="${id}"]`);
+        const r = box.getBoundingClientRect();
+        const btn = box.querySelector('.toolrail-ov-selectbtn').getBoundingClientRect();
+        return { id: id, top: r.top, bottom: r.bottom, height: r.height, x: r.left + r.width / 2, btnTop: btn.top };
       });
     });
     const grabPoint = (boxes, i) => ({
-      x: Math.round(boxes[i].x),
-      y: Math.round(boxes[i].top + (i + 1 < boxes.length
-        ? Math.max(1, Math.min(12, (boxes[i + 1].top - boxes[i].top) / 2))
-        : 12)),
+      x: boxes[i].x,
+      y: boxes[i].btnTop + (i + 1 < boxes.length
+        ? Math.max(0.5, Math.min(12, (boxes[i + 1].btnTop - boxes[i].btnTop) / 2))
+        : 12),
     });
 
     let boxes = await geometry();
@@ -4928,6 +4949,21 @@ test.describe('overview drag stress (grids, columns, notices)', () => {
 
     // And the same gesture carried past the last box still means "after
     // everything", the way it does for a stack of tall sections.
+    //
+    // Measure only once the boxes have settled after the first drop: in
+    // document order, and unchanged across two reads. Measured mid-move,
+    // a later box still sat above an earlier one, and the press grabbed
+    // the wrong block (WebKit, PR #63, 2026-10-14). On a slow local
+    // WebKit the boxes can also STAY out of order: both settle passes
+    // (scheduleOverviewSettle, 220 ms) ran before the canvas flush. This
+    // check then fails here, on the cause.
+    await expect.poll(async () => {
+      const first = await geometry();
+      await page.waitForTimeout(100);
+      const second = await geometry();
+      return JSON.stringify(first) === JSON.stringify(second)
+        && second.every((b, i) => i === 0 || b.top >= second[i - 1].top);
+    }, { message: 'overview boxes settle in document order after the first drop' }).toBe(true);
     boxes = await geometry();
     const again = grabPoint(boxes, landed);
     await page.mouse.move(again.x, again.y);
@@ -5795,7 +5831,14 @@ test.describe('pattern pins and drag (0.1.23)', () => {
     await page.evaluate((s) => window.toolrail.unpinBlock(s), 'pattern:' + pattern.name);
   });
 
-  test('a tool dragged from the toolbar into the canvas inserts on drop and arms nothing', async ({ page }) => {
+  test('a tool dragged from the toolbar into the canvas inserts on drop and arms nothing', async ({ page, browserName }) => {
+    // Playwright cannot drag from the page into the canvas iframe in
+    // these browsers: Firefox fires no dragstart, and WebKit drops
+    // without the page's 'wp-blocks' data. Core's own inserter, dragged
+    // the same way, inserts nothing there either (PR #63, 2026-10-14).
+    // The rail and core read the same 'wp-blocks' payload in every
+    // browser, so Chromium covers it.
+    test.skip(browserName !== 'chromium', 'Playwright cannot drag into the canvas iframe in this browser');
     await openNewPost(page);
     await page.evaluate(() => {
       const { createBlock } = window.wp.blocks;

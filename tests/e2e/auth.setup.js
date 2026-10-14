@@ -30,7 +30,17 @@ setup('authenticate as admin', async ({ page }) => {
   await page.waitForURL(/wp-admin/, { timeout: 15000 });
   await expect(page.locator('#wpadminbar')).toBeVisible();
 
-  await page.context().storageState({ path: AUTH_FILE });
+  // Every browser project reuses this login. WebKit saves WordPress's
+  // cookies as sameSite "None" without "secure", and Chromium refuses that
+  // pair, so a run that listed webkit before chromium logged Chromium out.
+  // WordPress sets no SameSite, which browsers treat as Lax; save that.
+  const state = await page.context().storageState();
+  state.cookies.forEach((cookie) => {
+    if (cookie.sameSite === 'None' && !cookie.secure) {
+      cookie.sameSite = 'Lax';
+    }
+  });
+  fs.writeFileSync(AUTH_FILE, JSON.stringify(state, null, 2));
 
   // Save the account's own rail settings before any test changes them;
   // global-teardown.js puts them back at the end of the run. This setup runs
