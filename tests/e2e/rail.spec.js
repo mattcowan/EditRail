@@ -111,8 +111,9 @@ async function openNewPost(page) {
   // will show it. Closing it once saves that choice in the account, so on
   // every later load a blind 4 s wait found nothing: about 4 s on each of
   // ~200 loads, close to half of the CI run (measured on wp-env,
-  // 2026-10-14). The rail is up, so the stores have loaded. WordPress moved
-  // the guide's scope from `core/edit-post` to `core`; read both.
+  // 2026-10-14). The rail is up, so the stores have loaded. WordPress 7.1
+  // keeps the guide in `core/edit-post` (edit-post.js); `core` is read too
+  // in case a later release moves it.
   const guideDue = await page.evaluate(() => {
     const prefs = window.wp.data.select('core/preferences');
     return prefs.get('core', 'welcomeGuide') === true || prefs.get('core/edit-post', 'welcomeGuide') === true;

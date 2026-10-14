@@ -26,10 +26,13 @@ on:
 
 # A new push to a pull request cancels the run it replaces, so a rebase
 # (Dependabot does this often) does not leave 9 stale browser jobs queued.
-# Runs on main are never cancelled.
+# Every other run (a push to main, a manual run) gets a group of its own.
+# A shared group is not enough: GitHub cancels a PENDING run when a newer
+# run joins its group, even with cancel-in-progress off, so a manual run
+# for the zip could be dropped by the next merge.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 # Read-only token for every job: nothing here writes to the repo, and the
 # jobs run third-party lifecycle scripts (npm ci, composer, Playwright).

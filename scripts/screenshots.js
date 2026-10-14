@@ -127,8 +127,9 @@ const RAIL_PREF_KEYS = [
  * fullscreen mode is turned on (it is core's own default for a new
  * account, and it keeps the admin bar out of the frame).
  *
- * WordPress moved the guide's scope from `core/edit-post` to `core`;
- * both are carried so the script works either side of that move.
+ * WordPress 7.1 keeps both in `core/edit-post` (edit-post.js). The `core`
+ * entries are carried in case a later release moves them; an unused
+ * scope reads back as null.
  */
 const CORE_PREFS = [
   ['core/edit-post', 'welcomeGuide'],
