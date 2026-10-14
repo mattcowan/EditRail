@@ -50,9 +50,12 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
+      # @wordpress/env needs Node 22.13 or later from the release that
+      # moves it to simple-git 4 (#60). Keep all three jobs, and
+      # release.yml, on one version.
       - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
@@ -82,7 +85,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - run: npm ci
       # The four version sources (plugin header, TOOLRAIL_VERSION, readme
