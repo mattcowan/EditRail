@@ -6767,6 +6767,17 @@ var DASHICON_NAMES = [
   // The node that observer is actually watching, so healOverview can
   // tell a React-replaced visual editor from the one observed at open.
   var overviewResizeTarget = null;
+  // Watches the canvas body's block DOM while the overview is open. A
+  // reorder lands in the canvas when React flushes it, which can be later
+  // than scheduleOverviewSettle's 220 ms pass on a slow browser; the boxes
+  // then kept the old layout (#64). The settle this schedules reads the
+  // canvas and writes only to the overlay and the editor document, so it
+  // cannot trigger the observer again.
+  var overviewCanvasObserver = null;
+  // The canvas body that observer is watching (see overviewResizeTarget).
+  var overviewCanvasTarget = null;
+  // One settle per frame, however many mutation batches arrive in it.
+  var overviewCanvasSettlePending = false;
   // In-flight box drag ({clientId, startX, startY, active, toIndex}).
   // Drag-to-reorder is POINTER SUGAR over the same public move the
   // arrows dispatch (owner ask 2026-08-27) — the keyboard path is the
@@ -7203,11 +7214,17 @@ var DASHICON_NAMES = [
    * Repaint the zoom percentage in the overview bar. Reads the EFFECTIVE
    * scale, not the author's requested one — the fit can hold it below what
    * was asked for.
+   *
+   * Writes only a changed value. Assigning the same text is still a
+   * childList mutation; the body observer answered it with healOverview,
+   * which repaints this label again, so an idle open overview rewrote it
+   * about every 110 ms (#64).
    */
   function updateOverviewZoomLabel() {
     var label = document.querySelector('#toolrail-overview .toolrail-ov-zoomlabel');
-    if (label) {
-      label.textContent = Math.round(overviewMetrics.k * 100) + '%';
+    var text = Math.round(overviewMetrics.k * 100) + '%';
+    if (label && label.textContent !== text) {
+      label.textContent = text;
     }
   }
 
@@ -8120,6 +8137,40 @@ var DASHICON_NAMES = [
       applyOverviewScale();
       positionOverviewBoxes();
     }, 220);
+  }
+
+  /**
+   * Settle the overview again whenever the canvas's block DOM changes
+   * while it is open, so the boxes follow the canvas however late a
+   * reorder flushes (#64). The timed passes above guess at that delay; a
+   * slow browser can outlast them.
+   *
+   * Only for the iframed canvas. Without an iframe the canvas body is the
+   * editor's own body, which holds the overlay this settle rebuilds; the
+   * timed passes still cover that editor.
+   */
+  function observeOverviewCanvas() {
+    if (overviewCanvasObserver || typeof window.MutationObserver !== 'function') {
+      return;
+    }
+    var doc = canvasDoc();
+    if (!doc || doc === document || !doc.body) {
+      return;
+    }
+    overviewCanvasObserver = new window.MutationObserver(function () {
+      if (overviewCanvasSettlePending) {
+        return;
+      }
+      overviewCanvasSettlePending = true;
+      window.requestAnimationFrame(function () {
+        overviewCanvasSettlePending = false;
+        if (overviewOpen) {
+          scheduleOverviewSettle();
+        }
+      });
+    });
+    overviewCanvasObserver.observe(doc.body, { childList: true, subtree: true });
+    overviewCanvasTarget = doc.body;
   }
 
   /**
@@ -9604,6 +9655,7 @@ var DASHICON_NAMES = [
         overviewResizeTarget = visual;
       }
     }
+    observeOverviewCanvas();
     if (window.matchMedia) {
       overviewMedia = window.matchMedia('(max-width: 782px)');
       if (typeof overviewMedia.addEventListener === 'function') {
@@ -9852,6 +9904,11 @@ var DASHICON_NAMES = [
       overviewResizeObserver = null;
     }
     overviewResizeTarget = null;
+    if (overviewCanvasObserver) {
+      overviewCanvasObserver.disconnect();
+      overviewCanvasObserver = null;
+    }
+    overviewCanvasTarget = null;
     if (overviewMedia) {
       if (typeof overviewMedia.removeEventListener === 'function') {
         overviewMedia.removeEventListener('change', onOverviewMediaChange);
@@ -9964,6 +10021,19 @@ var DASHICON_NAMES = [
         overviewResizeObserver.disconnect();
         overviewResizeObserver.observe(visual);
         overviewResizeTarget = visual;
+      }
+    }
+    // A replaced canvas iframe has a new body; watch that one instead. A
+    // canvas that had no body yet at open time gets its observer now.
+    if (!overviewCanvasObserver) {
+      observeOverviewCanvas();
+    } else {
+      var healDoc = canvasDoc();
+      var canvasBody = healDoc && healDoc !== document ? healDoc.body : null;
+      if (canvasBody && canvasBody !== overviewCanvasTarget) {
+        overviewCanvasObserver.disconnect();
+        overviewCanvasObserver.observe(canvasBody, { childList: true, subtree: true });
+        overviewCanvasTarget = canvasBody;
       }
     }
     if (!overviewNode()) {

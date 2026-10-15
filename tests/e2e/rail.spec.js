@@ -4619,6 +4619,68 @@ async function drillIntoFirst(page) {
   return rootId;
 }
 
+test.describe('overview follows late canvas changes (#64)', () => {
+  test('the boxes follow a canvas change that lands after the timed settle passes, then go idle', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        ['FIRST', 'SECOND', 'THIRD'].map((c) => createBlock('core/paragraph', { content: c }))
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(3);
+    const ids = await page.evaluate(() => window.wp.data.select('core/block-editor').getBlockOrder(''));
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    const boxTop = (id) => page.evaluate((cid) => {
+      const b = document.querySelector(`#toolrail-overview .toolrail-ov-box[data-clientid="${cid}"]`);
+      return b && b.style.display !== 'none' ? b.getBoundingClientRect().top : null;
+    }, id);
+    await expect.poll(() => boxTop(ids[1])).not.toBeNull();
+    // Outlast both timed passes (rAF and 220 ms), so only the canvas
+    // observer can move the boxes from here on.
+    await page.waitForTimeout(600);
+    const firstBefore = await boxTop(ids[0]);
+    const secondBefore = await boxTop(ids[1]);
+    const k = await page.evaluate(() =>
+      parseFloat(document.body.style.getPropertyValue('--toolrail-overview-scale')) || 1
+    );
+
+    // A late canvas change with no store change: the same thing a slow
+    // reorder flush does. A 300px spacer before SECOND pushes it down.
+    await page.evaluate((cid) => {
+      const doc = document.querySelector('iframe[name="editor-canvas"]').contentDocument;
+      const spacer = doc.createElement('div');
+      spacer.id = 'e2e-late-spacer';
+      spacer.style.height = '300px';
+      const block = doc.querySelector(`[data-block="${cid}"]`);
+      block.parentNode.insertBefore(spacer, block);
+    }, ids[1]);
+    await expect.poll(async () => (await boxTop(ids[1])) - secondBefore).toBeGreaterThan(300 * k * 0.5);
+    expect(Math.abs((await boxTop(ids[0])) - firstBefore)).toBeLessThan(1);
+
+    // Settled means idle: the observer reacts to canvas changes only, so
+    // the open overview no longer changes its own DOM. Before #64 the
+    // zoom label was rewritten about every 110 ms, observer or not.
+    await page.waitForTimeout(600);
+    const idleMutations = await page.evaluate(() => new Promise((resolve) => {
+      let count = 0;
+      const mo = new MutationObserver((records) => { count += records.length; });
+      mo.observe(document.getElementById('toolrail-overview'), { attributes: true, childList: true, subtree: true });
+      setTimeout(() => { mo.disconnect(); resolve(count); }, 1500);
+    }));
+    expect(idleMutations).toBe(0);
+
+    // Taking the spacer out moves SECOND back.
+    await page.evaluate(() => {
+      const doc = document.querySelector('iframe[name="editor-canvas"]').contentDocument;
+      doc.getElementById('e2e-late-spacer').remove();
+    });
+    await expect.poll(async () => Math.abs((await boxTop(ids[1])) - secondBefore)).toBeLessThan(1);
+  });
+});
+
 test.describe('overview drag stress (grids, columns, notices)', () => {
   test('a grid cell drags HORIZONTALLY past its neighbor — vertical drop line, same-row reorder', async ({ page }) => {
     await openNewPost(page);
