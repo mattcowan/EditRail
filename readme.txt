@@ -4,7 +4,7 @@ Tags: block editor, toolbar, tools
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.0.5
+Stable tag: 1.0.6
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -64,6 +64,12 @@ Its own preferences, and nothing else. The plugin stores no options and writes n
 The plugin folder is now editrail. After a zip upgrade, delete the old toolrail folder so two copies do not load. After a git deploy, activate EditRail again once in the Plugins screen. Pinned tools and saved sets are kept.
 
 == Changelog ==
+
+= 1.0.6 =
+* The first time you open the editor on a new account, your changes to the toolbar's tools are kept. Before, the default tools were sometimes not saved during that first visit. If you pinned or unpinned a tool then, the toolbar kept only that change, and the default tools were gone.
+* Section overview: after you move a block, the outline boxes move to the block's new place, also when the editor is slow to update. Before, on a slow computer, some boxes could stay in the wrong place.
+* Section overview: when content gets taller while the overview is open, for example when an image loads, the overview fits the new height. Before, the content below the old height could be out of reach.
+* Section overview: while the overview is open and you do nothing, it does no work. Before, it rewrote its zoom percentage about nine times each second.
 
 = 1.0.5 =
 * Optional, off by default: make the editor's settings sidebar wider. Turn on "Let me make the settings sidebar wider" in Toolbar settings. Then type a width there, use the Narrower and Wider buttons, drag the sidebar's inner edge, or Tab to the edge and use the Left and Right arrow keys. Screen readers announce the width. A double-click on the edge, or "Reset to default width" in Toolbar settings, returns it to 280 pixels. The width is saved to your user account, and the canvas and the toolbar take the space that is left.

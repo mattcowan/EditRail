@@ -6767,6 +6767,28 @@ var DASHICON_NAMES = [
   // The node that observer is actually watching, so healOverview can
   // tell a React-replaced visual editor from the one observed at open.
   var overviewResizeTarget = null;
+  // Watches the canvas body's block DOM while the overview is open. A
+  // reorder lands in the canvas when React flushes it, which can be later
+  // than scheduleOverviewSettle's 220 ms pass on a slow browser; the boxes
+  // then kept the old layout (#64). What it runs reads the canvas and
+  // writes only to the overlay and the editor document, so it cannot
+  // trigger the observer again.
+  var overviewCanvasObserver = null;
+  // The canvas body that observer is watching (see overviewResizeTarget).
+  var overviewCanvasTarget = null;
+  // Watches the SIZE of the canvas's root block list while the overview
+  // is open. An image or embed that loads, a web font, or a style change
+  // can make the document taller with no childList change, so the
+  // mutation observer alone never saw it (#64, PR #69 review).
+  var overviewCanvasSizeObserver = null;
+  // The root block list that observer is watching.
+  var overviewCanvasSizeTarget = null;
+  // One box reposition per frame, however many mutation batches arrive.
+  var overviewCanvasSettlePending = false;
+  // The pending refit after a canvas change (a timer id, 0 for none). At
+  // most one is pending, so a canvas that changes all the time costs one
+  // refit per 220 ms, not one per frame.
+  var overviewCanvasRefitTimer = 0;
   // In-flight box drag ({clientId, startX, startY, active, toIndex}).
   // Drag-to-reorder is POINTER SUGAR over the same public move the
   // arrows dispatch (owner ask 2026-08-27) — the keyboard path is the
@@ -7203,11 +7225,17 @@ var DASHICON_NAMES = [
    * Repaint the zoom percentage in the overview bar. Reads the EFFECTIVE
    * scale, not the author's requested one — the fit can hold it below what
    * was asked for.
+   *
+   * Writes only a changed value. Assigning the same text is still a
+   * childList mutation; the body observer answered it with healOverview,
+   * which repaints this label again, so an idle open overview rewrote it
+   * about every 110 ms (#64).
    */
   function updateOverviewZoomLabel() {
     var label = document.querySelector('#toolrail-overview .toolrail-ov-zoomlabel');
-    if (label) {
-      label.textContent = Math.round(overviewMetrics.k * 100) + '%';
+    var text = Math.round(overviewMetrics.k * 100) + '%';
+    if (label && label.textContent !== text) {
+      label.textContent = text;
     }
   }
 
@@ -8116,10 +8144,114 @@ var DASHICON_NAMES = [
       }
       // Refit too, not just reposition: the canvas flush after a reorder
       // (or any content change a dispatch made) can change the document
-      // height the scale and pan clamp were computed from.
+      // height the scale and pan clamp were computed from. The extent is
+      // re-measured only when it is marked dirty; the store subscription
+      // marks it, but measures inside the dispatch, before the canvas
+      // flush. On the iframed canvas, observeOverviewCanvas marks it dirty
+      // again after the canvas has changed, and refits then.
       applyOverviewScale();
       positionOverviewBoxes();
     }, 220);
+  }
+
+  /**
+   * The canvas changed while the overview is open: follow it, however
+   * late a reorder flushes or a block grows (#64). The timed passes above
+   * guess at that delay; a slow browser can outlast them.
+   *
+   * Two steps, each rate-limited: the boxes reposition on the next frame
+   * (at most once per frame), and the document extent is re-measured and
+   * refit 220 ms later (at most one pending at a time). The refit is what
+   * catches a late HEIGHT change, which the store subscription measured
+   * too early to see.
+   *
+   * Everything here reads the canvas and writes only to the overlay and
+   * the editor document. A refit can change the frame's height, and
+   * viewport-relative content then resizes the root block list once; the
+   * extent is measured with the frame at its natural height
+   * (measureOverviewExtent), so that second refit computes the same
+   * height and the size observer stops.
+   */
+  function onOverviewCanvasChange() {
+    if (!overviewOpen) {
+      return;
+    }
+    // React can replace the root block list inside the same body; the
+    // size observer must follow it (the mutation observer sees the swap).
+    watchOverviewCanvasRoot();
+    if (!overviewCanvasSettlePending) {
+      overviewCanvasSettlePending = true;
+      window.requestAnimationFrame(function () {
+        overviewCanvasSettlePending = false;
+        if (overviewOpen) {
+          positionOverviewBoxes();
+        }
+      });
+    }
+    if (!overviewCanvasRefitTimer) {
+      overviewCanvasRefitTimer = window.setTimeout(function () {
+        overviewCanvasRefitTimer = 0;
+        if (!overviewOpen) {
+          return;
+        }
+        overviewExtentDirty = true;
+        applyOverviewScale();
+        positionOverviewBoxes();
+      }, 220);
+    }
+  }
+
+  /** Point the size observer at the current root block list, if it moved. */
+  function watchOverviewCanvasRoot() {
+    if (!overviewCanvasSizeObserver || !overviewCanvasTarget) {
+      return;
+    }
+    var root = overviewCanvasTarget.querySelector('.is-root-container');
+    if (root && root !== overviewCanvasSizeTarget) {
+      overviewCanvasSizeObserver.disconnect();
+      overviewCanvasSizeObserver.observe(root);
+      overviewCanvasSizeTarget = root;
+    }
+  }
+
+  /**
+   * Watch the canvas while the overview is open: its block DOM (a
+   * MutationObserver on the body) and its size (a ResizeObserver on the
+   * root block list). Both call onOverviewCanvasChange. Safe to call
+   * again: it creates the observers once, and moves them to a new canvas
+   * body when the editor replaced the iframe. Returns whether it attached
+   * to a body it was not watching before, so the caller knows the extent
+   * it applied came from the old canvas.
+   *
+   * Only for the iframed canvas. Without an iframe the canvas body is the
+   * editor's own body, which holds the overlay this rebuilds; the timed
+   * passes still cover that editor.
+   *
+   * @return {boolean} True when it attached to a new canvas body.
+   */
+  function observeOverviewCanvas() {
+    if (typeof window.MutationObserver !== 'function') {
+      return false;
+    }
+    var doc = canvasDoc();
+    if (!doc || doc === document || !doc.body) {
+      return false;
+    }
+    if (doc.body === overviewCanvasTarget) {
+      return false;
+    }
+    if (!overviewCanvasObserver) {
+      overviewCanvasObserver = new window.MutationObserver(onOverviewCanvasChange);
+    }
+    overviewCanvasObserver.disconnect();
+    overviewCanvasObserver.observe(doc.body, { childList: true, subtree: true });
+    overviewCanvasTarget = doc.body;
+    if (!overviewCanvasSizeObserver && typeof window.ResizeObserver === 'function') {
+      overviewCanvasSizeObserver = new window.ResizeObserver(onOverviewCanvasChange);
+    }
+    overviewCanvasSizeTarget = null;
+    watchOverviewCanvasRoot();
+    return true;
   }
 
   /**
@@ -9604,6 +9736,7 @@ var DASHICON_NAMES = [
         overviewResizeTarget = visual;
       }
     }
+    observeOverviewCanvas();
     if (window.matchMedia) {
       overviewMedia = window.matchMedia('(max-width: 782px)');
       if (typeof overviewMedia.addEventListener === 'function') {
@@ -9852,6 +9985,20 @@ var DASHICON_NAMES = [
       overviewResizeObserver = null;
     }
     overviewResizeTarget = null;
+    if (overviewCanvasObserver) {
+      overviewCanvasObserver.disconnect();
+      overviewCanvasObserver = null;
+    }
+    overviewCanvasTarget = null;
+    if (overviewCanvasSizeObserver) {
+      overviewCanvasSizeObserver.disconnect();
+      overviewCanvasSizeObserver = null;
+    }
+    overviewCanvasSizeTarget = null;
+    if (overviewCanvasRefitTimer) {
+      window.clearTimeout(overviewCanvasRefitTimer);
+      overviewCanvasRefitTimer = 0;
+    }
     if (overviewMedia) {
       if (typeof overviewMedia.removeEventListener === 'function') {
         overviewMedia.removeEventListener('change', onOverviewMediaChange);
@@ -9965,6 +10112,14 @@ var DASHICON_NAMES = [
         overviewResizeObserver.observe(visual);
         overviewResizeTarget = visual;
       }
+    }
+    // A replaced canvas iframe has a new body; watch that one instead. A
+    // canvas that had no body yet at open time gets its observers now.
+    // applyOverviewScale above used the OLD canvas's extent, and an
+    // already-rendered new body may never change again, so refit against
+    // it now (PR #69 review).
+    if (observeOverviewCanvas()) {
+      onOverviewCanvasChange();
     }
     if (!overviewNode()) {
       createOverviewOverlay(body);
@@ -12012,10 +12167,18 @@ var DASHICON_NAMES = [
    * stamped Group against an empty store). A watcher keyed on the first
    * stamp alone stood down there, and the Group lift never reached that
    * account (review 2026-09-02, finding 1). Redo the migration
-   * (idempotent, and this time nothing is racing it) and repaint. Once
-   * both stamps are confirmed to have survived a dispatch, there is
-   * nothing left that could ever wipe them again this page load, so the
-   * watcher unsubscribes itself.
+   * (idempotent, and this time nothing is racing it) and repaint.
+   *
+   * The watcher stays subscribed for the whole page load. It used to stop
+   * once both stamps had survived a dispatch, on the idea that nothing
+   * could wipe them after that. That was wrong: on a fresh account, other
+   * core/preferences dispatches come BEFORE core's attach resolves (it
+   * awaits a REST fetch), so the stamps survived those, the watcher
+   * stopped, and the attach then wiped them unseen. The rail kept showing
+   * its default pins over an empty store, and the author's first pin
+   * change in that session replaced the defaults for good (measured on
+   * wp-env, 2026-10-15). Staying subscribed costs two reads per
+   * core/preferences dispatch.
    */
   function liftsComplete() {
     return readKey(MIGRATED_KEY) !== null && readKey(GROUP_SEEDED_KEY) !== null;
@@ -12025,10 +12188,12 @@ var DASHICON_NAMES = [
    * Watch for the preferences persistence layer's late attach and repair
    * what it wiped: re-run both migrations, re-read the position, and
    * re-mount. See the note above for why a dispatch that leaves either
-   * stamp missing is the reliable signal. Unsubscribes once both stamps
-   * have survived a dispatch, and settles the readiness contract on every
-   * exit — including the localStorage-fallback browser, which has nothing
-   * to wait for and must not leave an extension awaiting `ready` hanging.
+   * stamp missing is the reliable signal, and why the watcher never
+   * unsubscribes. Settles the readiness contract the first time the
+   * stamps read back, and signals it again after each repair (a "re-read
+   * me" for extensions) — never on an ordinary dispatch. The
+   * localStorage-fallback browser has nothing to wait for and is settled
+   * at once, so an extension awaiting `ready` is never left hanging.
    */
   function watchPersistenceAttach() {
     if (!wp.data || typeof wp.data.subscribe !== 'function' || !prefsSelect()) {
@@ -12041,13 +12206,14 @@ var DASHICON_NAMES = [
 
     var repairing = false;
 
-    var unsubscribe = wp.data.subscribe(function () {
+    wp.data.subscribe(function () {
       if (repairing) {
         return;
       }
       if (liftsComplete()) {
-        unsubscribe();
-        markPrefsReady();
+        if (!prefsReady) {
+          markPrefsReady();
+        }
         return;
       }
       repairing = true;
@@ -12066,8 +12232,8 @@ var DASHICON_NAMES = [
       } finally {
         repairing = false;
       }
+      // A repair is a "re-read me" for extensions: signal it every time.
       if (liftsComplete()) {
-        unsubscribe();
         markPrefsReady();
       }
     }, 'core/preferences');

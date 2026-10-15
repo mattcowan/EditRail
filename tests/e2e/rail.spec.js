@@ -2206,6 +2206,37 @@ test.describe('regressions', () => {
     expect(await getPref(page, 'toolrail-slots-migrated')).toBe('1');
   });
 
+  test('a late attach is still repaired after other preference changes came first', async ({ page }) => {
+    await openNewPost(page);
+    await expect(page.locator('#toolrail-rail [data-tool^="pin:"]')).toHaveCount(4);
+
+    // On a fresh account, core/preferences takes other changes while its
+    // attach still awaits a REST fetch. The stamps survive those, and the
+    // watcher used to stop there; the attach then wiped the store unseen,
+    // under a rail still showing four pins (PR #69, 2026-10-15). A
+    // test-only key stands in for those changes (never restored to the
+    // account; see TEST_ONLY_KEY).
+    await page.evaluate(() => {
+      window.wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-ext:e2e:unrelated', '1');
+    });
+    expect(await getPref(page, 'toolrail-slots-migrated')).toBe('1');
+
+    // Now the attach lands, as in the test above.
+    await page.evaluate(() => window.wp.data.dispatch('core/preferences').setPersistenceLayer({
+      get: () => Promise.resolve({}),
+      set: () => {},
+    }));
+
+    // Repaired in the STORE, not only on screen: the pins and both stamps
+    // read back, so a pin change now acts on the real list.
+    await expect.poll(() => getPref(page, 'toolrail-slots-migrated'), { timeout: 5000 }).toBe('1');
+    expect(await getPref(page, 'toolrail-group-seeded')).toBe('1');
+    expect(JSON.parse(await getPref(page, 'toolrail-quick-slots'))).toEqual([
+      'core/group', 'core/paragraph', 'core/heading', 'core/image',
+    ]);
+    await expect(page.locator('#toolrail-rail [data-tool^="pin:"]')).toHaveCount(4);
+  });
+
   test('a second browser\'s real position is not blocked by an earlier empty-handed migration pass', async ({ page }) => {
     await openNewPost(page); // "browser A": nothing local, migration already ran once
 
@@ -4618,6 +4649,190 @@ async function drillIntoFirst(page) {
   await overviewBoxButton(page, rootId, 'enter').click();
   return rootId;
 }
+
+test.describe('overview follows late canvas changes (#64)', () => {
+  test('the boxes follow a canvas change that lands after the timed settle passes, then go idle', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        ['FIRST', 'SECOND', 'THIRD'].map((c) => createBlock('core/paragraph', { content: c }))
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(3);
+    const ids = await page.evaluate(() => window.wp.data.select('core/block-editor').getBlockOrder(''));
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    const boxTop = (id) => page.evaluate((cid) => {
+      const b = document.querySelector(`#toolrail-overview .toolrail-ov-box[data-clientid="${cid}"]`);
+      return b && b.style.display !== 'none' ? b.getBoundingClientRect().top : null;
+    }, id);
+    await expect.poll(() => boxTop(ids[1])).not.toBeNull();
+    // Outlast both timed passes (rAF and 220 ms), so only the canvas
+    // observer can move the boxes from here on.
+    await page.waitForTimeout(600);
+    const firstBefore = await boxTop(ids[0]);
+    const secondBefore = await boxTop(ids[1]);
+    const k = await page.evaluate(() =>
+      parseFloat(document.body.style.getPropertyValue('--toolrail-overview-scale')) || 1
+    );
+
+    // A late canvas change with no store change: the same thing a slow
+    // reorder flush does. A 300px spacer before SECOND pushes it down.
+    await page.evaluate((cid) => {
+      const doc = document.querySelector('iframe[name="editor-canvas"]').contentDocument;
+      const spacer = doc.createElement('div');
+      spacer.id = 'e2e-late-spacer';
+      spacer.style.height = '300px';
+      const block = doc.querySelector(`[data-block="${cid}"]`);
+      block.parentNode.insertBefore(spacer, block);
+    }, ids[1]);
+    await expect.poll(async () => (await boxTop(ids[1])) - secondBefore).toBeGreaterThan(300 * k * 0.5);
+    expect(Math.abs((await boxTop(ids[0])) - firstBefore)).toBeLessThan(1);
+
+    // Settled means idle: the observer reacts to canvas changes only, so
+    // the open overview no longer changes its own DOM. Before #64 the
+    // zoom label was rewritten about every 110 ms, observer or not.
+    await page.waitForTimeout(600);
+    const idleMutations = await page.evaluate(() => new Promise((resolve) => {
+      let count = 0;
+      const mo = new MutationObserver((records) => { count += records.length; });
+      mo.observe(document.getElementById('toolrail-overview'), { attributes: true, childList: true, subtree: true });
+      setTimeout(() => { mo.disconnect(); resolve(count); }, 1500);
+    }));
+    expect(idleMutations).toBe(0);
+
+    // Taking the spacer out moves SECOND back.
+    await page.evaluate(() => {
+      const doc = document.querySelector('iframe[name="editor-canvas"]').contentDocument;
+      doc.getElementById('e2e-late-spacer').remove();
+    });
+    await expect.poll(async () => Math.abs((await boxTop(ids[1])) - secondBefore)).toBeLessThan(1);
+  });
+
+  test('after a block-editor reorder, the boxes stand in the order of getBlockOrder', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        ['FIRST', 'SECOND', 'THIRD', 'FOURTH'].map((c) => createBlock('core/paragraph', { content: c }))
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(4);
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    // The boxes from top to bottom, as client IDs.
+    const boxOrder = () => page.evaluate(() =>
+      Array.from(document.querySelectorAll('#toolrail-overview .toolrail-ov-box[data-clientid]'))
+        .filter((b) => b.style.display !== 'none')
+        .map((b) => ({ id: b.dataset.clientid, top: b.getBoundingClientRect().top }))
+        .sort((a, b) => a.top - b.top)
+        .map((b) => b.id)
+    );
+    const storeOrder = () => page.evaluate(() => window.wp.data.select('core/block-editor').getBlockOrder(''));
+    await expect.poll(boxOrder).toEqual(await storeOrder());
+    await page.waitForTimeout(600);
+
+    // A real reorder through the store: the last block to the top. The
+    // canvas applies it when React flushes; the boxes must follow that
+    // flush, not the store alone. This test does not force the flush
+    // later than the 220 ms pass; the tests below change the canvas
+    // after it, which is the late case.
+    const before = await storeOrder();
+    await page.evaluate((ids) => {
+      window.wp.data.dispatch('core/block-editor').moveBlocksToPosition([ids[3]], '', '', 0);
+    }, before);
+    await expect.poll(storeOrder).toEqual([before[3], before[0], before[1], before[2]]);
+    await expect.poll(boxOrder, { message: 'the boxes stand in store order' }).toEqual(await storeOrder());
+  });
+
+  test('a late canvas height change at the end of the document is refit, not left past the frame', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        ['FIRST', 'SECOND', 'THIRD'].map((c) => createBlock('core/paragraph', { content: c }))
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(3);
+    const ids = await page.evaluate(() => window.wp.data.select('core/block-editor').getBlockOrder(''));
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    const frameHeight = () => page.evaluate(() =>
+      parseFloat(document.body.style.getPropertyValue('--toolrail-ov-frameh')) || 0
+    );
+    await expect.poll(frameHeight).toBeGreaterThan(0);
+    // Outlast the timed passes: from here only the canvas observer refits.
+    await page.waitForTimeout(600);
+    const before = await frameHeight();
+
+    // Content that grows after the store change (an image or embed that
+    // loads late), at the END, where a stale extent leaves it past the
+    // frame. The store subscription measured before this existed.
+    await page.evaluate((cid) => {
+      const doc = document.querySelector('iframe[name="editor-canvas"]').contentDocument;
+      const tail = doc.createElement('div');
+      tail.id = 'e2e-late-tail';
+      tail.style.height = '3000px';
+      const block = doc.querySelector(`[data-block="${cid}"]`);
+      block.appendChild(tail);
+    }, ids[2]);
+    await expect.poll(frameHeight, { message: 'the frame refits to the taller content' })
+      .toBeGreaterThan(before + 2500);
+
+    // And back down when it goes.
+    await page.evaluate(() => {
+      document.querySelector('iframe[name="editor-canvas"]').contentDocument
+        .getElementById('e2e-late-tail').remove();
+    });
+    await expect.poll(async () => Math.abs((await frameHeight()) - before)).toBeLessThan(2);
+  });
+
+  test('an image that loads after the overview settled is refit — a size change with no childList change', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        ['FIRST', 'SECOND', 'THIRD'].map((c) => createBlock('core/paragraph', { content: c }))
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(3);
+    const ids = await page.evaluate(() => window.wp.data.select('core/block-editor').getBlockOrder(''));
+    // An image already in the last block, with nothing loaded yet: it
+    // takes no space. Added BEFORE the overview opens, so this childList
+    // change is old news by the time the overview watches the canvas.
+    await page.evaluate((cid) => {
+      const doc = document.querySelector('iframe[name="editor-canvas"]').contentDocument;
+      const img = doc.createElement('img');
+      img.id = 'e2e-late-image';
+      img.alt = '';
+      img.style.display = 'block';
+      doc.querySelector(`[data-block="${cid}"]`).appendChild(img);
+    }, ids[2]);
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    const frameHeight = () => page.evaluate(() =>
+      parseFloat(document.body.style.getPropertyValue('--toolrail-ov-frameh')) || 0
+    );
+    await expect.poll(frameHeight).toBeGreaterThan(0);
+    await page.waitForTimeout(600);
+    const before = await frameHeight();
+
+    // The image loads: a src ATTRIBUTE change, and a 3000px intrinsic
+    // height, with no node added or removed anywhere.
+    await page.evaluate(() => {
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="3000"></svg>';
+      document.querySelector('iframe[name="editor-canvas"]').contentDocument
+        .getElementById('e2e-late-image').src = 'data:image/svg+xml,' + encodeURIComponent(svg);
+    });
+    await expect.poll(frameHeight, { message: 'the frame refits to the loaded image' })
+      .toBeGreaterThan(before + 2500);
+  });
+});
 
 test.describe('overview drag stress (grids, columns, notices)', () => {
   test('a grid cell drags HORIZONTALLY past its neighbor — vertical drop line, same-row reorder', async ({ page }) => {

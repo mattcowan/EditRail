@@ -135,7 +135,7 @@ var snap = window.toolrail.prefs.get('toolrail-ext:my-plugin:snap'); // string o
 window.toolrail.prefs.set('toolrail-ext:my-plugin:snap', '1');
 ```
 
-Keys must start with `toolrail-ext:`. Values are strings. The store is the same per-user account store the rail uses, so the state follows the author. A read before `ready` resolves can return `null` for a key the author has. Read again after `ready`, or listen for the `toolrail:prefs-ready` window event.
+Keys must start with `toolrail-ext:`. Values are strings. The store is the same per-user account store the rail uses, so the state follows the author. A read before `ready` resolves can return `null` for a key the author has. Read again after `ready`, or listen for the `toolrail:prefs-ready` window event. The event can fire more than once: it fires again each time the toolbar repairs preferences that the editor reset. Make your listener safe to run more than once.
 
 `window.toolrail` also has calls for these. The header comment of `assets/editor-rail.js` documents each one.
 
@@ -194,7 +194,7 @@ Then copy `.env.example` to `.env` and set `WP_USERNAME` and `WP_PASSWORD`. Set 
 
 `docs/releasing.md` describes the CI workflows and the release procedure.
 
-The e2e suite writes pins, positions and sets to the account it logs in with. It resets them to the defaults at the start of each test and at the end of the run. Do not point it at an account whose toolbar setup you want to keep.
+The e2e suite writes pins, positions and sets to the account it logs in with. It resets them to the defaults at the start of each test and at the end of the run. It also turns off the editor's welcome guide for that account. Do not point it at an account whose toolbar setup you want to keep.
 
 ## Data and privacy
 

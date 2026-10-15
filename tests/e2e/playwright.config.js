@@ -62,7 +62,11 @@ module.exports = defineConfig({
   use: {
     baseURL,
     screenshot: 'only-on-failure',
-    trace: 'on-first-retry',
+    // retries is 0, so 'on-first-retry' never recorded a trace. In CI,
+    // keep one for every failed test: the "Upload Playwright output on
+    // failure" step uploads test-results/, and a CI-only failure can then
+    // be replayed step by step (npx playwright show-trace).
+    trace: process.env.CI ? 'retain-on-failure' : 'on-first-retry',
   },
   projects: [
     {

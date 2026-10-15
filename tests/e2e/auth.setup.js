@@ -7,7 +7,7 @@ const { test: setup, expect } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
 const { assertSafeBaseUrl, assertSafeLoginPage } = require('../../scripts/lib/safe-base-url');
-const { snapshotRailPrefs } = require('./prefs-account');
+const { snapshotRailPrefs, turnOffWelcomeGuide } = require('./prefs-account');
 
 const AUTH_FILE = path.join(__dirname, '.auth', 'admin.json');
 const USER = process.env.TOOLRAIL_ADMIN_USER || 'admin';
@@ -23,8 +23,27 @@ setup('authenticate as admin', async ({ page }) => {
   assertSafeBaseUrl(setup.info().project.use.baseURL, 'TOOLRAIL_URL');
   await page.goto('/wp-login.php');
   await assertSafeLoginPage(page, 'TOOLRAIL_URL');
-  await page.fill('#user_login', USER);
-  await page.fill('#user_pass', PASS);
+  // wp-login.php focuses and selects the username field 200 ms after load
+  // (wp_attempt_focus). A fill that straddled that timer typed the
+  // password into the username field, and the login failed (PR #69 CI,
+  // Firefox; also seen locally in WebKit). So let the timer run first
+  // (a site can turn it off, hence the short, optional wait), then fill,
+  // and check both fields before the submit. The check compares in the
+  // page, so the password never appears in a failure message. A retry is
+  // safe: fill replaces a field's text, it never adds to it.
+  await page.waitForFunction(
+    () => document.activeElement && document.activeElement.id === 'user_login',
+    null,
+    { timeout: 2000 }
+  ).catch(() => {});
+  await expect(async () => {
+    await page.fill('#user_login', USER);
+    await page.fill('#user_pass', PASS);
+    expect(await page.evaluate(([u, p]) =>
+      document.getElementById('user_login').value === u
+        && document.getElementById('user_pass').value === p,
+    [USER, PASS]), 'both login fields hold what was typed').toBe(true);
+  }).toPass({ timeout: 10000 });
   await page.click('#wp-submit');
 
   await page.waitForURL(/wp-admin/, { timeout: 15000 });
@@ -47,4 +66,9 @@ setup('authenticate as admin', async ({ page }) => {
   // in a worker, so the runner that owns the run (and runs the teardown) is
   // the worker's parent process.
   await snapshotRailPrefs(setup.info().project.use.baseURL, AUTH_FILE, process.ppid, '[editrail e2e]');
+
+  // After the snapshot, which is also the run lock: no test should meet
+  // core's welcome guide. See turnOffWelcomeGuide() for why a guide closed
+  // just before a hover broke the between-block "+" test in CI.
+  await turnOffWelcomeGuide(setup.info().project.use.baseURL, AUTH_FILE);
 });

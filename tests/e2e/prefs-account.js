@@ -250,6 +250,63 @@ async function writeEditorMode(api, mode) {
 }
 
 /**
+ * Turn core's welcome guide off for the test account, and confirm it.
+ *
+ * Every test closes the guide when it shows (openNewPost). On a fresh
+ * account (each CI shard's wp-env site) that close can be lost: core's
+ * late preferences attach replaces the whole store, so the guide came
+ * back, test after test. A test that hovered the canvas right after
+ * closing it never got core's between-block "+": the hover lands within
+ * about 150 ms of the close, and core does not raise the "+" then
+ * (reproduced 3 of 3 on wp-env, 2026-10-15; 3 s later it does). Turning
+ * the guide off once per run, on the server, removes that.
+ *
+ * WordPress 7.1 keeps it in `core/edit-post`; `core` is written too in
+ * case a later release moves it. Closing the guide is what an author does
+ * anyway, so this is not undone after the run.
+ *
+ * @param {string} baseURL      Site root.
+ * @param {string} storageState Saved login for that site.
+ * @return {Promise<boolean>} True when the server copy changed.
+ */
+async function turnOffWelcomeGuide(baseURL, storageState) {
+  const api = await openApi(baseURL, storageState);
+  try {
+    const off = (prefs) => ['core/edit-post', 'core'].every((scope) => (prefs[scope] || {}).welcomeGuide === false);
+    let changed = false;
+    let agreed = 0;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const prefs = await readPrefs(api);
+      if (off(prefs)) {
+        agreed += 1;
+        if (agreed === 2 || !changed) {
+          return changed;
+        }
+        await pause(1000);
+        continue;
+      }
+      agreed = 0;
+      changed = true;
+      const next = { ...prefs, _modified: new Date().toISOString() };
+      ['core/edit-post', 'core'].forEach((scope) => {
+        next[scope] = { ...(prefs[scope] || {}), welcomeGuide: false };
+      });
+      const res = await api.ctx.post(USERS_ME_WRITE, {
+        headers: { 'X-WP-Nonce': api.nonce },
+        data: { meta: { persisted_preferences: next } },
+      });
+      if (!res.ok()) {
+        throw new Error(`Turning off the welcome guide failed (HTTP ${res.status()}).`);
+      }
+      await pause(500);
+    }
+    throw new Error('The test account would not keep the welcome guide off after 10 writes.');
+  } finally {
+    await api.ctx.dispose();
+  }
+}
+
+/**
  * The pinned slots in a scope, for a one-line summary.
  *
  * @param {Object} scope A toolrail scope.
@@ -555,6 +612,7 @@ module.exports = {
   readPrefs,
   writeToolrailScope,
   writeEditorMode,
+  turnOffWelcomeGuide,
   setRailScope,
   snapshotRailPrefs,
   restoreRailPrefs,
