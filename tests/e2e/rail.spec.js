@@ -2206,6 +2206,37 @@ test.describe('regressions', () => {
     expect(await getPref(page, 'toolrail-slots-migrated')).toBe('1');
   });
 
+  test('a late attach is still repaired after other preference changes came first', async ({ page }) => {
+    await openNewPost(page);
+    await expect(page.locator('#toolrail-rail [data-tool^="pin:"]')).toHaveCount(4);
+
+    // On a fresh account, core/preferences takes other changes while its
+    // attach still awaits a REST fetch. The stamps survive those, and the
+    // watcher used to stop there; the attach then wiped the store unseen,
+    // under a rail still showing four pins (PR #69, 2026-10-15). A
+    // test-only key stands in for those changes (never restored to the
+    // account; see TEST_ONLY_KEY).
+    await page.evaluate(() => {
+      window.wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-ext:e2e:unrelated', '1');
+    });
+    expect(await getPref(page, 'toolrail-slots-migrated')).toBe('1');
+
+    // Now the attach lands, as in the test above.
+    await page.evaluate(() => window.wp.data.dispatch('core/preferences').setPersistenceLayer({
+      get: () => Promise.resolve({}),
+      set: () => {},
+    }));
+
+    // Repaired in the STORE, not only on screen: the pins and both stamps
+    // read back, so a pin change now acts on the real list.
+    await expect.poll(() => getPref(page, 'toolrail-slots-migrated'), { timeout: 5000 }).toBe('1');
+    expect(await getPref(page, 'toolrail-group-seeded')).toBe('1');
+    expect(JSON.parse(await getPref(page, 'toolrail-quick-slots'))).toEqual([
+      'core/group', 'core/paragraph', 'core/heading', 'core/image',
+    ]);
+    await expect(page.locator('#toolrail-rail [data-tool^="pin:"]')).toHaveCount(4);
+  });
+
   test('a second browser\'s real position is not blocked by an earlier empty-handed migration pass', async ({ page }) => {
     await openNewPost(page); // "browser A": nothing local, migration already ran once
 
@@ -4678,6 +4709,43 @@ test.describe('overview follows late canvas changes (#64)', () => {
       doc.getElementById('e2e-late-spacer').remove();
     });
     await expect.poll(async () => Math.abs((await boxTop(ids[1])) - secondBefore)).toBeLessThan(1);
+  });
+
+  test('after a block-editor reorder, the boxes stand in the order of getBlockOrder', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        ['FIRST', 'SECOND', 'THIRD', 'FOURTH'].map((c) => createBlock('core/paragraph', { content: c }))
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(4);
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    // The boxes from top to bottom, as client IDs.
+    const boxOrder = () => page.evaluate(() =>
+      Array.from(document.querySelectorAll('#toolrail-overview .toolrail-ov-box[data-clientid]'))
+        .filter((b) => b.style.display !== 'none')
+        .map((b) => ({ id: b.dataset.clientid, top: b.getBoundingClientRect().top }))
+        .sort((a, b) => a.top - b.top)
+        .map((b) => b.id)
+    );
+    const storeOrder = () => page.evaluate(() => window.wp.data.select('core/block-editor').getBlockOrder(''));
+    await expect.poll(boxOrder).toEqual(await storeOrder());
+    await page.waitForTimeout(600);
+
+    // A real reorder through the store: the last block to the top. The
+    // canvas applies it when React flushes; the boxes must follow that
+    // flush, not the store alone. This test does not force the flush
+    // later than the 220 ms pass; the tests below change the canvas
+    // after it, which is the late case.
+    const before = await storeOrder();
+    await page.evaluate((ids) => {
+      window.wp.data.dispatch('core/block-editor').moveBlocksToPosition([ids[3]], '', '', 0);
+    }, before);
+    await expect.poll(storeOrder).toEqual([before[3], before[0], before[1], before[2]]);
+    await expect.poll(boxOrder, { message: 'the boxes stand in store order' }).toEqual(await storeOrder());
   });
 
   test('a late canvas height change at the end of the document is refit, not left past the frame', async ({ page }) => {

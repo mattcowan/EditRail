@@ -66,6 +66,7 @@ The plugin folder is now editrail. After a zip upgrade, delete the old toolrail 
 == Changelog ==
 
 = 1.0.6 =
+* The first time you open the editor on a new account, your changes to the toolbar's tools are kept. Before, the default tools were sometimes not saved during that first visit. If you pinned or unpinned a tool then, the toolbar kept only that change, and the default tools were gone.
 * Section overview: after you move a block, the outline boxes move to the block's new place, also when the editor is slow to update. Before, on a slow computer, some boxes could stay in the wrong place.
 * Section overview: when content gets taller while the overview is open, for example when an image loads, the overview fits the new height. Before, the content below the old height could be out of reach.
 * Section overview: while the overview is open and you do nothing, it does no work. Before, it rewrote its zoom percentage about nine times each second.

@@ -12167,10 +12167,18 @@ var DASHICON_NAMES = [
    * stamped Group against an empty store). A watcher keyed on the first
    * stamp alone stood down there, and the Group lift never reached that
    * account (review 2026-09-02, finding 1). Redo the migration
-   * (idempotent, and this time nothing is racing it) and repaint. Once
-   * both stamps are confirmed to have survived a dispatch, there is
-   * nothing left that could ever wipe them again this page load, so the
-   * watcher unsubscribes itself.
+   * (idempotent, and this time nothing is racing it) and repaint.
+   *
+   * The watcher stays subscribed for the whole page load. It used to stop
+   * once both stamps had survived a dispatch, on the idea that nothing
+   * could wipe them after that. That was wrong: on a fresh account, other
+   * core/preferences dispatches come BEFORE core's attach resolves (it
+   * awaits a REST fetch), so the stamps survived those, the watcher
+   * stopped, and the attach then wiped them unseen. The rail kept showing
+   * its default pins over an empty store, and the author's first pin
+   * change in that session replaced the defaults for good (measured on
+   * wp-env, 2026-10-15). Staying subscribed costs two reads per
+   * core/preferences dispatch.
    */
   function liftsComplete() {
     return readKey(MIGRATED_KEY) !== null && readKey(GROUP_SEEDED_KEY) !== null;
@@ -12180,10 +12188,12 @@ var DASHICON_NAMES = [
    * Watch for the preferences persistence layer's late attach and repair
    * what it wiped: re-run both migrations, re-read the position, and
    * re-mount. See the note above for why a dispatch that leaves either
-   * stamp missing is the reliable signal. Unsubscribes once both stamps
-   * have survived a dispatch, and settles the readiness contract on every
-   * exit — including the localStorage-fallback browser, which has nothing
-   * to wait for and must not leave an extension awaiting `ready` hanging.
+   * stamp missing is the reliable signal, and why the watcher never
+   * unsubscribes. Settles the readiness contract the first time the
+   * stamps read back, and signals it again after each repair (a "re-read
+   * me" for extensions) — never on an ordinary dispatch. The
+   * localStorage-fallback browser has nothing to wait for and is settled
+   * at once, so an extension awaiting `ready` is never left hanging.
    */
   function watchPersistenceAttach() {
     if (!wp.data || typeof wp.data.subscribe !== 'function' || !prefsSelect()) {
@@ -12196,13 +12206,14 @@ var DASHICON_NAMES = [
 
     var repairing = false;
 
-    var unsubscribe = wp.data.subscribe(function () {
+    wp.data.subscribe(function () {
       if (repairing) {
         return;
       }
       if (liftsComplete()) {
-        unsubscribe();
-        markPrefsReady();
+        if (!prefsReady) {
+          markPrefsReady();
+        }
         return;
       }
       repairing = true;
@@ -12221,8 +12232,8 @@ var DASHICON_NAMES = [
       } finally {
         repairing = false;
       }
+      // A repair is a "re-read me" for extensions: signal it every time.
       if (liftsComplete()) {
-        unsubscribe();
         markPrefsReady();
       }
     }, 'core/preferences');
