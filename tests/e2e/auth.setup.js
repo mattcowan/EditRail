@@ -23,8 +23,26 @@ setup('authenticate as admin', async ({ page }) => {
   assertSafeBaseUrl(setup.info().project.use.baseURL, 'TOOLRAIL_URL');
   await page.goto('/wp-login.php');
   await assertSafeLoginPage(page, 'TOOLRAIL_URL');
-  await page.fill('#user_login', USER);
-  await page.fill('#user_pass', PASS);
+  // wp-login.php focuses and selects the username field 200 ms after load
+  // (wp_attempt_focus). A fill that straddled that timer typed the
+  // password into the username field, and the login failed (PR #69 CI,
+  // Firefox; also seen locally in WebKit). So let the timer run first
+  // (a site can turn it off, hence the short, optional wait), then fill,
+  // and check both fields before the submit. The check compares in the
+  // page, so the password never appears in a failure message.
+  await page.waitForFunction(
+    () => document.activeElement && document.activeElement.id === 'user_login',
+    null,
+    { timeout: 2000 }
+  ).catch(() => {});
+  await expect(async () => {
+    await page.fill('#user_login', USER);
+    await page.fill('#user_pass', PASS);
+    expect(await page.evaluate(([u, p]) =>
+      document.getElementById('user_login').value === u
+        && document.getElementById('user_pass').value === p,
+    [USER, PASS]), 'both login fields hold what was typed').toBe(true);
+  }).toPass({ timeout: 10000 });
   await page.click('#wp-submit');
 
   await page.waitForURL(/wp-admin/, { timeout: 15000 });

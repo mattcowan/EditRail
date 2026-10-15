@@ -6776,6 +6776,13 @@ var DASHICON_NAMES = [
   var overviewCanvasObserver = null;
   // The canvas body that observer is watching (see overviewResizeTarget).
   var overviewCanvasTarget = null;
+  // Watches the SIZE of the canvas's root block list while the overview
+  // is open. An image or embed that loads, a web font, or a style change
+  // can make the document taller with no childList change, so the
+  // mutation observer alone never saw it (#64, PR #69 review).
+  var overviewCanvasSizeObserver = null;
+  // The root block list that observer is watching.
+  var overviewCanvasSizeTarget = null;
   // One box reposition per frame, however many mutation batches arrive.
   var overviewCanvasSettlePending = false;
   // The pending refit after a canvas change (a timer id, 0 for none). At
@@ -8148,53 +8155,103 @@ var DASHICON_NAMES = [
   }
 
   /**
-   * Follow the canvas whenever its block DOM changes while the overview
-   * is open, however late a reorder flushes (#64). The timed passes above
+   * The canvas changed while the overview is open: follow it, however
+   * late a reorder flushes or a block grows (#64). The timed passes above
    * guess at that delay; a slow browser can outlast them.
    *
    * Two steps, each rate-limited: the boxes reposition on the next frame
    * (at most once per frame), and the document extent is re-measured and
    * refit 220 ms later (at most one pending at a time). The refit is what
-   * catches a late HEIGHT change, such as an image or embed that loads
-   * after the store change, which the store subscription measured too
-   * early to see.
+   * catches a late HEIGHT change, which the store subscription measured
+   * too early to see.
+   *
+   * Everything here reads the canvas and writes only to the overlay and
+   * the editor document. A refit can change the frame's height, and
+   * viewport-relative content then resizes the root block list once; the
+   * extent is measured with the frame at its natural height
+   * (measureOverviewExtent), so that second refit computes the same
+   * height and the size observer stops.
+   */
+  function onOverviewCanvasChange() {
+    if (!overviewOpen) {
+      return;
+    }
+    // React can replace the root block list inside the same body; the
+    // size observer must follow it (the mutation observer sees the swap).
+    watchOverviewCanvasRoot();
+    if (!overviewCanvasSettlePending) {
+      overviewCanvasSettlePending = true;
+      window.requestAnimationFrame(function () {
+        overviewCanvasSettlePending = false;
+        if (overviewOpen) {
+          positionOverviewBoxes();
+        }
+      });
+    }
+    if (!overviewCanvasRefitTimer) {
+      overviewCanvasRefitTimer = window.setTimeout(function () {
+        overviewCanvasRefitTimer = 0;
+        if (!overviewOpen) {
+          return;
+        }
+        overviewExtentDirty = true;
+        applyOverviewScale();
+        positionOverviewBoxes();
+      }, 220);
+    }
+  }
+
+  /** Point the size observer at the current root block list, if it moved. */
+  function watchOverviewCanvasRoot() {
+    if (!overviewCanvasSizeObserver || !overviewCanvasTarget) {
+      return;
+    }
+    var root = overviewCanvasTarget.querySelector('.is-root-container');
+    if (root && root !== overviewCanvasSizeTarget) {
+      overviewCanvasSizeObserver.disconnect();
+      overviewCanvasSizeObserver.observe(root);
+      overviewCanvasSizeTarget = root;
+    }
+  }
+
+  /**
+   * Watch the canvas while the overview is open: its block DOM (a
+   * MutationObserver on the body) and its size (a ResizeObserver on the
+   * root block list). Both call onOverviewCanvasChange. Safe to call
+   * again: it creates the observers once, and moves them to a new canvas
+   * body when the editor replaced the iframe. Returns whether it attached
+   * to a body it was not watching before, so the caller knows the extent
+   * it applied came from the old canvas.
    *
    * Only for the iframed canvas. Without an iframe the canvas body is the
    * editor's own body, which holds the overlay this rebuilds; the timed
    * passes still cover that editor.
+   *
+   * @return {boolean} True when it attached to a new canvas body.
    */
   function observeOverviewCanvas() {
-    if (overviewCanvasObserver || typeof window.MutationObserver !== 'function') {
-      return;
+    if (typeof window.MutationObserver !== 'function') {
+      return false;
     }
     var doc = canvasDoc();
     if (!doc || doc === document || !doc.body) {
-      return;
+      return false;
     }
-    overviewCanvasObserver = new window.MutationObserver(function () {
-      if (!overviewCanvasSettlePending) {
-        overviewCanvasSettlePending = true;
-        window.requestAnimationFrame(function () {
-          overviewCanvasSettlePending = false;
-          if (overviewOpen) {
-            positionOverviewBoxes();
-          }
-        });
-      }
-      if (!overviewCanvasRefitTimer) {
-        overviewCanvasRefitTimer = window.setTimeout(function () {
-          overviewCanvasRefitTimer = 0;
-          if (!overviewOpen) {
-            return;
-          }
-          overviewExtentDirty = true;
-          applyOverviewScale();
-          positionOverviewBoxes();
-        }, 220);
-      }
-    });
+    if (doc.body === overviewCanvasTarget) {
+      return false;
+    }
+    if (!overviewCanvasObserver) {
+      overviewCanvasObserver = new window.MutationObserver(onOverviewCanvasChange);
+    }
+    overviewCanvasObserver.disconnect();
     overviewCanvasObserver.observe(doc.body, { childList: true, subtree: true });
     overviewCanvasTarget = doc.body;
+    if (!overviewCanvasSizeObserver && typeof window.ResizeObserver === 'function') {
+      overviewCanvasSizeObserver = new window.ResizeObserver(onOverviewCanvasChange);
+    }
+    overviewCanvasSizeTarget = null;
+    watchOverviewCanvasRoot();
+    return true;
   }
 
   /**
@@ -9933,6 +9990,11 @@ var DASHICON_NAMES = [
       overviewCanvasObserver = null;
     }
     overviewCanvasTarget = null;
+    if (overviewCanvasSizeObserver) {
+      overviewCanvasSizeObserver.disconnect();
+      overviewCanvasSizeObserver = null;
+    }
+    overviewCanvasSizeTarget = null;
     if (overviewCanvasRefitTimer) {
       window.clearTimeout(overviewCanvasRefitTimer);
       overviewCanvasRefitTimer = 0;
@@ -10052,17 +10114,12 @@ var DASHICON_NAMES = [
       }
     }
     // A replaced canvas iframe has a new body; watch that one instead. A
-    // canvas that had no body yet at open time gets its observer now.
-    if (!overviewCanvasObserver) {
-      observeOverviewCanvas();
-    } else {
-      var healDoc = canvasDoc();
-      var canvasBody = healDoc && healDoc !== document ? healDoc.body : null;
-      if (canvasBody && canvasBody !== overviewCanvasTarget) {
-        overviewCanvasObserver.disconnect();
-        overviewCanvasObserver.observe(canvasBody, { childList: true, subtree: true });
-        overviewCanvasTarget = canvasBody;
-      }
+    // canvas that had no body yet at open time gets its observers now.
+    // applyOverviewScale above used the OLD canvas's extent, and an
+    // already-rendered new body may never change again, so refit against
+    // it now (PR #69 review).
+    if (observeOverviewCanvas()) {
+      onOverviewCanvasChange();
     }
     if (!overviewNode()) {
       createOverviewOverlay(body);

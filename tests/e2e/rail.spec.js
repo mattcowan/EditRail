@@ -4722,6 +4722,48 @@ test.describe('overview follows late canvas changes (#64)', () => {
     });
     await expect.poll(async () => Math.abs((await frameHeight()) - before)).toBeLessThan(2);
   });
+
+  test('an image that loads after the overview settled is refit — a size change with no childList change', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        ['FIRST', 'SECOND', 'THIRD'].map((c) => createBlock('core/paragraph', { content: c }))
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(3);
+    const ids = await page.evaluate(() => window.wp.data.select('core/block-editor').getBlockOrder(''));
+    // An image already in the last block, with nothing loaded yet: it
+    // takes no space. Added BEFORE the overview opens, so this childList
+    // change is old news by the time the overview watches the canvas.
+    await page.evaluate((cid) => {
+      const doc = document.querySelector('iframe[name="editor-canvas"]').contentDocument;
+      const img = doc.createElement('img');
+      img.id = 'e2e-late-image';
+      img.alt = '';
+      img.style.display = 'block';
+      doc.querySelector(`[data-block="${cid}"]`).appendChild(img);
+    }, ids[2]);
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    const frameHeight = () => page.evaluate(() =>
+      parseFloat(document.body.style.getPropertyValue('--toolrail-ov-frameh')) || 0
+    );
+    await expect.poll(frameHeight).toBeGreaterThan(0);
+    await page.waitForTimeout(600);
+    const before = await frameHeight();
+
+    // The image loads: a src ATTRIBUTE change, and a 3000px intrinsic
+    // height, with no node added or removed anywhere.
+    await page.evaluate(() => {
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="3000"></svg>';
+      document.querySelector('iframe[name="editor-canvas"]').contentDocument
+        .getElementById('e2e-late-image').src = 'data:image/svg+xml,' + encodeURIComponent(svg);
+    });
+    await expect.poll(frameHeight, { message: 'the frame refits to the loaded image' })
+      .toBeGreaterThan(before + 2500);
+  });
 });
 
 test.describe('overview drag stress (grids, columns, notices)', () => {
