@@ -194,7 +194,7 @@ Then copy `.env.example` to `.env` and set `WP_USERNAME` and `WP_PASSWORD`. Set 
 
 `docs/releasing.md` describes the CI workflows and the release procedure.
 
-The e2e suite writes pins, positions and sets to the account it logs in with. It resets them to the defaults at the start of each test and at the end of the run. Do not point it at an account whose toolbar setup you want to keep.
+The e2e suite writes pins, positions and sets to the account it logs in with. It resets them to the defaults at the start of each test and at the end of the run. It also turns off the editor's welcome guide for that account. Do not point it at an account whose toolbar setup you want to keep.
 
 ## Data and privacy
 

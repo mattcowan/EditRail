@@ -7,7 +7,7 @@ const { test: setup, expect } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
 const { assertSafeBaseUrl, assertSafeLoginPage } = require('../../scripts/lib/safe-base-url');
-const { snapshotRailPrefs } = require('./prefs-account');
+const { snapshotRailPrefs, turnOffWelcomeGuide } = require('./prefs-account');
 
 const AUTH_FILE = path.join(__dirname, '.auth', 'admin.json');
 const USER = process.env.TOOLRAIL_ADMIN_USER || 'admin';
@@ -29,7 +29,8 @@ setup('authenticate as admin', async ({ page }) => {
   // Firefox; also seen locally in WebKit). So let the timer run first
   // (a site can turn it off, hence the short, optional wait), then fill,
   // and check both fields before the submit. The check compares in the
-  // page, so the password never appears in a failure message.
+  // page, so the password never appears in a failure message. A retry is
+  // safe: fill replaces a field's text, it never adds to it.
   await page.waitForFunction(
     () => document.activeElement && document.activeElement.id === 'user_login',
     null,
@@ -65,4 +66,9 @@ setup('authenticate as admin', async ({ page }) => {
   // in a worker, so the runner that owns the run (and runs the teardown) is
   // the worker's parent process.
   await snapshotRailPrefs(setup.info().project.use.baseURL, AUTH_FILE, process.ppid, '[editrail e2e]');
+
+  // After the snapshot, which is also the run lock: no test should meet
+  // core's welcome guide. See turnOffWelcomeGuide() for why a guide closed
+  // just before a hover broke the between-block "+" test in CI.
+  await turnOffWelcomeGuide(setup.info().project.use.baseURL, AUTH_FILE);
 });
