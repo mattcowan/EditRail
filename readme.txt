@@ -66,7 +66,8 @@ The plugin folder is now editrail. After a zip upgrade, delete the old toolrail 
 == Changelog ==
 
 = 1.0.6 =
-* Section overview: after you drag a block, the outline boxes move to the block's new place, also when the editor is slow to update. Before, on a slow computer, some boxes could stay in the wrong place.
+* Section overview: after you move a block, the outline boxes move to the block's new place, also when the editor is slow to update. Before, on a slow computer, some boxes could stay in the wrong place.
+* Section overview: when content gets taller while the overview is open, for example when an image loads, the overview fits the new height. Before, the content below the old height could be out of reach.
 * Section overview: while the overview is open and you do nothing, it does no work. Before, it rewrote its zoom percentage about nine times each second.
 
 = 1.0.5 =

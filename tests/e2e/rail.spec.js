@@ -4679,6 +4679,49 @@ test.describe('overview follows late canvas changes (#64)', () => {
     });
     await expect.poll(async () => Math.abs((await boxTop(ids[1])) - secondBefore)).toBeLessThan(1);
   });
+
+  test('a late canvas height change at the end of the document is refit, not left past the frame', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        ['FIRST', 'SECOND', 'THIRD'].map((c) => createBlock('core/paragraph', { content: c }))
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(3);
+    const ids = await page.evaluate(() => window.wp.data.select('core/block-editor').getBlockOrder(''));
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    const frameHeight = () => page.evaluate(() =>
+      parseFloat(document.body.style.getPropertyValue('--toolrail-ov-frameh')) || 0
+    );
+    await expect.poll(frameHeight).toBeGreaterThan(0);
+    // Outlast the timed passes: from here only the canvas observer refits.
+    await page.waitForTimeout(600);
+    const before = await frameHeight();
+
+    // Content that grows after the store change (an image or embed that
+    // loads late), at the END, where a stale extent leaves it past the
+    // frame. The store subscription measured before this existed.
+    await page.evaluate((cid) => {
+      const doc = document.querySelector('iframe[name="editor-canvas"]').contentDocument;
+      const tail = doc.createElement('div');
+      tail.id = 'e2e-late-tail';
+      tail.style.height = '3000px';
+      const block = doc.querySelector(`[data-block="${cid}"]`);
+      block.appendChild(tail);
+    }, ids[2]);
+    await expect.poll(frameHeight, { message: 'the frame refits to the taller content' })
+      .toBeGreaterThan(before + 2500);
+
+    // And back down when it goes.
+    await page.evaluate(() => {
+      document.querySelector('iframe[name="editor-canvas"]').contentDocument
+        .getElementById('e2e-late-tail').remove();
+    });
+    await expect.poll(async () => Math.abs((await frameHeight()) - before)).toBeLessThan(2);
+  });
 });
 
 test.describe('overview drag stress (grids, columns, notices)', () => {

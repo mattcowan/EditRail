@@ -6770,14 +6770,18 @@ var DASHICON_NAMES = [
   // Watches the canvas body's block DOM while the overview is open. A
   // reorder lands in the canvas when React flushes it, which can be later
   // than scheduleOverviewSettle's 220 ms pass on a slow browser; the boxes
-  // then kept the old layout (#64). The settle this schedules reads the
-  // canvas and writes only to the overlay and the editor document, so it
-  // cannot trigger the observer again.
+  // then kept the old layout (#64). What it runs reads the canvas and
+  // writes only to the overlay and the editor document, so it cannot
+  // trigger the observer again.
   var overviewCanvasObserver = null;
   // The canvas body that observer is watching (see overviewResizeTarget).
   var overviewCanvasTarget = null;
-  // One settle per frame, however many mutation batches arrive in it.
+  // One box reposition per frame, however many mutation batches arrive.
   var overviewCanvasSettlePending = false;
+  // The pending refit after a canvas change (a timer id, 0 for none). At
+  // most one is pending, so a canvas that changes all the time costs one
+  // refit per 220 ms, not one per frame.
+  var overviewCanvasRefitTimer = 0;
   // In-flight box drag ({clientId, startX, startY, active, toIndex}).
   // Drag-to-reorder is POINTER SUGAR over the same public move the
   // arrows dispatch (owner ask 2026-08-27) — the keyboard path is the
@@ -8133,21 +8137,31 @@ var DASHICON_NAMES = [
       }
       // Refit too, not just reposition: the canvas flush after a reorder
       // (or any content change a dispatch made) can change the document
-      // height the scale and pan clamp were computed from.
+      // height the scale and pan clamp were computed from. The extent is
+      // re-measured only when it is marked dirty; the store subscription
+      // marks it, but measures inside the dispatch, before the canvas
+      // flush. On the iframed canvas, observeOverviewCanvas marks it dirty
+      // again after the canvas has changed, and refits then.
       applyOverviewScale();
       positionOverviewBoxes();
     }, 220);
   }
 
   /**
-   * Settle the overview again whenever the canvas's block DOM changes
-   * while it is open, so the boxes follow the canvas however late a
-   * reorder flushes (#64). The timed passes above guess at that delay; a
-   * slow browser can outlast them.
+   * Follow the canvas whenever its block DOM changes while the overview
+   * is open, however late a reorder flushes (#64). The timed passes above
+   * guess at that delay; a slow browser can outlast them.
+   *
+   * Two steps, each rate-limited: the boxes reposition on the next frame
+   * (at most once per frame), and the document extent is re-measured and
+   * refit 220 ms later (at most one pending at a time). The refit is what
+   * catches a late HEIGHT change, such as an image or embed that loads
+   * after the store change, which the store subscription measured too
+   * early to see.
    *
    * Only for the iframed canvas. Without an iframe the canvas body is the
-   * editor's own body, which holds the overlay this settle rebuilds; the
-   * timed passes still cover that editor.
+   * editor's own body, which holds the overlay this rebuilds; the timed
+   * passes still cover that editor.
    */
   function observeOverviewCanvas() {
     if (overviewCanvasObserver || typeof window.MutationObserver !== 'function') {
@@ -8158,16 +8172,26 @@ var DASHICON_NAMES = [
       return;
     }
     overviewCanvasObserver = new window.MutationObserver(function () {
-      if (overviewCanvasSettlePending) {
-        return;
+      if (!overviewCanvasSettlePending) {
+        overviewCanvasSettlePending = true;
+        window.requestAnimationFrame(function () {
+          overviewCanvasSettlePending = false;
+          if (overviewOpen) {
+            positionOverviewBoxes();
+          }
+        });
       }
-      overviewCanvasSettlePending = true;
-      window.requestAnimationFrame(function () {
-        overviewCanvasSettlePending = false;
-        if (overviewOpen) {
-          scheduleOverviewSettle();
-        }
-      });
+      if (!overviewCanvasRefitTimer) {
+        overviewCanvasRefitTimer = window.setTimeout(function () {
+          overviewCanvasRefitTimer = 0;
+          if (!overviewOpen) {
+            return;
+          }
+          overviewExtentDirty = true;
+          applyOverviewScale();
+          positionOverviewBoxes();
+        }, 220);
+      }
     });
     overviewCanvasObserver.observe(doc.body, { childList: true, subtree: true });
     overviewCanvasTarget = doc.body;
@@ -9909,6 +9933,10 @@ var DASHICON_NAMES = [
       overviewCanvasObserver = null;
     }
     overviewCanvasTarget = null;
+    if (overviewCanvasRefitTimer) {
+      window.clearTimeout(overviewCanvasRefitTimer);
+      overviewCanvasRefitTimer = 0;
+    }
     if (overviewMedia) {
       if (typeof overviewMedia.removeEventListener === 'function') {
         overviewMedia.removeEventListener('change', onOverviewMediaChange);
