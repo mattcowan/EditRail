@@ -133,7 +133,7 @@ jobs:
           TOOLRAIL_BROWSERS: ${{ matrix.browser }}
       - name: Upload Playwright output on failure
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-output-${{ matrix.browser }}-${{ matrix.shard }}-${{ github.sha }}
           path: |
@@ -162,7 +162,7 @@ jobs:
       # build of any branch is one click away.
       - name: Upload zip artifact
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: editrail-${{ github.sha }}
           path: editrail.zip
