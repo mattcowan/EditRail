@@ -63,7 +63,7 @@ updates:
         patterns:
           - "*"
 
-  # The workflows pin some actions to a commit SHA; the WordPress.org
+  # The workflows pin every action to a commit SHA; the WordPress.org
   # deploy action runs with the SVN password. A pinned SHA never gets a
   # fix unless something bumps it.
   - package-ecosystem: github-actions
