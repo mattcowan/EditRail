@@ -132,7 +132,9 @@
    * same call made after the event has finished does take (measured
    * 2026-10-20, issue #74). So when the first call did not take, try once
    * more on the next task — but only if nothing else has taken focus in
-   * between, so the retry never pulls focus away from the author.
+   * between, so the retry never pulls focus away from the author. Focus
+   * that moves inside the canvas leaves this document's activeElement on
+   * the iframe, so the canvas's own activeElement is compared too.
    *
    * @param {HTMLElement} el      The element to focus.
    * @param {Object}      options Passed to focus(), such as preventScroll.
@@ -144,11 +146,26 @@
       return;
     }
     var before = document.activeElement;
+    var beforeInFrame = frameActiveElement(before);
     window.setTimeout(function () {
-      if (el.isConnected && document.activeElement === before) {
+      if (el.isConnected && document.activeElement === before
+        && frameActiveElement(before) === beforeInFrame) {
         el.focus(options);
       }
     }, 0);
+  }
+
+  /**
+   * @param {Element|null} node An element, maybe an iframe.
+   * @return {Element|null} The focused element inside the iframe, or null
+   *                        when node is not a same-origin iframe.
+   */
+  function frameActiveElement(node) {
+    try {
+      return node && node.contentDocument ? node.contentDocument.activeElement : null;
+    } catch (err) {
+      return null;
+    }
   }
 
   var SLOTS_KEY = 'toolrail-quick-slots';
