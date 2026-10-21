@@ -6086,6 +6086,10 @@ test.describe('pattern pins and drag (0.1.23)', () => {
       window.wp.data.dispatch('core/block-editor').resetBlocks([q]);
       return q.clientId;
     });
+    // A block dragged from the canvas leaves focus in the canvas, and the
+    // dialog's focus() must still take (#74: one browser engine ignored it).
+    await canvas(page).locator('[data-type="core/quote"] p').click();
+    expect(await page.evaluate(() => document.activeElement && document.activeElement.tagName)).toBe('IFRAME');
     await dropOnRail(page, { type: 'block', srcClientIds: [quoteId], srcRootClientId: '' });
 
     const dialog = page.locator('.toolrail-adddialog');

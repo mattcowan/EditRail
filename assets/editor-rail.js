@@ -122,6 +122,35 @@
     }
   }
 
+  /**
+   * Focus an element in this document from inside an event handler that
+   * may run while the editor canvas (an iframe) holds focus: a drop from
+   * the canvas, or a pointerdown whose default is prevented.
+   *
+   * One browser engine ignores such a focus() call while the iframe has
+   * focus: activeElement stays the iframe and no focus event fires. The
+   * same call made after the event has finished does take (measured
+   * 2026-10-20, issue #74). So when the first call did not take, try once
+   * more on the next task — but only if nothing else has taken focus in
+   * between, so the retry never pulls focus away from the author.
+   *
+   * @param {HTMLElement} el      The element to focus.
+   * @param {Object}      options Passed to focus(), such as preventScroll.
+   * @return {void}
+   */
+  function focusFromEvent(el, options) {
+    el.focus(options);
+    if (document.activeElement === el) {
+      return;
+    }
+    var before = document.activeElement;
+    window.setTimeout(function () {
+      if (el.isConnected && document.activeElement === before) {
+        el.focus(options);
+      }
+    }, 0);
+  }
+
   var SLOTS_KEY = 'toolrail-quick-slots';
   var CONFIGS_KEY = 'toolrail-slot-configs';
   var POSITION_KEY = 'toolrail-position';
@@ -1064,7 +1093,9 @@
     }
     var handle = e.currentTarget;
     e.preventDefault();
-    handle.focus({ preventScroll: true });
+    // The canvas may hold focus here; without focus, Escape never reaches
+    // the handle's keydown and cannot cancel the drag.
+    focusFromEvent(handle, { preventScroll: true });
     sidebarDrag = {
       handle: handle,
       pointerId: e.pointerId,
@@ -11652,7 +11683,8 @@ var DASHICON_NAMES = [
     document.addEventListener('keydown', onAddDialogKeydown, true);
     document.addEventListener('focusin', onAddDialogFocusin, true);
     var first = node.querySelector('#toolrail-adddialog-name') || node.querySelector('.toolrail-adddialog-pintype') || close;
-    first.focus();
+    // A drop from the canvas runs this while the canvas holds focus.
+    focusFromEvent(first);
     return true;
   }
 
