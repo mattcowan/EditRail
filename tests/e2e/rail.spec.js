@@ -4748,6 +4748,71 @@ test.describe('overview follows late canvas changes (#64)', () => {
     await expect.poll(boxOrder, { message: 'the boxes stand in store order' }).toEqual(await storeOrder());
   });
 
+  test('after a reorder, the boxes end where the blocks end once the canvas slide is over (#78)', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        Array.from({ length: 12 }, (_, i) => createBlock('core/paragraph', { content: 'P' + i }))
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(12);
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    // How far each box's top is from its block's on-screen top, in
+    // editor-document pixels: the block's rect is read inside the canvas
+    // and mapped through the scaled iframe, the way the overview does.
+    const maxDrift = () => page.evaluate(() => {
+      const frame = document.querySelector('iframe[name="editor-canvas"]');
+      const doc = frame.contentDocument;
+      const f = frame.getBoundingClientRect();
+      const k = frame.offsetWidth ? f.width / frame.offsetWidth : 1;
+      let max = 0;
+      window.wp.data.select('core/block-editor').getBlockOrder('').forEach((id) => {
+        const box = document.querySelector(`#toolrail-overview .toolrail-ov-box[data-clientid="${id}"]`);
+        const block = doc.querySelector(`[data-block="${id}"]`);
+        if (!box || !block || box.style.display === 'none') {
+          max = Infinity;
+          return;
+        }
+        const blockTop = f.top + block.getBoundingClientRect().top * k;
+        max = Math.max(max, Math.abs(box.getBoundingClientRect().top - blockTop));
+      });
+      return max;
+    });
+    await expect.poll(maxDrift).toBeLessThan(1);
+    await page.waitForTimeout(600);
+
+    // The block editor slides moved blocks into place with an inline
+    // transform, and ends the slide by clearing it: a style change, with
+    // no node added and no size changed. Record that the slide ran, so
+    // this test cannot pass on a canvas that skipped it.
+    await page.evaluate(() => {
+      const doc = document.querySelector('iframe[name="editor-canvas"]').contentDocument;
+      window.e2eSawSlide = false;
+      window.e2eSlideObserver = new MutationObserver((records) => {
+        if (records.some((r) => /translate3d/.test(r.target.style.transform || ''))) {
+          window.e2eSawSlide = true;
+        }
+      });
+      window.e2eSlideObserver.observe(doc.body, { attributes: true, attributeFilter: ['style'], subtree: true });
+    });
+    // The last block to the top: a long slide, still moving at 220 ms.
+    await page.evaluate(() => {
+      const order = window.wp.data.select('core/block-editor').getBlockOrder('');
+      window.wp.data.dispatch('core/block-editor').moveBlocksToPosition([order[order.length - 1]], '', '', 0);
+    });
+    await expect.poll(() => page.evaluate(() => window.e2eSawSlide), { message: 'the canvas slid the blocks' }).toBe(true);
+    await expect.poll(() => page.evaluate(() =>
+      Array.from(document.querySelector('iframe[name="editor-canvas"]').contentDocument.querySelectorAll('[data-block]'))
+        .every((el) => !el.style.transform)
+    ), { message: 'the slide ended' }).toBe(true);
+    await page.evaluate(() => window.e2eSlideObserver.disconnect());
+
+    await expect.poll(maxDrift, { message: 'every box sits on its block after the slide' }).toBeLessThan(1);
+  });
+
   test('a late canvas height change at the end of the document is refit, not left past the frame', async ({ page }) => {
     await openNewPost(page);
     await page.evaluate(() => {
@@ -5170,10 +5235,10 @@ test.describe('overview drag stress (grids, columns, notices)', () => {
     // Measure only once the boxes have settled after the first drop: in
     // document order, and unchanged across two reads. Measured mid-move,
     // a later box still sat above an earlier one, and the press grabbed
-    // the wrong block (WebKit, PR #63, 2026-10-14). On a slow local
-    // WebKit the boxes can also STAY out of order: both settle passes
-    // (scheduleOverviewSettle, 220 ms) ran before the canvas flush. This
-    // check then fails here, on the cause.
+    // the wrong block (WebKit, PR #63, 2026-10-14). The boxes could also
+    // STAY out of order: they kept the position measured while the canvas
+    // still slid the blocks into place, and nothing moved them after the
+    // slide ended (#78). This check then fails here, on the cause.
     await expect.poll(async () => {
       const first = await geometry();
       await page.waitForTimeout(100);
