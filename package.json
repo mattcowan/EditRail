@@ -16,7 +16,7 @@
     "test:sr": "playwright test -c playwright.nvda.config.js"
   },
   "devDependencies": {
-    "@guidepup/guidepup": "^0.35.0",
+    "@guidepup/guidepup": "^0.36.3",
     "@guidepup/playwright": "^0.19.1",
     "@playwright/test": "^1.64.0",
     "@wordpress/env": "^11.17.0",
