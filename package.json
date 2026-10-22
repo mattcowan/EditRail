@@ -18,7 +18,7 @@
   "devDependencies": {
     "@guidepup/guidepup": "^0.35.0",
     "@guidepup/playwright": "^0.19.1",
-    "@playwright/test": "^1.63.0",
+    "@playwright/test": "^1.64.0",
     "@wordpress/env": "^11.17.0",
     "archiver": "^8.0.0",
     "dotenv": "^18.0.1",
