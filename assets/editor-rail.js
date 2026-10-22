@@ -8207,6 +8207,14 @@ var DASHICON_NAMES = [
    * late a reorder flushes or a block grows (#64). The timed passes above
    * guess at that delay; a slow browser can outlast them.
    *
+   * A reorder also SLIDES the moved blocks into place: the block editor
+   * writes an inline transform on each frame (useMovingAnimation, about
+   * 300-450 ms for a long move) and clears it at the end. Rects include
+   * the transform, so the boxes follow the slide through these style
+   * changes, and the last one puts them where the blocks end. Before,
+   * the boxes kept the position the 220 ms pass measured mid-slide, a
+   * few pixels off — enough at floor zoom to stand out of order (#78).
+   *
    * Two steps, each rate-limited: the boxes reposition on the next frame
    * (at most once per frame), and the document extent is re-measured and
    * refit 220 ms later (at most one pending at a time). The refit is what
@@ -8263,9 +8271,11 @@ var DASHICON_NAMES = [
   }
 
   /**
-   * Watch the canvas while the overview is open: its block DOM (a
-   * MutationObserver on the body) and its size (a ResizeObserver on the
-   * root block list). Both call onOverviewCanvasChange. Safe to call
+   * Watch the canvas while the overview is open: its block DOM and inline
+   * styles (a MutationObserver on the body) and its size (a
+   * ResizeObserver on the root block list). Both call
+   * onOverviewCanvasChange. Nothing the overview does writes an inline
+   * style inside the canvas, so watching styles cannot loop. Safe to call
    * again: it creates the observers once, and moves them to a new canvas
    * body when the editor replaced the iframe. Returns whether it attached
    * to a body it was not watching before, so the caller knows the extent
@@ -8292,7 +8302,12 @@ var DASHICON_NAMES = [
       overviewCanvasObserver = new window.MutationObserver(onOverviewCanvasChange);
     }
     overviewCanvasObserver.disconnect();
-    overviewCanvasObserver.observe(doc.body, { childList: true, subtree: true });
+    overviewCanvasObserver.observe(doc.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['style']
+    });
     overviewCanvasTarget = doc.body;
     if (!overviewCanvasSizeObserver && typeof window.ResizeObserver === 'function') {
       overviewCanvasSizeObserver = new window.ResizeObserver(onOverviewCanvasChange);
