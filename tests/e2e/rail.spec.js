@@ -4782,21 +4782,32 @@ test.describe('overview follows late canvas changes (#64)', () => {
       return max;
     });
     await expect.poll(maxDrift).toBeLessThan(1);
+    // Outlast the timed passes that opening the overview scheduled (rAF
+    // and 220 ms): the boxes can already sit on their blocks while the
+    // 220 ms pass is still pending. From here on, only the reorder below
+    // moves them.
     await page.waitForTimeout(600);
 
     // The block editor slides moved blocks into place with an inline
     // transform, and ends the slide by clearing it: a style change, with
     // no node added and no size changed. Record that the slide ran, so
-    // this test cannot pass on a canvas that skipped it.
+    // this test cannot pass on a canvas that skipped it. The old value
+    // counts too: the callback reads the style after the record was made,
+    // when the clearing write has already removed the transform.
     await page.evaluate(() => {
       const doc = document.querySelector('iframe[name="editor-canvas"]').contentDocument;
       window.e2eSawSlide = false;
       window.e2eSlideObserver = new MutationObserver((records) => {
-        if (records.some((r) => /translate3d/.test(r.target.style.transform || ''))) {
+        if (records.some((r) => /translate3d/.test(r.oldValue || '') || /translate3d/.test(r.target.style.transform || ''))) {
           window.e2eSawSlide = true;
         }
       });
-      window.e2eSlideObserver.observe(doc.body, { attributes: true, attributeFilter: ['style'], subtree: true });
+      window.e2eSlideObserver.observe(doc.body, {
+        attributes: true,
+        attributeFilter: ['style'],
+        attributeOldValue: true,
+        subtree: true,
+      });
     });
     // The last block to the top: a long slide, still moving at 220 ms.
     await page.evaluate(() => {
