@@ -6162,6 +6162,10 @@ test.describe('pattern pins and drag (0.1.23)', () => {
       window.wp.data.dispatch('core/block-editor').resetBlocks([q]);
       return q.clientId;
     });
+    // A block dragged from the canvas leaves focus in the canvas, and the
+    // dialog's focus() must still take (#74: one browser engine ignored it).
+    await canvas(page).locator('[data-type="core/quote"] p').click();
+    expect(await page.evaluate(() => document.activeElement && document.activeElement.tagName)).toBe('IFRAME');
     await dropOnRail(page, { type: 'block', srcClientIds: [quoteId], srcRootClientId: '' });
 
     const dialog = page.locator('.toolrail-adddialog');
@@ -7699,7 +7703,11 @@ test.describe('settings sidebar width (#28)', () => {
     expect(l.rail.right).toBeLessThanOrEqual(l.content.left);
     expect(l.content.right).toBe(l.sidebar.left);
 
-    // Escape during a drag puts the edge back where the drag started.
+    // Escape during a drag puts the edge back where the drag started. Start
+    // with focus in the canvas: the press must still focus the handle, or
+    // Escape goes to the canvas (#74: one browser engine ignored it).
+    await canvas(page).locator('h1').first().click();
+    expect(await page.evaluate(() => document.activeElement && document.activeElement.tagName)).toBe('IFRAME');
     box = await handle.boundingBox();
     await page.mouse.move(box.x + 4, y);
     await page.mouse.down();

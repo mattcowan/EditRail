@@ -71,6 +71,7 @@ The plugin folder is now editrail. After a zip upgrade, delete the old toolrail 
 * Section overview: when content gets taller while the overview is open, for example when an image loads, the overview fits the new height. Before, the content below the old height could be out of reach.
 * Section overview: while the overview is open and you do nothing, it does no work. Before, it rewrote its zoom percentage about nine times each second.
 * Section overview: after you move a block, each outline box ends exactly on its block. Before, the boxes could stay a few pixels off, and a column of short blocks could look out of order.
+* When you drag a block from the content onto the toolbar, the cursor goes to the name field of "Add to toolbar". When you drag the settings sidebar edge, Escape puts the edge back. Both also work when the cursor was in the content first.
 
 = 1.0.5 =
 * Optional, off by default: make the editor's settings sidebar wider. Turn on "Let me make the settings sidebar wider" in Toolbar settings. Then type a width there, use the Narrower and Wider buttons, drag the sidebar's inner edge, or Tab to the edge and use the Left and Right arrow keys. Screen readers announce the width. A double-click on the edge, or "Reset to default width" in Toolbar settings, returns it to 280 pixels. The width is saved to your user account, and the canvas and the toolbar take the space that is left.
