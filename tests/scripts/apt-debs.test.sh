@@ -115,5 +115,19 @@ check "collect refuses \$HOME" '[ $rc = 2 ] && [ -e "$HOME/keep" ]'
 bash "$script" collect "$HOME/" >/dev/null 2>&1
 rc=$?
 check "collect refuses \$HOME/" '[ $rc = 2 ] && [ -e "$HOME/keep" ]'
+bash "$script" collect "$HOME/../$(basename "$HOME")" >/dev/null 2>&1
+rc=$?
+check "collect refuses a path that resolves to \$HOME" '[ $rc = 2 ] && [ -e "$HOME/keep" ]'
+# The folder that holds the temporary HOME. This is the same rule that
+# refuses /, which is not called here: a broken guard would delete it.
+touch "$t/keep"
+bash "$script" collect "$t" >/dev/null 2>&1
+rc=$?
+check "collect refuses a folder that holds \$HOME" '[ $rc = 2 ] && [ -e "$t/keep" ]'
+# "hom" is a prefix of "home" but does not hold it.
+mkdir -p "$t/hom"
+bash "$script" collect "$t/hom" >/dev/null 2>&1
+rc=$?
+check "collect accepts a sibling whose name is a prefix of \$HOME's" '[ $rc = 0 ] && [ -d "$t/hom" ]'
 
 exit $fail

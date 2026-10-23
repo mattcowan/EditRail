@@ -11,7 +11,8 @@
 #     Replace the contents of DIR with the .deb files in apt's archive
 #     cache, and print a hash of their names and contents for the cache
 #     key. Prints nothing when there are none. DIR is deleted first, so
-#     it refuses / and $HOME.
+#     it refuses a DIR that resolves to $HOME or to a folder that holds
+#     $HOME, such as /.
 #
 # apt reuses a file in /var/cache/apt/archives when its SIZE matches the
 # index. It does not check the hash (the pkgAcqArchive constructor in
@@ -48,10 +49,13 @@ place() {
 }
 
 collect() {
-	local dir=$1 count
-	case "${dir%/}" in
-		"" | "$HOME")
-			echo "Refusing to replace $dir." >&2
+	local dir=$1 count real home
+	# Resolve first, so $HOME/, $HOME/.. and // cannot get past the check.
+	real=$(realpath -m -- "$dir")
+	home=$(realpath -m -- "$HOME")
+	case "$home/" in
+		"${real%/}"/*)
+			echo "Refusing to replace $dir: it is \$HOME or holds it." >&2
 			exit 2
 			;;
 	esac
