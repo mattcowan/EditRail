@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests scripts/apt-debs.sh with stand-in apt-get, apt-cache, dpkg-deb and
-# sudo, so it runs on any machine with bash, including Git Bash. The
-# "Version check + package" job in ci.yml runs it.
+# sudo, so it runs on any machine with bash and GNU coreutils (the script
+# uses `realpath -m`), including Git Bash. The "Version check + package"
+# job in ci.yml runs it.
 #
 #   bash tests/scripts/apt-debs.test.sh
 #

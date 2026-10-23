@@ -21,9 +21,12 @@
 #
 # An install that stops at its time limit still saves the packages it
 # finished. The next fill starts from them and downloads the rest. It
-# saves them only when the restore and the check worked: else the new
-# cache can hold fewer usable packages than the old one, and the browser
-# jobs would take it because it is the newest. On
+# saves them only when the restore step succeeded and the check did not
+# fail: else the new cache can hold fewer usable packages than the old
+# one, and the browser jobs would take it because it is the newest. A
+# cache service error during the restore is only a warning, so the step
+# still succeeds with no cache. With a stopped install at the same time,
+# that can save a smaller cache. The next good fill corrects it. On
 # 2026-10-23 the WebKit fill needed 187 packages (117 MB). The mirror sent
 # about 50 kB/s, and the install stopped at its old 30-minute limit after
 # it started 129 of them.

@@ -55,7 +55,7 @@ collect() {
 	home=$(realpath -m -- "$HOME")
 	case "$home/" in
 		"${real%/}"/*)
-			echo "Refusing to replace $dir: it is \$HOME or holds it." >&2
+			echo "Refusing to replace $dir ($real): it is \$HOME or holds it." >&2
 			exit 2
 			;;
 	esac
