@@ -101,9 +101,11 @@ jobs:
     needs: e2e-needed
     if: needs.e2e-needed.outputs.run == 'true'
     runs-on: ubuntu-latest
-    # One shard took 7.7-9.7 minutes in the first sharded run (see header).
-    # A wedged run must fail here, not burn the 6-hour default.
-    timeout-minutes: 25
+    # A wedged run must fail here, not burn the 6-hour default. Each step
+    # that can be slow or hang has its own limit below. The job limit is
+    # their sum plus 5 minutes for the short steps, so a slow install
+    # does not take the time the tests need (#81).
+    timeout-minutes: 75
     strategy:
       # Finish every shard, so one red job shows all of its failures and
       # the other browsers still report.
@@ -124,15 +126,37 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # The Ubuntu mirror that the runners use sometimes sends packages at
+      # ~35 kB/s. On 2026-10-22 the system-package install then took 12-25
+      # minutes instead of ~0.4 (#81, actions/runner-images#14823).
+      # apt-cache.yml keeps the packages in a cache on main. Give them to
+      # apt, so it downloads only what changed. If there is no cache, or
+      # this fails, the install only gets slower.
+      - name: Restore the cached system packages
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/apt-debs
+          # No cache has this exact key: restore-keys takes the newest.
+          key: apt-debs-${{ matrix.browser }}-
+          restore-keys: apt-debs-${{ matrix.browser }}-
+      - name: Check the cached system packages and give them to apt
+        run: bash scripts/apt-debs.sh place ~/apt-debs
+        timeout-minutes: 5
+        continue-on-error: true
+      # With no cache and a slow mirror, the install took up to 25 minutes.
       - run: npx playwright install --with-deps ${{ matrix.browser }}
+        timeout-minutes: 30
       # wp-env (Docker) hosts a throwaway WordPress with this checkout
       # mapped in as the plugin, per .wp-env.json. Its default admin
-      # account is admin / password on port 8888.
+      # account is admin / password on port 8888. It takes about 1 minute.
       - run: npx wp-env start
+        timeout-minutes: 10
       # --fully-parallel lets --shard split the one spec file by test;
       # without it, shard 1 gets every test. The config keeps workers: 1,
-      # so the tests in a shard still run one at a time.
+      # so the tests in a shard still run one at a time. A shard took
+      # 6.6-12.6 minutes on 2026-10-22 (run 39835206197).
       - run: npm run test:e2e -- --shard=${{ matrix.shard }}/3 --fully-parallel
+        timeout-minutes: 25
         env:
           TOOLRAIL_URL: http://localhost:8888
           TOOLRAIL_ADMIN_USER: admin
