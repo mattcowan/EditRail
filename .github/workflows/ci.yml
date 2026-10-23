@@ -105,7 +105,7 @@ jobs:
     # that can be slow or hang has its own limit below. The job limit is
     # their sum plus 5 minutes for the short steps, so a slow install
     # does not take the time the tests need (#81).
-    timeout-minutes: 75
+    timeout-minutes: 80
     strategy:
       # Finish every shard, so one red job shows all of its failures and
       # the other browsers still report.
@@ -131,15 +131,21 @@ jobs:
       # minutes instead of ~0.4 (#81, actions/runner-images#14823).
       # apt-cache.yml keeps the packages in a cache on main. Give them to
       # apt, so it downloads only what changed. If there is no cache, or
-      # this fails, the install only gets slower.
+      # these two steps fail, the install only gets slower.
       - name: Restore the cached system packages
+        id: apt-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        timeout-minutes: 5
+        continue-on-error: true
         with:
           path: ~/apt-debs
           # No cache has this exact key: restore-keys takes the newest.
           key: apt-debs-${{ matrix.browser }}-
           restore-keys: apt-debs-${{ matrix.browser }}-
+      # Only after a restore: with no cache, this step's apt-get update
+      # gives apt nothing, and the install runs its own.
       - name: Check the cached system packages and give them to apt
+        if: steps.apt-cache.outputs.cache-matched-key != ''
         run: bash scripts/apt-debs.sh place ~/apt-debs
         timeout-minutes: 5
         continue-on-error: true
@@ -190,6 +196,9 @@ jobs:
       # The wp.org Live Preview blueprint is generated from
       # scripts/playground/; a hand edit or a forgotten rebuild fails here.
       - run: node scripts/playground.js check
+      # scripts/apt-debs.sh gives the browser jobs only cached packages
+      # that the package index lists (#81). Stand-ins replace apt here.
+      - run: bash tests/scripts/apt-debs.test.sh
       - run: npm run package
       # On manual runs, keep the zip as an artifact (7 days) so a test
       # build of any branch is one click away.

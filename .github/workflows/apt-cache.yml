@@ -10,12 +10,20 @@
 #   use, and so Ubuntu security updates come into it;
 # - by hand (Actions -> System package cache -> Run workflow);
 # - on a pull request that changes this file or scripts/apt-debs.sh, to
-#   test the change. That cache stays with the pull request: a re-run of
-#   its browser jobs uses it, and main does not see it.
+#   test the change. That cache stays with the pull request, and main does
+#   not see it. The pull request's browser jobs start at the same time as
+#   this fill, so their first run has no cache. A re-run after the fill
+#   uses it.
 #
-# The cache key is a hash of the .deb file names (with their versions),
-# so a new cache is saved only when the set of packages changes. The
-# browser jobs take the newest cache for their browser.
+# The cache key is a hash of the .deb files (names and contents), so a
+# new cache is saved only when the packages change. The browser jobs take
+# the newest cache for their browser.
+#
+# An install that stops at its time limit still saves the packages it
+# finished. The next fill starts from them and downloads the rest. On
+# 2026-10-23 the WebKit fill needed 187 packages (117 MB). The mirror sent
+# about 50 kB/s, and the install stopped at its old 30-minute limit after
+# it started 129 of them.
 name: System package cache
 
 on:
@@ -29,6 +37,13 @@ on:
     - cron: '23 5 * * 1'
   workflow_dispatch:
 
+# One fill at a time for each branch. Two pushes to main close together
+# otherwise run two fills that download and save the same packages. A
+# newer run replaces a pending one, which does the same work.
+concurrency:
+  group: apt-cache-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -36,8 +51,8 @@ jobs:
   fill:
     name: Fill the package cache (${{ matrix.browser }})
     runs-on: ubuntu-latest
-    # The install can take 25 minutes when the mirror is slow (see ci.yml).
-    timeout-minutes: 45
+    # The step limits below, plus 10 minutes for the short steps.
+    timeout-minutes: 110
     strategy:
       fail-fast: false
       matrix:
@@ -55,24 +70,34 @@ jobs:
       # list of packages.
       - run: npm ci
       # Start from the current cache, so apt downloads only what changed.
+      # Without it, the install downloads everything.
       - id: restore
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        timeout-minutes: 5
+        continue-on-error: true
         with:
           path: ~/apt-debs
           key: apt-debs-${{ matrix.browser }}-
           restore-keys: apt-debs-${{ matrix.browser }}-
-      - run: bash scripts/apt-debs.sh place ~/apt-debs
+      - if: steps.restore.outputs.cache-matched-key != ''
+        run: bash scripts/apt-debs.sh place ~/apt-debs
         timeout-minutes: 5
+        continue-on-error: true
+      # Longer than in ci.yml: no test waits for this job. 117 MB at the
+      # slowest speed seen (~35 kB/s) takes about 56 minutes.
       - run: npx playwright install-deps ${{ matrix.browser }}
-        timeout-minutes: 30
+        timeout-minutes: 90
+      # These two steps also run after the install fails or stops at its
+      # limit, so the packages it finished are kept (see the header).
       - id: collect
+        if: ${{ !cancelled() }}
         run: |
           hash=$(bash scripts/apt-debs.sh collect ~/apt-debs)
           if [ -n "$hash" ]; then
             echo "key=apt-debs-${{ matrix.browser }}-$hash" >> "$GITHUB_OUTPUT"
           fi
       - name: Save the packages (only when they changed)
-        if: steps.collect.outputs.key != '' && steps.collect.outputs.key != steps.restore.outputs.cache-matched-key
+        if: ${{ !cancelled() && steps.collect.outputs.key != '' && steps.collect.outputs.key != steps.restore.outputs.cache-matched-key }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/apt-debs

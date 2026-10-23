@@ -9,17 +9,21 @@
 #     downloading it.
 #   bash scripts/apt-debs.sh collect DIR
 #     Replace the contents of DIR with the .deb files in apt's archive
-#     cache, and print a hash of their names for the cache key. Prints
-#     nothing when there are none.
+#     cache, and print a hash of their names and contents for the cache
+#     key. Prints nothing when there are none. DIR is deleted first, so
+#     it refuses / and $HOME.
 #
 # apt reuses a file in /var/cache/apt/archives when its SIZE matches the
 # index. It does not check the hash (the pkgAcqArchive constructor in
 # apt-pkg/acquire-item.cc). So `place` checks each file's SHA256 against
 # the signed index first, and skips a file that does not match: an old
 # version, a package from another Ubuntu release, or a damaged cache.
+#
+# tests/scripts/apt-debs.test.sh sets APT_DEBS_ARCHIVES to a temporary
+# folder. Nothing else sets it.
 set -euo pipefail
 
-archives=/var/cache/apt/archives
+archives=${APT_DEBS_ARCHIVES:-/var/cache/apt/archives}
 
 place() {
 	local dir=$1 deb pkg ver sum placed=0 skipped=0
@@ -45,6 +49,12 @@ place() {
 
 collect() {
 	local dir=$1 count
+	case "${dir%/}" in
+		"" | "$HOME")
+			echo "Refusing to replace $dir." >&2
+			exit 2
+			;;
+	esac
 	rm -rf "$dir"
 	mkdir -p "$dir"
 	count=$(find "$archives" -maxdepth 1 -name '*.deb' | wc -l)
@@ -54,7 +64,12 @@ collect() {
 	fi
 	cp "$archives"/*.deb "$dir/"
 	echo "Collected $count packages." >&2
-	(cd "$dir" && LC_ALL=C ls) | sha256sum | cut -c1-16
+	# Contents too, not only names: when `place` skips a damaged file, apt
+	# downloads a good one with the same name, and the key must change so
+	# the good one is saved.
+	# LC_ALL=C before the glob, so the file order does not depend on the
+	# locale.
+	(cd "$dir" && export LC_ALL=C && sha256sum -- *.deb) | sha256sum | cut -c1-16
 }
 
 case "${1:-}" in
