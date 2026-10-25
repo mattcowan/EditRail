@@ -1,0 +1,120 @@
+# Fills the cache of Ubuntu packages that the browser jobs in ci.yml
+# restore before `playwright install --with-deps` (#81). With the cache,
+# a slow Ubuntu mirror does not hold up the browser tests.
+#
+# The fill runs on main because a pull request can read the caches of
+# main, but not the caches of another pull request. It runs:
+# - on each push to main, so a Playwright update that needs new packages
+#   is in the cache for the next pull request;
+# - every week, so GitHub does not delete the cache after 7 days without
+#   use, and so Ubuntu security updates come into it;
+# - by hand (Actions -> System package cache -> Run workflow);
+# - on a pull request that changes this file or scripts/apt-debs.sh, to
+#   test the change. That cache stays with the pull request, and main does
+#   not see it. The pull request's browser jobs start at the same time as
+#   this fill, so their first run has no cache. A re-run after the fill
+#   uses it.
+#
+# The cache key is a hash of the .deb files (names and contents), so a
+# new cache is saved only when the packages change. The browser jobs take
+# the newest cache for their browser.
+#
+# An install that stops at its time limit still saves the packages it
+# finished. The next fill starts from them and downloads the rest. It
+# saves them only when the restore step succeeded and the check did not
+# fail: else the new cache can hold fewer usable packages than the old
+# one, and the browser jobs would take it because it is the newest. A
+# cache service error during the restore is only a warning, so the step
+# still succeeds with no cache. With a stopped install at the same time,
+# that can save a smaller cache. The next good fill corrects it. On
+# 2026-10-23 the WebKit fill needed 187 packages (117 MB). The mirror sent
+# about 50 kB/s, and the install stopped at its old 30-minute limit after
+# it started 129 of them.
+name: System package cache
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - .github/workflows/apt-cache.yml
+      - scripts/apt-debs.sh
+  schedule:
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+
+# One fill at a time for each branch. Two pushes to main close together
+# otherwise run two fills that download and save the same packages. A
+# newer run replaces a pending one, which does the same work.
+concurrency:
+  group: apt-cache-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  fill:
+    name: Fill the package cache (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    # The step limits below, plus 10 minutes for the short steps.
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep the same list as the e2e-tests job in ci.yml.
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      # For the Playwright version in package-lock.json, which sets the
+      # list of packages.
+      - run: npm ci
+      # Start from the current cache, so apt downloads only what changed.
+      # Without it, the install downloads everything.
+      - id: restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        timeout-minutes: 5
+        continue-on-error: true
+        with:
+          path: ~/apt-debs
+          key: apt-debs-${{ matrix.browser }}-
+          restore-keys: apt-debs-${{ matrix.browser }}-
+      - id: place
+        if: steps.restore.outputs.cache-matched-key != ''
+        run: bash scripts/apt-debs.sh place ~/apt-debs
+        timeout-minutes: 5
+        continue-on-error: true
+      # Longer than in ci.yml: no test waits for this job. 117 MB at the
+      # slowest speed seen (~35 kB/s) takes about 56 minutes.
+      - id: install
+        run: npx playwright install-deps ${{ matrix.browser }}
+        timeout-minutes: 90
+      # These two steps also run after the install fails or stops at its
+      # limit, so the packages it finished are kept (see the header).
+      # `outcome` is the result before continue-on-error. A check that was
+      # skipped (no cache) is fine: there was nothing to lose.
+      - id: collect
+        if: ${{ !cancelled() }}
+        run: |
+          hash=$(bash scripts/apt-debs.sh collect ~/apt-debs)
+          if [ -n "$hash" ]; then
+            echo "key=apt-debs-${{ matrix.browser }}-$hash" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Save the packages (only when they changed)
+        if: >-
+          ${{ !cancelled()
+          && steps.collect.outputs.key != ''
+          && steps.collect.outputs.key != steps.restore.outputs.cache-matched-key
+          && (steps.install.outcome == 'success'
+          || (steps.restore.outcome == 'success' && steps.place.outcome != 'failure')) }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        timeout-minutes: 10
+        with:
+          path: ~/apt-debs
+          key: ${{ steps.collect.outputs.key }}
