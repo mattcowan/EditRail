@@ -944,12 +944,42 @@ test.describe('saved sets button (#93)', () => {
     await expect(page.locator('#toolrail-rail .toolrail-tool[tabindex="0"]')).toHaveCount(1);
     await expect(setsBtn).toHaveAttribute('tabindex', '0');
 
+    // Focus on an item of an open menu: the rebuild removes the menu, and
+    // focus goes to the rebuilt parent button, not the page body.
+    await page.keyboard.press('ArrowRight');
+    const menu = page.locator('.toolrail-flyout[aria-label="Saved sets"]');
+    await expect(menu.locator('.toolrail-flyout-item').first()).toBeFocused();
+    expect(await page.evaluate(() =>
+      window.toolrail.registerTool({ id: 'e2e-rebuild-2', label: 'E2E Rebuild 2', onActivate: () => {} })
+    )).toBe(true);
+    await expect(menu).toHaveCount(0);
+    await expect(setsBtn).toBeFocused();
+
     // The rail's ArrowRight handler opens the Saved sets menu for this
     // id, so no extension may register it.
     const refused = await page.evaluate(() =>
       window.toolrail.registerTool({ id: 'saved-sets', onActivate: () => {} })
     );
     expect(refused).toBe(false);
+  });
+
+  test('follows a sets change that comes from outside the rail', async ({ page }) => {
+    await openNewPost(page);
+    await saveSet(page, 'basic');
+    const setsBtn = page.locator('#toolrail-rail [data-tool="saved-sets"]');
+    await expect(setsBtn).toBeVisible();
+
+    // A direct core/preferences write stands in for core's attach
+    // replacing the store with both migration stamps kept: no repair
+    // runs, and the button must still go (PR #97 review).
+    await page.evaluate(() =>
+      window.wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-slot-configs', '{}')
+    );
+    await expect(setsBtn).toHaveCount(0);
+    await page.evaluate(() =>
+      window.wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-slot-configs', JSON.stringify({ basic: [] }))
+    );
+    await expect(setsBtn).toBeVisible();
   });
 });
 

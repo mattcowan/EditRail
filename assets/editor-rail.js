@@ -2690,14 +2690,11 @@ var DASHICON_NAMES = [
    * @return {void}
    */
   function persistConfigs(map) {
-    var buttonWasShown = isSetsButtonShown();
     writeKey(CONFIGS_KEY, JSON.stringify(map));
     // The first saved set adds the Saved sets button to the rail and a
     // delete of the last one removes it (#93). Only that change needs a
     // rebuild: the button's menu reads the map each time it opens.
-    if (isSetsButtonShown() !== buttonWasShown) {
-      rerender();
-    }
+    reconcileSetsButton();
   }
 
   /**
@@ -2847,6 +2844,31 @@ var DASHICON_NAMES = [
    */
   function isSetsButtonShown() {
     return readKey(SETS_BUTTON_HIDDEN_KEY) !== '1' && Object.keys(loadConfigs()).length > 0;
+  }
+
+  /**
+   * Rebuild the rail when the Saved sets button it shows no longer
+   * matches isSetsButtonShown(). It compares the rendered rail with the
+   * stored state, not the state before and after one write, so it also
+   * catches a change that came from outside this file: core's
+   * preferences attach can replace the whole store, sets included,
+   * while both migration stamps survive, and then no repair runs (PR #97
+   * review). watchPersistenceAttach() calls it on every core/preferences
+   * dispatch; the cost is one DOM query and two preference reads.
+   *
+   * @return {boolean} True when the rail was rebuilt.
+   */
+  function reconcileSetsButton() {
+    var rail = document.getElementById('toolrail-rail');
+    if (!rail) {
+      return false;
+    }
+    var rendered = !!rail.querySelector(toolSelector(SETS_TOOL_ID));
+    if (rendered === isSetsButtonShown()) {
+      return false;
+    }
+    rerender();
+    return true;
   }
 
   /**
@@ -12056,7 +12078,8 @@ var DASHICON_NAMES = [
    * inside the same region, so testing the region would pull focus out of
    * the dialog on every change made from it. Then focus goes to the
    * rebuilt copy of the button that had it, by its data-tool id, and to
-   * Select only when that button is gone. Before, every rebuild sent
+   * Select only when that button is gone. Focus on an open flyout's item
+   * counts as focus on the flyout's parent button. Before, every rebuild sent
    * focus to Select, so a rebuild the author did not start (an extension
    * registering a tool, a set import finishing) moved them off their
    * place in the toolbar (PR #97 review).
@@ -12067,12 +12090,20 @@ var DASHICON_NAMES = [
       return;
     }
     railDragActive = false;
-    closeFlyout(false);
     var oldRail = document.getElementById('toolrail-rail');
     var hadFocus = !!(oldRail && oldRail.contains(document.activeElement));
     var focusedTool = hadFocus && document.activeElement.dataset
       ? document.activeElement.dataset.tool || ''
       : '';
+    // A flyout is a sibling of the rail, not inside it. When focus is on
+    // one of its items, the rebuild removes the menu and focus would fall
+    // to the page; send it to the menu's rebuilt parent button instead
+    // (PR #97 review). Read before closeFlyout(), which clears the state.
+    if (!hadFocus && openFlyout && openFlyout.node.contains(document.activeElement)) {
+      hadFocus = true;
+      focusedTool = openFlyout.parentBtn.dataset.tool || '';
+    }
+    closeFlyout(false);
     var newRail = buildRail(wrapper);
     if (oldRail) {
       wrapper.replaceChild(newRail, oldRail);
@@ -12469,6 +12500,14 @@ var DASHICON_NAMES = [
       if (liftsComplete()) {
         if (!prefsReady) {
           markPrefsReady();
+        }
+        // An attach that keeps both stamps needs no repair, but it can
+        // still replace the saved sets under the rail (PR #97 review).
+        repairing = true;
+        try {
+          reconcileSetsButton();
+        } finally {
+          repairing = false;
         }
         return;
       }
