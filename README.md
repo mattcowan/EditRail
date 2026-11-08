@@ -58,6 +58,7 @@ Open a post in the editor. The toolbar is on the left edge. `readme.txt` describ
 - Pin any block type or pattern as a tool. Open Toolbar settings from the gear, or drag a block from the inserter or the canvas onto the toolbar.
 - Give a pinned tool your own name, description or icon with Edit beside it in Toolbar settings.
 - Save pinned arrangements as named sets. Export a set as a JSON file and import it on a different site.
+- Switch between saved sets from the Saved sets button on the toolbar. It appears when you have a saved set.
 - Move the toolbar to any edge, or float it. Change its colors. Show tool names beside the icons.
 - Optional, off by default: turn on "Let me make the settings sidebar wider" in Toolbar settings. Then type a width in Toolbar settings, use its Narrower and Wider buttons (50px a step), or drag the inner edge of the editor's settings sidebar. The width goes up to 640px or half the window, whichever is less. The edge is also a keyboard separator: the Left and Right arrow keys change the width. A double-click, or a button in Toolbar settings, resets it to 280px.
 - Open the Section overview to zoom out, outline every top-level block, and reorder blocks by drag or by keyboard.

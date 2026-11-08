@@ -205,7 +205,9 @@ test.describe('EditRail with NVDA', () => {
 
     // Forward walk from the opening focus: how many Tabs until the dialog closes?
     log.forward = [];
-    for (let i = 0; i < 12; i++) {
+    // 16, not 12: the Saved sets button checkbox (#93) added a stop, and
+    // 12 Tabs then ended with the dialog still open (NVDA run 2026-11-08).
+    for (let i = 0; i < 16; i++) {
       const phrase = await press(nvda, 'Tab', 700);
       const el = await h.describeFocus(page);
       const openNow = (await page.locator(SETTINGS).count()) > 0;
@@ -216,9 +218,15 @@ test.describe('EditRail with NVDA', () => {
     log.canvasFocusAfterForwardClose = await h.describeCanvasFocus(page);
 
     // Reopen, then Shift+Tab backwards through the controls above the search field.
-    await page.locator(`${RAIL} [data-tool="settings"]`).focus();
-    await h.delay(300);
-    await press(nvda, 'Enter', 1000);
+    // Only when the forward walk closed it: Enter on the gear toggles an
+    // open dialog shut. Through activateFocused, because in browse mode a
+    // single Enter can go to NVDA's caret and open nothing (NVDA run
+    // 2026-11-08 failed here with the gear focused and no dialog).
+    if (!(await page.locator(SETTINGS).count())) {
+      await page.locator(`${RAIL} [data-tool="settings"]`).focus();
+      await h.delay(300);
+      log.reopenForBackward = await activateFocused(page, nvda, SETTINGS, 1000);
+    }
     await page.waitForSelector(SETTINGS, { timeout: 5000 });
     log.backward = [];
     for (let i = 0; i < 32; i++) {
@@ -237,7 +245,7 @@ test.describe('EditRail with NVDA', () => {
     if (!(await page.locator(SETTINGS).count())) {
       await page.locator(`${RAIL} [data-tool="settings"]`).focus();
       await h.delay(300);
-      log.reopenForPin = await press(nvda, 'Enter', 1000);
+      log.reopenForPin = await activateFocused(page, nvda, SETTINGS, 1000);
       await page.waitForSelector(SETTINGS, { timeout: 5000 });
     }
 
@@ -389,5 +397,57 @@ test.describe('EditRail with NVDA', () => {
     const spoken = await h.saveSpeechLog(nvda, 'flyout-guides', { focusTitles, ...log });
     expect(log.menuOpen).toBe(1);
     expect(h.spoke(spoken, /menu/i)).toBe(true);
+  });
+
+  test('saved sets menu (#93): ArrowRight opens it, radio items announce their state, Enter loads a set', async ({ page, nvda }) => {
+    await open(page);
+    // Two sets, built with Playwright before NVDA listens: "basic" (the
+    // four default pins) and "with quote" (the toolbar now, so checked).
+    for (const name of ['basic', 'with quote']) {
+      if (name === 'with quote') {
+        await page.evaluate(() => window.toolrail.pinBlock('core/quote'));
+      }
+      await page.locator(`${RAIL} [data-tool="settings"]`).click();
+      await page.locator('#toolrail-settings-setname').fill(name);
+      await page.locator('.toolrail-settings-saveset').click();
+      await page.keyboard.press('Escape');
+      await page.waitForSelector(SETTINGS, { state: 'detached', timeout: 5000 });
+    }
+    const focusTitles = await h.focusBrowser(page, nvda);
+    const log = {};
+    const MENU = '#toolrail-region [role="menu"][aria-label="Saved sets"]';
+    const button = page.locator(`${RAIL} [data-tool="saved-sets"]`);
+    await button.focus();
+    await h.delay(300);
+    log.focusButton = await reportFocus(nvda);
+    log.modeToggle = await h.ensureFocusMode(nvda, async () => { await nvda.press('ArrowRight'); await h.delay(400); return (await page.locator(MENU).count()) > 0; });
+    if (!(await page.locator(MENU).count())) {
+      await button.focus(); await h.delay(300);
+      log.arrowRight = await press(nvda, 'ArrowRight', 900);
+    } else {
+      log.arrowRight = await nvda.lastSpokenPhrase();
+    }
+    log.menuOpen = await page.locator(MENU).count();
+    log.focusInMenu = await h.describeFocus(page);
+    // basic -> with quote -> Save the current tools… -> wraps to basic.
+    log.items = [];
+    for (let i = 0; i < 3; i++) { log.items.push(await press(nvda, 'ArrowDown', 700)); }
+    log.focusBeforeEnter = await h.describeFocus(page);
+    log.enter = await press(nvda, 'Enter', 1500);
+    log.railAfterLoad = await page.evaluate(() => Array.from(document.querySelectorAll('#toolrail-rail [data-tool^="pin:"]')).map((b) => b.dataset.tool));
+    log.focusAfterLoad = await h.describeFocus(page);
+    log.liveRegionAfterLoad = await page.evaluate(() => Array.from(document.querySelectorAll('#a11y-speak-polite, #a11y-speak-assertive')).map((e) => e.textContent.trim()).filter(Boolean));
+    const spoken = await h.saveSpeechLog(nvda, 'saved-sets-menu', { focusTitles, ...log });
+
+    expect(log.menuOpen).toBe(1);
+    expect(log.focusBeforeEnter && log.focusBeforeEnter.text, 'three ArrowDowns wrap back to the first set').toMatch(/basic/);
+    expect(log.railAfterLoad, 'Enter on "basic" loads it').not.toContain('pin:core/quote');
+    expect(log.focusAfterLoad && log.focusAfterLoad.tool, 'focus returns to the rebuilt button').toBe('saved-sets');
+    expect(h.spoke(spoken, /radio menu item, checked/i), 'a radio item announces its checked state').toBe(true);
+    // The check mark is drawn in CSS with empty alternative text, so it is
+    // not read into the item's name ("with quote check").
+    expect(h.spoke(spoken, /\bcheck,/i), 'the check mark glyph is not spoken').toBe(false);
+    // NVDA drops the quotation marks: it says `Loaded basic ..`.
+    expect(h.spoke(spoken, /Loaded\W+basic/), 'the load is announced').toBe(true);
   });
 });
