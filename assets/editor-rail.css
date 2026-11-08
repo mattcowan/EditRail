@@ -739,8 +739,14 @@ body.toolrail-dragging * {
     margin-left: auto;
 }
 
+/* The mark has empty alternative text: aria-checked already says
+   "checked", and without the "/ ''" NVDA read the glyph into the item's
+   name ("Snap to guides check, checked"; NVDA run 2026-11-08, PR #97).
+   The first declaration is the fallback for a browser without
+   alternative text for generated content; it drops the second. */
 .toolrail-flyout-item[aria-checked="true"]::after {
     content: "\2713";
+    content: "\2713" / "";
     display: grid;
     place-items: center;
     font-size: 14px;

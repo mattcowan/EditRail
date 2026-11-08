@@ -183,6 +183,9 @@
   var SIDEBAR_WIDTH_KEY = 'toolrail-sidebar-width';
   var SIDEBAR_RESIZE_KEY = 'toolrail-sidebar-resize';
   var SETS_BUTTON_HIDDEN_KEY = 'toolrail-sets-button-hidden';
+  // The Saved sets button's data-tool id (#93). Rail chrome, not a
+  // registered tool, so allToolIds() reserves it.
+  var SETS_TOOL_ID = 'saved-sets';
   var PREFS_SCOPE = 'toolrail';
   var SHAPE_FILL = '#b9b9b9';
 
@@ -1834,7 +1837,9 @@
     // The rail's own chrome buttons are not tools, but they carry
     // data-tool ids the [data-tool="…"] sweeps can reach — a registered
     // tool must not be able to collide with them.
-    var ids = ['settings', 'help', 'wide-toggle'];
+    // A registered 'saved-sets' would also get the Saved sets menu from
+    // the rail's ArrowRight handler, which checks this id first.
+    var ids = ['settings', 'help', 'wide-toggle', SETS_TOOL_ID];
     BUILTIN_TOOLS.forEach(function (t) {
       ids.push(t.id);
       (t.children || []).forEach(function (c) { ids.push(c.id); });
@@ -2813,8 +2818,6 @@ var DASHICON_NAMES = [
   // a load does exactly what Load in Toolbar settings does.
   // -------------------------------------------------------------------
 
-  var SETS_TOOL_ID = 'saved-sets';
-
   /**
    * The saved set whose slots are the rail's slots now, in the same
    * order. Labels are not compared: a set "is current" when the author
@@ -2882,7 +2885,10 @@ var DASHICON_NAMES = [
    * Load a set from the Saved sets menu, announce it, and put focus on
    * the rebuilt Saved sets button. The flyout closed before this ran and
    * loadConfig rebuilt the rail, so the button that opened the menu is
-   * gone; without the refocus, focus would fall to the page body.
+   * gone; without the refocus, focus would fall to the page body. When
+   * the rebuilt rail has no Saved sets button (another tab hid it since
+   * the menu opened), focus goes to Toolbar settings, where the button
+   * comes back.
    *
    * @param {string} name Set name.
    * @return {void}
@@ -2898,7 +2904,7 @@ var DASHICON_NAMES = [
         name
       ));
     }
-    var btn = document.querySelector('#toolrail-rail ' + toolSelector(SETS_TOOL_ID));
+    var btn = document.querySelector('#toolrail-rail ' + toolSelector(SETS_TOOL_ID)) || gearButton();
     if (btn) {
       btn.focus();
     }
@@ -12045,10 +12051,15 @@ var DASHICON_NAMES = [
   }
 
   /**
-   * Rebuild the rail in place (registry/slot changes). Focus moves to the
-   * rail's first button only if focus was inside THE RAIL — the settings
-   * dialog is a sibling inside the same region, so testing the region
-   * would pull focus out of the dialog on every change made from it.
+   * Rebuild the rail in place (registry/slot changes). Focus is handled
+   * only if it was inside THE RAIL — the settings dialog is a sibling
+   * inside the same region, so testing the region would pull focus out of
+   * the dialog on every change made from it. Then focus goes to the
+   * rebuilt copy of the button that had it, by its data-tool id, and to
+   * Select only when that button is gone. Before, every rebuild sent
+   * focus to Select, so a rebuild the author did not start (an extension
+   * registering a tool, a set import finishing) moved them off their
+   * place in the toolbar (PR #97 review).
    */
   function rerender() {
     var wrapper = document.getElementById('toolrail-region');
@@ -12059,6 +12070,9 @@ var DASHICON_NAMES = [
     closeFlyout(false);
     var oldRail = document.getElementById('toolrail-rail');
     var hadFocus = !!(oldRail && oldRail.contains(document.activeElement));
+    var focusedTool = hadFocus && document.activeElement.dataset
+      ? document.activeElement.dataset.tool || ''
+      : '';
     var newRail = buildRail(wrapper);
     if (oldRail) {
       wrapper.replaceChild(newRail, oldRail);
@@ -12067,9 +12081,12 @@ var DASHICON_NAMES = [
     }
     syncPressed(true);
     if (hadFocus) {
-      var first = newRail.querySelector('[data-tool="select"]') || newRail.querySelector('.toolrail-tool');
-      if (first) {
-        first.focus();
+      var target = (focusedTool && newRail.querySelector(toolSelector(focusedTool)))
+        || newRail.querySelector('[data-tool="select"]')
+        || newRail.querySelector('.toolrail-tool');
+      if (target) {
+        // The rail's focusin handler moves the one Tab stop here.
+        target.focus();
       }
     }
   }

@@ -925,6 +925,32 @@ test.describe('saved sets button (#93)', () => {
     await page.locator('.toolrail-settings-setrow[data-config="basic"] .toolrail-settings-delset').click();
     await expect(setsBtn).toHaveCount(0);
   });
+
+  test('a rail rebuild keeps focus on the focused button, and the id is reserved', async ({ page }) => {
+    await openNewPost(page);
+    await saveSet(page, 'basic');
+    const setsBtn = page.locator('#toolrail-rail [data-tool="saved-sets"]');
+    await setsBtn.focus();
+
+    // A rebuild the author did not start: an extension registers a tool.
+    // Focus used to jump to Select (PR #97 review).
+    const registered = await page.evaluate(() =>
+      window.toolrail.registerTool({ id: 'e2e-rebuild', label: 'E2E Rebuild', onActivate: () => {} })
+    );
+    expect(registered).toBe(true);
+    await expect(page.locator('#toolrail-rail [data-tool="e2e-rebuild"]')).toHaveCount(1);
+    await expect(setsBtn).toBeFocused();
+    // The one Tab stop follows focus.
+    await expect(page.locator('#toolrail-rail .toolrail-tool[tabindex="0"]')).toHaveCount(1);
+    await expect(setsBtn).toHaveAttribute('tabindex', '0');
+
+    // The rail's ArrowRight handler opens the Saved sets menu for this
+    // id, so no extension may register it.
+    const refused = await page.evaluate(() =>
+      window.toolrail.registerTool({ id: 'saved-sets', onActivate: () => {} })
+    );
+    expect(refused).toBe(false);
+  });
 });
 
 test.describe('toolbar settings dialog', () => {
