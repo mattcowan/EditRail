@@ -119,6 +119,7 @@ const RAIL_PREF_KEYS = [
   'toolrail-set-meta',
   'toolrail-sidebar-width',
   'toolrail-sidebar-resize',
+  'toolrail-sets-button-hidden',
 ];
 
 /**

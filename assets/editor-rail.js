@@ -182,6 +182,7 @@
   var SET_META_KEY = 'toolrail-set-meta';
   var SIDEBAR_WIDTH_KEY = 'toolrail-sidebar-width';
   var SIDEBAR_RESIZE_KEY = 'toolrail-sidebar-resize';
+  var SETS_BUTTON_HIDDEN_KEY = 'toolrail-sets-button-hidden';
   var PREFS_SCOPE = 'toolrail';
   var SHAPE_FILL = '#b9b9b9';
 
@@ -638,6 +639,7 @@
     pin: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zm0 2.3L6 8.7v6.6l6 3.4 6-3.4V8.7l-6-3.4zM12 8l3.5 2v4L12 16l-3.5-2v-4L12 8z"/></svg>',
     gear: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 9a3 3 0 110 6 3 3 0 010-6zm-1.7-6h3.4l.5 2.4c.6.2 1.1.5 1.6.9l2.3-.8 1.7 3-1.8 1.6a6.7 6.7 0 010 1.8l1.8 1.6-1.7 3-2.3-.8c-.5.4-1 .7-1.6.9l-.5 2.4h-3.4l-.5-2.4a6.6 6.6 0 01-1.6-.9l-2.3.8-1.7-3 1.8-1.6a6.7 6.7 0 010-1.8L4.2 8.5l1.7-3 2.3.8c.5-.4 1-.7 1.6-.9L10.3 3z"/></svg>',
     help: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 4a5 5 0 015 5c0 2.3-1.5 3.3-2.7 4.1-.9.7-1.3 1.1-1.3 2.2h-2c0-2 1-2.9 2-3.7 1.1-.8 2-1.4 2-2.6a3 3 0 00-6 0H7a5 5 0 015-5zm-1 13h2v2.5h-2z"/></svg>',
+    sets: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 3l9 4.5-9 4.5-9-4.5L12 3zm0 2.2L7.5 7.5 12 9.8l4.5-2.3L12 5.2zM3 12l2.2-1.1L12 14.3l6.8-3.4L21 12l-9 4.5L3 12zm0 4.5l2.2-1.1 6.8 3.4 6.8-3.4 2.2 1.1-9 4.5-9-4.5z"/></svg>',
     chevron: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8.6 5.4L10 4l8 8-8 8-1.4-1.4L15.2 12z"/></svg>'
   };
 
@@ -2683,7 +2685,14 @@ var DASHICON_NAMES = [
    * @return {void}
    */
   function persistConfigs(map) {
+    var buttonWasShown = isSetsButtonShown();
     writeKey(CONFIGS_KEY, JSON.stringify(map));
+    // The first saved set adds the Saved sets button to the rail and a
+    // delete of the last one removes it (#93). Only that change needs a
+    // rebuild: the button's menu reads the map each time it opens.
+    if (isSetsButtonShown() !== buttonWasShown) {
+      rerender();
+    }
   }
 
   /**
@@ -2794,6 +2803,154 @@ var DASHICON_NAMES = [
     persistConfigs(map);
     setConfigMeta(name, null);
     return true;
+  }
+
+  // -------------------------------------------------------------------
+  // Saved sets button (#93). A rail button in the tail that opens a menu
+  // of the saved sets, so a switch is one press instead of a trip
+  // through Toolbar settings. It reuses the flyout machinery: the
+  // button is a container tool, each set is a menuitemradio child, and
+  // a load does exactly what Load in Toolbar settings does.
+  // -------------------------------------------------------------------
+
+  var SETS_TOOL_ID = 'saved-sets';
+
+  /**
+   * The saved set whose slots are the rail's slots now, in the same
+   * order. Labels are not compared: a set "is current" when the author
+   * would see the same tools. When two sets have the same slots, the
+   * first wins, so at most one menu item is checked.
+   *
+   * @return {string} The set name, or '' when no set matches.
+   */
+  function currentConfigName() {
+    var current = JSON.stringify(loadSlots());
+    var map = loadConfigs();
+    var names = Object.keys(map);
+    for (var i = 0; i < names.length; i++) {
+      if (JSON.stringify(normalizeSlots(map[names[i]])) === current) {
+        return names[i];
+      }
+    }
+    return '';
+  }
+
+  /**
+   * Whether the rail shows the Saved sets button: the author has at
+   * least one saved set and has not hidden the button in Toolbar
+   * settings. With no set the menu would have nothing to switch to.
+   *
+   * @return {boolean}
+   */
+  function isSetsButtonShown() {
+    return readKey(SETS_BUTTON_HIDDEN_KEY) !== '1' && Object.keys(loadConfigs()).length > 0;
+  }
+
+  /**
+   * The outcome text for a set load, shared by Load in Toolbar settings
+   * and the Saved sets menu so both say the same thing.
+   *
+   * @param {string} name Set name.
+   * @return {string} The message.
+   */
+  function configLoadedMessage(name) {
+    var missing = missingBlockCount(loadSlots());
+    if (missing > 0) {
+      return sprintf(
+        /* translators: 1: set name, 2: count of unavailable blocks. */
+        _n(
+          'Loaded "%1$s". %2$d pinned block is not available on this site and stays hidden until its plugin or theme is active.',
+          'Loaded "%1$s". %2$d pinned blocks are not available on this site and stay hidden until their plugin or theme is active.',
+          missing,
+          'editrail'
+        ),
+        name,
+        missing
+      );
+    }
+    // Announce the ordinary success too. The rail rebuilding is a
+    // visual-only cue, so without this a screen-reader user got no
+    // confirmation that Load had done anything at all.
+    return sprintf(
+      /* translators: %s: set name. */
+      __('Loaded "%s".', 'editrail'),
+      name
+    );
+  }
+
+  /**
+   * Load a set from the Saved sets menu, announce it, and put focus on
+   * the rebuilt Saved sets button. The flyout closed before this ran and
+   * loadConfig rebuilt the rail, so the button that opened the menu is
+   * gone; without the refocus, focus would fall to the page body.
+   *
+   * @param {string} name Set name.
+   * @return {void}
+   */
+  function loadConfigFromMenu(name) {
+    if (loadConfig(name)) {
+      speak(configLoadedMessage(name));
+    } else {
+      // Deleted in another tab since the menu opened.
+      speak(sprintf(
+        /* translators: %s: set name. */
+        __('The set "%s" no longer exists.', 'editrail'),
+        name
+      ));
+    }
+    var btn = document.querySelector('#toolrail-rail ' + toolSelector(SETS_TOOL_ID));
+    if (btn) {
+      btn.focus();
+    }
+  }
+
+  /**
+   * The Saved sets button as a rail tool descriptor. Its children are a
+   * GETTER, read from storage on every access: the flyout reads them when
+   * it opens, so a set saved, deleted or imported since the rail was
+   * built shows without a rebuild, and the checked item follows the
+   * current pins.
+   *
+   * @param {HTMLElement} wrapper The rail region (for the settings dialog).
+   * @return {Object} The tool descriptor.
+   */
+  function setsMenuTool(wrapper) {
+    var tool = {
+      id: SETS_TOOL_ID,
+      label: __('Saved sets', 'editrail'),
+      shortLabel: __('Sets', 'editrail'),
+      icon: ICONS.sets
+    };
+    Object.defineProperty(tool, 'children', {
+      enumerable: true,
+      get: function () {
+        var current = currentConfigName();
+        var items = Object.keys(loadConfigs()).map(function (name) {
+          return {
+            id: SETS_TOOL_ID + ':' + name,
+            label: name,
+            radio: true,
+            checked: name === current,
+            supports: { canvas: false },
+            onActivate: function () {
+              loadConfigFromMenu(name);
+            }
+          };
+        });
+        items.push({
+          // '-' not ':', so no set name can produce this id.
+          id: SETS_TOOL_ID + '-new',
+          label: __('Save the current tools as a set…', 'editrail'),
+          separatorBefore: true,
+          supports: { canvas: false },
+          onActivate: function () {
+            openSettings(wrapper, '#toolrail-settings-setname');
+          }
+        });
+        return items;
+      }
+    });
+    return tool;
   }
 
   // -------------------------------------------------------------------
@@ -4402,14 +4559,25 @@ var DASHICON_NAMES = [
     menu.setAttribute('aria-label', tool.label);
 
     tool.children.forEach(function (child) {
+      if (child.separatorBefore) {
+        var sep = document.createElement('div');
+        sep.className = 'toolrail-flyout-separator';
+        sep.setAttribute('role', 'separator');
+        menu.appendChild(sep);
+      }
       var item = document.createElement('button');
       item.type = 'button';
       item.className = 'toolrail-flyout-item';
+      // A pick-one child (a saved set in the Saved sets menu, #93) is a
+      // radio item: exactly one choice is current, or none.
+      if (child.radio) {
+        item.setAttribute('role', 'menuitemradio');
+        item.setAttribute('aria-checked', child.checked ? 'true' : 'false');
       // A toggle child (onActivate + isActive — a provider's "Snap to
       // guides") is a checkbox item, so its state is perceivable: a
       // plain menuitem has no way to say "on". The flyout closes on
       // activation, so the state is read once, here, per open.
-      if (isToggleTool(child)) {
+      } else if (isToggleTool(child)) {
         item.setAttribute('role', 'menuitemcheckbox');
         var checked = false;
         try {
@@ -6212,29 +6380,7 @@ var DASHICON_NAMES = [
         li.appendChild(label);
         var load = settingsButton(__('Load', 'editrail'), function () {
           loadConfig(cfg);
-          var missing = missingBlockCount(loadSlots());
-          if (missing > 0) {
-            settingsStatus = sprintf(
-              /* translators: 1: set name, 2: count of unavailable blocks. */
-              _n(
-                'Loaded "%1$s". %2$d pinned block is not available on this site and stays hidden until its plugin or theme is active.',
-                'Loaded "%1$s". %2$d pinned blocks are not available on this site and stay hidden until their plugin or theme is active.',
-                missing,
-                'editrail'
-              ),
-              cfg,
-              missing
-            );
-          } else {
-            // Announce the ordinary success too. The rail rebuilding is a
-            // visual-only cue, so without this a screen-reader user got
-            // no confirmation that Load had done anything at all.
-            settingsStatus = sprintf(
-              /* translators: %s: set name. */
-              __('Loaded "%s".', 'editrail'),
-              cfg
-            );
-          }
+          settingsStatus = configLoadedMessage(cfg);
           refreshSettings('#toolrail-settings-search');
         }, 'toolrail-settings-load');
         load.setAttribute('aria-label', sprintf(__('Load the set %s', 'editrail'), cfg));
@@ -6313,6 +6459,26 @@ var DASHICON_NAMES = [
       });
     });
     node.appendChild(importInput);
+
+    // The Saved sets button on the rail (#93). Shown by default; it only
+    // appears once a set exists, so an author with no sets sees nothing
+    // new. Same checkbox shape as "Hide the Help button".
+    var setsButtonRow = settingsRow('label', 'toolrail-settings-positionrow');
+    var setsButtonToggle = document.createElement('input');
+    setsButtonToggle.type = 'checkbox';
+    setsButtonToggle.id = 'toolrail-settings-setsbutton';
+    setsButtonToggle.checked = readKey(SETS_BUTTON_HIDDEN_KEY) !== '1';
+    setsButtonToggle.addEventListener('change', function () {
+      writeKey(SETS_BUTTON_HIDDEN_KEY, setsButtonToggle.checked ? '0' : '1');
+      // Focus stays on this checkbox: rerender() only moves focus when
+      // it was in the rail.
+      rerender();
+    });
+    var setsButtonText = settingsRow('span', '');
+    setsButtonText.textContent = __('Show a Saved sets button on the toolbar when you have a saved set', 'editrail');
+    setsButtonRow.appendChild(setsButtonToggle);
+    setsButtonRow.appendChild(setsButtonText);
+    node.appendChild(setsButtonRow);
 
     // --- Inserting ---
     node.appendChild(settingsDivider());
@@ -6639,6 +6805,7 @@ var DASHICON_NAMES = [
         title: __('Saved sets', 'editrail'),
         body: [
           __('Save the current pinned arrangement as a named set in Toolbar settings, and load a set to switch arrangements.', 'editrail'),
+          __('When you have a saved set, the Saved sets button on the toolbar opens a list of your sets. Choose a set to load it. A check mark shows the set that matches the toolbar now. You can hide the button in Toolbar settings.', 'editrail'),
           __('Export a set as a small JSON file and import it on another site. Blocks the site does not have stay in the set and appear when their plugin or theme is active.', 'editrail')
         ]
       },
@@ -10963,6 +11130,12 @@ var DASHICON_NAMES = [
     var tail = document.createElement('div');
     tail.className = 'toolrail-tail';
     tail.appendChild(buildSeparator());
+    // Saved sets (#93): first in the tail, so the switch sits with the
+    // other toolbar-level controls and stays visible however many tools
+    // scroll above it.
+    if (isSetsButtonShown()) {
+      tail.appendChild(buildToolButton(setsMenuTool(wrapper), wrapper));
+    }
     if (!isHelpHidden()) {
       var help = document.createElement('button');
       help.type = 'button';
@@ -11063,7 +11236,9 @@ var DASHICON_NAMES = [
       e.preventDefault();
       if (e.key === openKey) {
         var toolId = btns[idx].dataset.tool;
-        var tool = findTool(toolId);
+        // The Saved sets button is rail chrome, not a registered tool, so
+        // findTool() does not know it.
+        var tool = toolId === SETS_TOOL_ID ? setsMenuTool(wrapper) : findTool(toolId);
         // Same gate as the click path: a fully dimmed container offers
         // no flyout by keyboard either (review 2026-08-29).
         if (tool && tool.children && tool.children.length && buttonAvailable(tool)) {

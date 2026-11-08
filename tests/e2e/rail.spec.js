@@ -38,6 +38,7 @@ const RAIL_PREF_KEYS = [
   'toolrail-set-meta',
   'toolrail-sidebar-width',
   'toolrail-sidebar-resize',
+  'toolrail-sets-button-hidden',
 ];
 
 /**
@@ -822,6 +823,107 @@ test.describe('saved-set import/export', () => {
       buffer: Buffer.from(JSON.stringify({ hello: 'world' })),
     });
     await expect(page.locator('#toolrail-settings-status')).toContainText('expected JSON with a "blocks" array');
+  });
+});
+
+test.describe('saved sets button (#93)', () => {
+  /**
+   * Save the rail's current pins as a set through Toolbar settings, then
+   * close the dialog.
+   */
+  async function saveSet(page, name) {
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('#toolrail-settings-setname').fill(name);
+    await page.locator('.toolrail-settings-saveset').click();
+    await expect(page.locator(`.toolrail-settings-setrow[data-config="${name}"]`)).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.toolrail-settings')).toHaveCount(0);
+  }
+
+  test('appears with the first saved set, and a press on a set loads it', async ({ page }) => {
+    await openNewPost(page);
+    const setsBtn = page.locator('#toolrail-rail [data-tool="saved-sets"]');
+    await expect(setsBtn).toHaveCount(0);
+
+    await saveSet(page, 'basic');
+    await expect(setsBtn).toBeVisible();
+    // First in the tail, before Help and Toolbar settings.
+    expect(await page.locator('#toolrail-rail .toolrail-tail .toolrail-tool').evaluateAll(
+      (nodes) => nodes.map((n) => n.dataset.tool)
+    )).toEqual(['saved-sets', 'help', 'settings']);
+
+    await page.evaluate(() => window.toolrail.pinBlock('core/quote'));
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/quote"]')).toBeVisible();
+    await saveSet(page, 'with quote');
+
+    await setsBtn.click();
+    const menu = page.locator('.toolrail-flyout[aria-label="Saved sets"]');
+    await expect(menu).toBeVisible();
+    await expect(setsBtn).toHaveAttribute('aria-expanded', 'true');
+    // The set that matches the rail now is the one checked radio item.
+    await expect(menu.locator('[role="menuitemradio"]')).toHaveCount(2);
+    await expect(menu.locator('[role="menuitemradio"][aria-checked="true"]')).toHaveText('with quote');
+    await expect(menu.locator('[role="menuitem"]').last()).toContainText('Save the current tools as a set');
+
+    await menu.locator('[role="menuitemradio"]', { hasText: 'basic' }).click();
+    await expect(menu).toHaveCount(0);
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/quote"]')).toHaveCount(0);
+    expect(await getPref(page, 'toolrail-quick-slots')).not.toContain('core/quote');
+    // Focus goes to the rebuilt button, not the page body.
+    await expect(setsBtn).toBeFocused();
+  });
+
+  test('opens and loads by keyboard, and Escape returns to the button', async ({ page }) => {
+    await openNewPost(page);
+    await saveSet(page, 'basic');
+    await page.evaluate(() => window.toolrail.pinBlock('core/quote'));
+    await saveSet(page, 'with quote');
+
+    const setsBtn = page.locator('#toolrail-rail [data-tool="saved-sets"]');
+    await setsBtn.focus();
+    // The default left dock is vertical: ArrowRight opens the menu.
+    await page.keyboard.press('ArrowRight');
+    const first = page.locator('.toolrail-flyout[aria-label="Saved sets"] .toolrail-flyout-item').first();
+    await expect(first).toBeFocused();
+    await expect(first).toHaveText('basic');
+
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/quote"]')).toHaveCount(0);
+    await expect(setsBtn).toBeFocused();
+
+    await page.keyboard.press('ArrowRight');
+    await expect(page.locator('.toolrail-flyout[aria-label="Saved sets"]')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.toolrail-flyout[aria-label="Saved sets"]')).toHaveCount(0);
+    await expect(setsBtn).toBeFocused();
+    // The toolbar keeps one Tab stop.
+    await expect(page.locator('#toolrail-rail .toolrail-tool[tabindex="0"]')).toHaveCount(1);
+  });
+
+  test('the save item opens Toolbar settings at the set name field', async ({ page }) => {
+    await openNewPost(page);
+    await saveSet(page, 'basic');
+
+    await page.locator('#toolrail-rail [data-tool="saved-sets"]').click();
+    await page.locator('.toolrail-flyout[aria-label="Saved sets"] [role="menuitem"]', { hasText: 'Save the current tools' }).click();
+    await expect(page.locator('#toolrail-settings-setname')).toBeFocused();
+  });
+
+  test('a checkbox hides the button, and a delete of the last set removes it', async ({ page }) => {
+    await openNewPost(page);
+    await saveSet(page, 'basic');
+    const setsBtn = page.locator('#toolrail-rail [data-tool="saved-sets"]');
+    await expect(setsBtn).toBeVisible();
+
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('#toolrail-settings-setsbutton').uncheck();
+    await expect(setsBtn).toHaveCount(0);
+    expect(await getPref(page, 'toolrail-sets-button-hidden')).toBe('1');
+    await page.locator('#toolrail-settings-setsbutton').check();
+    await expect(setsBtn).toBeVisible();
+
+    await page.locator('.toolrail-settings-setrow[data-config="basic"] .toolrail-settings-delset').click();
+    await expect(setsBtn).toHaveCount(0);
   });
 });
 
