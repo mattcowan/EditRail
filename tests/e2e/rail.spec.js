@@ -4824,7 +4824,10 @@ test.describe('section overview (R6)', () => {
     expect(first.boxes).toEqual(ids);
     expect(first.selected).toEqual([]);
     expect(first.openControls).toBe(0);
-    expect(first.pan).toBe(0);
+    // No guard on first.pan. An open focuses the first box, and the
+    // focusin handler pans a box taller than the overlay into view. In
+    // Firefox and WebKit that gives a pan of about 67 px on every clean
+    // open; in Chromium, 0. The comparisons below hold either way.
 
     // Leave from INSIDE the group, with a selection, a pan and a zoom.
     await overviewBoxButton(page, ids[0], 'pick').click();
