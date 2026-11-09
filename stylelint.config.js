@@ -5,9 +5,9 @@
  * The rules look for real defects: unknown properties, units, functions,
  * selectors and at-rules, invalid values and hex colors, duplicate
  * selectors and properties, and a shorthand that overrides its own
- * longhand. They do not enforce a code style. stylelint 16 removed its
- * formatting rules, and stylelint-config-recommended holds "possible
- * errors" only.
+ * longhand. They do not enforce a code style. stylelint has had no
+ * formatting rules since version 16, and stylelint-config-recommended
+ * holds "possible errors" only.
  *
  * Do not rename a `--toolrail-*` custom property or a selector to satisfy
  * a rule: extensions and a theme read them. Suppress the finding with a
