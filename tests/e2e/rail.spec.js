@@ -4843,6 +4843,41 @@ test.describe('section overview (R6)', () => {
     await open();
     await expect.poll(startState).toEqual(first);
   });
+
+  test('an overview that cannot measure the canvas shows the start zoom, not the last overview\'s (#100)', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        Array.from({ length: 12 }, (_, i) => createBlock('core/paragraph', { content: 'Z-' + i }))
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(12);
+    const tool = page.locator('#toolrail-rail [data-tool="overview"]');
+    const overlay = page.locator('#toolrail-overview');
+    const zoomLabel = overlay.locator('.toolrail-ov-zoomlabel');
+
+    // Zoom out, so the last overview leaves a zoom that is not the start.
+    await tool.click();
+    await expect(overlay.locator('.toolrail-ov-box').first()).toBeVisible();
+    // Past the 220 ms settle pass, which can refit.
+    await page.waitForTimeout(400);
+    const fitted = await zoomLabel.textContent();
+    await overlay.locator('[data-ov-action="zoom-out"]').click();
+    await expect(zoomLabel).not.toHaveText(fitted);
+    await overlay.locator('[data-ov-action="close"]').click();
+    await expect(overlay).toHaveCount(0);
+
+    // An empty post: the overview has no block to measure, so the fit
+    // step stops before it writes a zoom. The label must show the start
+    // value, not the zoom the last overview left.
+    await page.evaluate(() => window.wp.data.dispatch('core/block-editor').resetBlocks([]));
+    await expect.poll(async () => (await blockNames(page)).length).toBe(0);
+    await tool.click();
+    await expect(overlay).toBeVisible();
+    await page.waitForTimeout(400);
+    await expect(zoomLabel).toHaveText('100%');
+  });
 });
 
 /** Drilled-box center/edges keyed by paragraph content, for the drag
