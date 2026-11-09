@@ -1,0 +1,59 @@
+<?xml version="1.0"?>
+<!--
+    PHPCS ruleset for EditRail (#99). `composer lint` runs it.
+
+    A small ruleset on purpose: it looks for real defects, not code style.
+    The full WordPress Coding Standards would mostly report formatting.
+    What it checks:
+
+    - PHPCompatibility: no PHP feature above 7.4 (`Requires PHP: 7.4` in
+      editrail.php, `config.platform.php` in composer.json). It is version
+      10, still an alpha: 9.3.5, the last stable release (2019-12-27),
+      predates PHP 8 and does not know its syntax or functions.
+    - WordPress.Security: output escaping, nonces, input sanitizing, safe
+      redirects.
+    - WordPress.DB prepared-SQL sniffs: SQL injection.
+    - WordPress.WP: deprecated or discouraged WordPress functions, classes
+      and parameters, capabilities, i18n, enqueue parameters, overridden
+      WordPress globals.
+
+    PHPCompatibility also reports the PHP 8 functions that WordPress
+    polyfills (str_contains, str_starts_with and str_ends_with since
+    WordPress 5.9). To use one, suppress the finding with a comment that
+    names the polyfill, or add PHPCompatibilityWP once its version 3 (for
+    PHPCompatibility 10) is stable.
+
+    This file does not ship (.distignore).
+-->
+<ruleset name="EditRail">
+    <description>Real-defect checks for the EditRail PHP: security, PHP 7.4 compatibility and WordPress API use.</description>
+
+    <file>./editrail.php</file>
+    <file>./uninstall.php</file>
+    <file>./includes</file>
+
+    <arg name="extensions" value="php"/>
+    <arg name="basepath" value="."/>
+    <arg value="sp"/>
+    <arg name="colors"/>
+
+    <!-- The oldest PHP the plugin supports, and every version after it. -->
+    <config name="testVersion" value="7.4-"/>
+    <!-- `Requires at least` in editrail.php. The deprecation sniffs use it. -->
+    <config name="minimum_wp_version" value="6.5"/>
+
+    <rule ref="PHPCompatibility"/>
+
+    <rule ref="WordPress.Security"/>
+    <rule ref="WordPress.DB.PreparedSQL"/>
+    <rule ref="WordPress.DB.PreparedSQLPlaceholders"/>
+
+    <rule ref="WordPress.WP"/>
+    <rule ref="WordPress.WP.I18n">
+        <properties>
+            <property name="text_domain" type="array">
+                <element value="editrail"/>
+            </property>
+        </properties>
+    </rule>
+</ruleset>

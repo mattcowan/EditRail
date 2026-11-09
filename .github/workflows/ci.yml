@@ -1,11 +1,11 @@
-# CI: version check, PHP unit tests, browser (e2e) tests, and a packaging
-# proof.
+# CI: lint, version check, PHP unit tests, browser (e2e) tests, and a
+# packaging proof.
 #
-# The cheap jobs (PHPUnit, version check + package) run on every push to
-# main and every pull request. The browser suite runs on pull requests and
-# on manual runs - NOT on the merge commit to main: a merged PR is code
-# that just passed on the PR. A pull request that changes only docs skips
-# it too (see e2e-needed).
+# The cheap jobs (lint, PHPUnit, version check + package) run on every
+# push to main and every pull request. The browser suite runs on pull
+# requests and on manual runs - NOT on the merge commit to main: a merged
+# PR is code that just passed on the PR. A pull request that changes only
+# docs skips it too (see e2e-needed).
 #
 # The browser suite runs in Chromium, Firefox and WebKit (#42), each in 3
 # shards: 9 jobs side by side, each with its own wp-env site, so no two
@@ -58,6 +58,41 @@ jobs:
       - run: composer install --no-interaction --prefer-dist
       - run: vendor/bin/phpunit
 
+  # ESLint and stylelint on assets/, PHPCS on the PHP (#99). No wp-env and
+  # no browser, so it reports long before the browser jobs. The browser
+  # jobs need this job: a lint finding stops them before they start, so a
+  # PR with a lint error does not use 9 browser jobs. The
+  # configurations (eslint.config.js, stylelint.config.js,
+  # phpcs.xml.dist) say what each linter checks and why.
+  lint:
+    name: Lint (ESLint, stylelint, PHPCS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - id: npm
+        run: npm ci
+      # v2 is a moving tag, so the comment gives the date of the pinned commit.
+      - uses: shivammathur/setup-php@b604ade2a87db23f8871b7182e69ec5e75effb45 # v2 (2026-08-28)
+        with:
+          php-version: '8.2'
+          tools: composer
+      - id: composer
+        run: composer install --no-interaction --prefer-dist
+      # Each linter runs when its install worked, even if a linter before
+      # it failed, so one red job shows every finding.
+      - if: ${{ !cancelled() && steps.npm.outcome == 'success' }}
+        run: npm run lint:js
+      - if: ${{ !cancelled() && steps.npm.outcome == 'success' }}
+        run: npm run lint:css
+      - if: ${{ !cancelled() && steps.composer.outcome == 'success' }}
+        run: composer lint
+
   # Whether the browser suite has anything to test. Skipped on the push to
   # main (see the header). On a pull request it runs unless EVERY changed
   # file is docs: Markdown, the issue and PR templates, or the WordPress.org
@@ -98,7 +133,9 @@ jobs:
 
   e2e-tests:
     name: Browser tests (${{ matrix.browser }} ${{ matrix.shard }}/3)
-    needs: e2e-needed
+    # No status function in `if`, so GitHub adds success(): the job is
+    # skipped when lint or e2e-needed fails.
+    needs: [e2e-needed, lint]
     if: needs.e2e-needed.outputs.run == 'true'
     runs-on: ubuntu-latest
     # A wedged run must fail here, not burn the 6-hour default. Each step
