@@ -54,8 +54,8 @@ module.exports = defineConfig({
   globalTeardown: require.resolve('./global-teardown.js'),
   // One test at a time, always. Every test writes the same account's rail
   // settings, so two at once change each other's state. CI passes
-  // --fully-parallel only so that --shard can split this one spec file by
-  // test; each shard is its own job with its own wp-env site.
+  // --fully-parallel only so that --shard can split the spec files by
+  // test, not by file; each shard is its own job with its own wp-env site.
   workers: 1,
   timeout: 30000,
   retries: 0,

@@ -122,5 +122,5 @@ provider validator refuses entries without a `sanitize_key`-stable `slug` or a
 With both plugins active: open any post, focus the rail's Text button,
 press ArrowRight — the flyout should list Typography Stylist; picking it and clicking the
 canvas should insert `typost/block`. EditRail's own E2E spec
-(`tests/e2e/rail.spec.js`, "registration API" describe block) proves the identical path
+(`tests/e2e/extension-api.spec.js`, "registration API" describe block) proves the identical path
 with a fixture tool if you want a reference.

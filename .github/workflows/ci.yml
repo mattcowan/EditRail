@@ -157,8 +157,9 @@ jobs:
       # account is admin / password on port 8888. It takes about 1 minute.
       - run: npx wp-env start
         timeout-minutes: 10
-      # --fully-parallel lets --shard split the one spec file by test;
-      # without it, shard 1 gets every test. The config keeps workers: 1,
+      # --fully-parallel lets --shard split the spec files by test;
+      # without it, a shard takes whole files, and the files differ a lot
+      # in size (#101). The config keeps workers: 1,
       # so the tests in a shard still run one at a time. A shard took
       # 6.6-12.6 minutes on 2026-10-22 (run 39835206197).
       - run: npm run test:e2e -- --shard=${{ matrix.shard }}/3 --fully-parallel
