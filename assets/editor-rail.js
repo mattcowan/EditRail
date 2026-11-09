@@ -2029,7 +2029,7 @@
     }
     var raw = readKey(SLOTS_KEY);
     if (null !== raw) {
-      var slots = null;
+      var slots;
       try {
         slots = normalizeSlots(JSON.parse(raw));
       } catch (e) {
@@ -4607,7 +4607,7 @@ var DASHICON_NAMES = [
       // activation, so the state is read once, here, per open.
       } else if (isToggleTool(child)) {
         item.setAttribute('role', 'menuitemcheckbox');
-        var checked = false;
+        var checked;
         try {
           checked = !!child.isActive();
         } catch (err) {
@@ -6263,6 +6263,7 @@ var DASHICON_NAMES = [
       results.textContent = '';
       var term = search.value.trim().toLowerCase();
       var pinned = loadSlots();
+      // eslint-disable-next-line no-shadow -- `title` is the candidate's title; this helper never reads the dialog heading.
       var hits = function (title, name) {
         return String(title).toLowerCase().indexOf(term) !== -1 || String(name).toLowerCase().indexOf(term) !== -1;
       };
@@ -6289,6 +6290,7 @@ var DASHICON_NAMES = [
       }
       // Visible text is the title plus a kind tag; the accessible name
       // (aria-label) contains the title, so Label in Name holds.
+      // eslint-disable-next-line no-shadow -- `title` is the result's title; this helper never reads the dialog heading.
       var resultButton = function (title, kindLabel, ariaLabel, onPin) {
         var btn = settingsButton(title, function () {
           onPin();
@@ -8682,6 +8684,7 @@ var DASHICON_NAMES = [
       if (overviewSelected && overviewSelectedIds.indexOf(overviewSelected) === -1) {
         overviewSelectedIds.push(overviewSelected);
       }
+      // eslint-disable-next-line no-shadow -- the outer `id` is the breadcrumb loop's scratch value, finished before this line.
       overviewSelectedIds = order.filter(function (id) {
         return overviewSelectedIds.indexOf(id) !== -1;
       });
@@ -8867,6 +8870,7 @@ var DASHICON_NAMES = [
       // vetoed a move that is perfectly legal for the rest — both
       // arrows could go dead while the strip said "3 blocks selected"
       // and nothing was announced (MR review 2026-08-31, finding 3).
+      // eslint-disable-next-line no-shadow -- the outer `id` is the breadcrumb loop's scratch value, finished before this line.
       var groupMovable = groupMembers.filter(function (id) {
         return overviewCanMove(id);
       });
@@ -10094,6 +10098,7 @@ var DASHICON_NAMES = [
         return Math.min(max, Math.max(0, scroller.scrollTop + (r.top - s.top) - Math.max(0, (scroller.clientHeight - r.height) / 2)));
       };
     }
+    // eslint-disable-next-line no-shadow -- a local scroll position; this function never calls the boot-time start().
     var start = readPos();
     if (start === null) {
       return false;
@@ -11988,7 +11993,7 @@ var DASHICON_NAMES = [
       if (!btn) {
         return;
       }
-      var pressed = false;
+      var pressed;
       if (tool.isActive) {
         try {
           pressed = !!tool.isActive();
