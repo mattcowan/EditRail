@@ -63,7 +63,7 @@ Open a post in the editor. The toolbar is on the left edge. `readme.txt` describ
 - Optional, off by default: turn on "Let me make the settings sidebar wider" in Toolbar settings. Then type a width in Toolbar settings, use its Narrower and Wider buttons (50px a step), or drag the inner edge of the editor's settings sidebar. The width goes up to 640px or half the window, whichever is less. The edge is also a keyboard separator: the Left and Right arrow keys change the width. A double-click, or a button in Toolbar settings, resets it to 280px.
 - Open the Section overview to zoom out, outline every top-level block, and reorder blocks by drag or by keyboard.
 
-Every action has a keyboard path, and screen readers hear every state change. A drag is a shortcut, never the only way.
+Every action has a keyboard path, and screen readers hear every state change. Dragging actions are available as a shortcut but not the only way to perform an action.
 
 ## How it works
 
