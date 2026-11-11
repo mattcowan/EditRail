@@ -1787,6 +1787,140 @@ test.describe('section overview (R6)', () => {
       document.body.classList.contains('toolrail-ov-dragging')
     )).toBe(false);
   });
+
+  test('every open starts at the same root, selection, pan and zoom, whatever the last one left (#100)', async ({ page }) => {
+    await openNewPost(page);
+    // Tall at the top level AND inside the group, so both levels can pan
+    // after a zoom-out.
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        [createBlock('core/group', {},
+          Array.from({ length: 40 }, (_, i) => createBlock('core/paragraph', { content: 'IN-' + i })))]
+          .concat(Array.from({ length: 40 }, (_, i) => createBlock('core/paragraph', { content: 'TOP-' + i })))
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(41);
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    const tool = page.locator('#toolrail-rail [data-tool="overview"]');
+    const overlay = page.locator('#toolrail-overview');
+
+    // What an open overview starts from: the level, the selection, the
+    // pan and the zoom, read from the overlay, the canvas transform and
+    // the public geometry API.
+    const startState = () => page.evaluate(() => {
+      const ov = document.getElementById('toolrail-overview');
+      const style = document.body.style;
+      return {
+        root: (ov.querySelector('[aria-current="location"]') || {}).textContent,
+        boxes: Array.from(ov.querySelectorAll('.toolrail-ov-box')).map((b) => b.dataset.clientid),
+        selected: Array.from(ov.querySelectorAll('.toolrail-ov-box.is-selected')).map((b) => b.dataset.clientid),
+        openControls: ov.querySelectorAll('.toolrail-ov-controls:not([hidden])').length,
+        scale: style.getPropertyValue('--toolrail-overview-scale'),
+        ty: style.getPropertyValue('--toolrail-ov-ty'),
+        zoomLabel: ov.querySelector('.toolrail-ov-zoomlabel').textContent,
+        pan: window.toolrail.getCanvasGeometry().pan,
+      };
+    });
+    const open = async () => {
+      await tool.click();
+      await expect(overlay.locator('.toolrail-ov-box').first()).toBeVisible();
+    };
+    // Change all four, then leave. The selection is made by keyboard: a
+    // drilled root is top-aligned under the bar, and a tall section pushes
+    // the next box below the fold, so a click can miss either one.
+    const selectZoomPanClose = async (anchorId) => {
+      await overviewBoxButton(page, anchorId, 'pick').focus();
+      await page.keyboard.press('Shift+ArrowDown');
+      await expect(ovSelectedBoxes(page)).toHaveCount(2);
+      const scaleBefore = await page.evaluate(() =>
+        document.body.style.getPropertyValue('--toolrail-overview-scale')
+      );
+      await overlay.locator('[data-ov-action="zoom-out"]').click();
+      await expect.poll(async () => page.evaluate(() =>
+        document.body.style.getPropertyValue('--toolrail-overview-scale')
+      )).not.toBe(scaleBefore);
+      const c = await page.evaluate(() => {
+        const r = document.getElementById('toolrail-overview').getBoundingClientRect();
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+      });
+      await page.mouse.move(c.x, c.y);
+      await page.mouse.wheel(0, 400);
+      await expect.poll(async () => page.evaluate(() =>
+        window.toolrail.getCanvasGeometry().pan
+      )).toBeGreaterThan(0);
+      await overlay.locator('[data-ov-action="close"]').click();
+      await expect(overlay).toHaveCount(0);
+    };
+
+    await open();
+    // Past the 220 ms settle pass, which can refit.
+    await page.waitForTimeout(400);
+    const first = await startState();
+    // Guard the guard: the first open really is the clean start.
+    expect(first.root).toBe('All sections');
+    expect(first.boxes).toEqual(ids);
+    expect(first.selected).toEqual([]);
+    expect(first.openControls).toBe(0);
+    // No guard on first.pan. An open focuses the first box, and the
+    // focusin handler pans a box taller than the overlay into view. In
+    // Firefox and WebKit that gives a pan of about 67 px on every clean
+    // open; in Chromium, 0. The comparisons below hold either way.
+
+    // Leave from INSIDE the group, with a selection, a pan and a zoom.
+    await overviewBoxButton(page, ids[0], 'pick').click();
+    await overviewBoxButton(page, ids[0], 'enter').click();
+    await expect(overlay.locator('[aria-current="location"]')).toHaveText('Group');
+    const kids = await page.evaluate((g) =>
+      window.wp.data.select('core/block-editor').getBlockOrder(g), ids[0]
+    );
+    await selectZoomPanClose(kids[0]);
+    await open();
+    await expect.poll(startState).toEqual(first);
+
+    // Leave from the TOP level the same way: a selection there would
+    // survive a missed reset, because its boxes are the ones shown.
+    await selectZoomPanClose(ids[0]);
+    await open();
+    await expect.poll(startState).toEqual(first);
+  });
+
+  test('an overview that cannot measure the canvas shows the start zoom, not the last overview\'s (#100)', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks(
+        Array.from({ length: 12 }, (_, i) => createBlock('core/paragraph', { content: 'Z-' + i }))
+      );
+    });
+    await expect.poll(async () => (await blockNames(page)).length).toBe(12);
+    const tool = page.locator('#toolrail-rail [data-tool="overview"]');
+    const overlay = page.locator('#toolrail-overview');
+    const zoomLabel = overlay.locator('.toolrail-ov-zoomlabel');
+
+    // Zoom out, so the last overview leaves a zoom that is not the start.
+    await tool.click();
+    await expect(overlay.locator('.toolrail-ov-box').first()).toBeVisible();
+    // Past the 220 ms settle pass, which can refit.
+    await page.waitForTimeout(400);
+    const fitted = await zoomLabel.textContent();
+    await overlay.locator('[data-ov-action="zoom-out"]').click();
+    await expect(zoomLabel).not.toHaveText(fitted);
+    await overlay.locator('[data-ov-action="close"]').click();
+    await expect(overlay).toHaveCount(0);
+
+    // An empty post: the overview has no block to measure, so the fit
+    // step stops before it writes a zoom. The label must show the start
+    // value, not the zoom the last overview left.
+    await page.evaluate(() => window.wp.data.dispatch('core/block-editor').resetBlocks([]));
+    await expect.poll(async () => (await blockNames(page)).length).toBe(0);
+    await tool.click();
+    await expect(overlay).toBeVisible();
+    await page.waitForTimeout(400);
+    await expect(zoomLabel).toHaveText('100%');
+  });
 });
 
 /** Drilled-box center/edges keyed by paragraph content, for the drag

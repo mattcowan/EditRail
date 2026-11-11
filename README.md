@@ -63,7 +63,7 @@ Open a post in the editor. The toolbar is on the left edge. `readme.txt` describ
 - Optional, off by default: turn on "Let me make the settings sidebar wider" in Toolbar settings. Then type a width in Toolbar settings, use its Narrower and Wider buttons (50px a step), or drag the inner edge of the editor's settings sidebar. The width goes up to 640px or half the window, whichever is less. The edge is also a keyboard separator: the Left and Right arrow keys change the width. A double-click, or a button in Toolbar settings, resets it to 280px.
 - Open the Section overview to zoom out, outline every top-level block, and reorder blocks by drag or by keyboard.
 
-Every action has a keyboard path, and screen readers hear every state change. A drag is a shortcut, never the only way.
+Every action has a keyboard path, and screen readers hear every state change. Dragging actions are available as a shortcut but not the only way to perform an action.
 
 ## How it works
 
@@ -170,6 +170,8 @@ Separate plugins by the same author use this contract and nothing else: rulers a
 | `npm run test:php` | Runs the PHPUnit suite in `tests/phpunit/`. It needs no WordPress install. The bootstrap stubs the few WordPress functions the PHP uses. |
 | `npm run test:e2e` | Runs the Playwright suite in `tests/e2e/` against a WordPress site. |
 | `npm run test:sr` | Runs the NVDA screen-reader journeys in `tests/e2e-sr/` against a WordPress site. Windows only. It drives a headed Firefox with Guidepup's portable NVDA, and it takes the keyboard for several minutes. Do not type while it runs. |
+| `npm run lint` | Runs ESLint and stylelint on `assets/`. ESLint reports undeclared, unused and shadowed names, unsafe syntax, and syntax above ES5. `eslint.config.js` and `stylelint.config.js` give the rules. |
+| `composer lint` | Runs PHPCS on `editrail.php`, `uninstall.php` and `includes/`. It reports security problems, PHP features above 7.4, and incorrect use of WordPress functions. `phpcs.xml.dist` gives the rules. |
 | `npm run check-versions` | Checks that all six version numbers agree. |
 | `npm run package` | Runs the version check, then builds `editrail.zip`. |
 
@@ -192,6 +194,8 @@ npx playwright install firefox
 ```
 
 Then copy `.env.example` to `.env` and set `WP_USERNAME` and `WP_PASSWORD`. Set `WP_BASE_URL` too if your site is not the wp-env one. `docs/releasing.md` lists the variables.
+
+CI runs both lint commands on each pull request and each push to `main`. A finding fails the job. Fix the finding, or suppress it with a comment that gives the reason. Do not rename a `--toolrail-*` custom property or a selector to satisfy a rule: extensions read them.
 
 `docs/releasing.md` describes the CI workflows and the release procedure.
 
