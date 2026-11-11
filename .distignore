@@ -40,6 +40,10 @@
 /package.json
 /phpunit.xml
 /phpunit.xml.dist
+/eslint.config.js
+/stylelint.config.js
+/phpcs.xml
+/phpcs.xml.dist
 
 # --- docs that live on GitHub, not in the distributed plugin ---
 # (readme.txt DOES ship: it is the WordPress.org listing.)

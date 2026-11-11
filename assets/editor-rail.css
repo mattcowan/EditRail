@@ -265,6 +265,7 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
    cross axis is clamped to hidden for the same reason. Scrolling still
    works — wheel, touch, and keyboard focus — and the JS step buttons
    (.toolrail-scrollbtn) are the visible affordance. */
+/* stylelint-disable-next-line no-duplicate-selectors -- kept apart from the flex rule above so this comment stays with it; no property overlaps. */
 .toolrail-scroll {
     scrollbar-width: none;
 }
@@ -760,6 +761,7 @@ body.toolrail-dragging * {
     flex: 0 0 auto;
 }
 
+/* stylelint-disable-next-line no-duplicate-selectors -- the color rule sits with the flyout icon; the size rule (earlier) sits with the tool icon. No property overlaps. */
 .toolrail-flyout-icon svg {
     fill: currentcolor;
 }
