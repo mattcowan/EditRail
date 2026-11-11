@@ -6957,31 +6957,11 @@ var DASHICON_NAMES = [
   //    so the layout-reference modal veto needs no special casing here.
   // -------------------------------------------------------------------
 
+  // Whether the overview is open. Kept OUT of the per-open state (`ov`,
+  // below) on purpose: the rest of the rail reads it (railMode, the
+  // tool's isActive, the key handlers, getCanvasGeometry), and every
+  // callback that can run after a close checks it first.
   var overviewOpen = false;
-  var overviewRoot = '';
-  // The one box whose reorder controls are shown ('' = none). The v2
-  // interaction (owner feedback 2026-08-27, from post 446): boxes are
-  // OUTLINES around each block, and the commands appear only after
-  // clicking/entering a box — the always-on chip bars obscured content.
-  var overviewSelected = '';
-  // Multi-selection (issue #21): every member's clientId, ALWAYS kept
-  // in document order. overviewSelected stays the ACTIVE box — the one
-  // whose controls disclosure is open — and, whenever a multi-selection
-  // exists, is one of its members; the controls then act on the group.
-  var overviewSelectedIds = [];
-  // The Shift-range anchor: set by a plain pick, a toggle-on, and the
-  // keyboard toggle, so a later Shift+click / Shift+Arrow extends from
-  // the box the author last acted on — the file-manager convention.
-  var overviewAnchor = '';
-  // In-flight marquee ({startX, startY, active, additive, baseIds,
-  // prevActive}) — a drag from EMPTY overlay space that draws a
-  // selection rectangle; every box it touches is selected on release.
-  var overviewMarquee = null;
-  // True while the group-move engine is mid-sequence: a non-contiguous
-  // group is moved as SEVERAL public dispatches (core's reducer moves
-  // one contiguous run per action), and the store subscription must
-  // not rebuild the overlay between them.
-  var overviewGroupMove = false;
   // Padlock for the locked-box corner tag (visual only; the pick
   // button's accessible name carries the state to AT).
   var OVERVIEW_LOCK_ICON = '<svg viewBox="0 0 24 24" width="10" height="10" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm-3 8V7a3 3 0 0 1 6 0v3H9z"/></svg>';
@@ -6990,74 +6970,145 @@ var DASHICON_NAMES = [
   // controls strip, and a border hue shift alone cannot carry the
   // state (MR review 2026-08-31, finding 1).
   var OVERVIEW_CHECK_ICON = '<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" focusable="false"><path fill="currentColor" d="M9.6 16.8 5 12.2l1.4-1.4 3.2 3.2 8-8L19 7.4z"/></svg>';
-  // Pan offset (visual px, ≥0) down the current root, and the author's
-  // explicit zoom (0 = fit the current root). Together they make a very
-  // long document SCROLLABLE in the overview instead of shrinking it
-  // past legibility.
-  var overviewPan = 0;
-  var overviewUserScale = 0;
-  var overviewMetrics = { k: 1, rootTop: 0, fitHeight: 0 };
-  var overviewEntryScroll = null;
-  var overviewSignature = '';
-  var overviewUnsubscribe = null;
-  var overviewRepositionTimer = null;
-  var overviewPanFrame = null;
-  var overviewHadFrame = false;
-  var overviewMedia = null;
-  // Watches the visual editor's box while the overview is open: editor
-  // chrome above the canvas (the autosave notice) appearing or being
-  // dismissed resizes it with NO resize/scroll event fired, and the
-  // viewport math reads that chrome's height.
-  var overviewResizeObserver = null;
-  // The node that observer is actually watching, so healOverview can
-  // tell a React-replaced visual editor from the one observed at open.
-  var overviewResizeTarget = null;
-  // Watches the canvas body's block DOM while the overview is open. A
-  // reorder lands in the canvas when React flushes it, which can be later
-  // than scheduleOverviewSettle's 220 ms pass on a slow browser; the boxes
-  // then kept the old layout (#64). What it runs reads the canvas and
-  // writes only to the overlay and the editor document, so it cannot
-  // trigger the observer again.
-  var overviewCanvasObserver = null;
-  // The canvas body that observer is watching (see overviewResizeTarget).
-  var overviewCanvasTarget = null;
-  // Watches the SIZE of the canvas's root block list while the overview
-  // is open. An image or embed that loads, a web font, or a style change
-  // can make the document taller with no childList change, so the
-  // mutation observer alone never saw it (#64, PR #69 review).
-  var overviewCanvasSizeObserver = null;
-  // The root block list that observer is watching.
-  var overviewCanvasSizeTarget = null;
+  /**
+   * The state of ONE open overview, at its start values. openOverview()
+   * starts from a fresh copy, and closeOverview() replaces the copy with a
+   * fresh one AFTER it has released every observer, timer, frame and
+   * listener the old copy holds. A new per-open value goes here, with its
+   * start value, and the reset on close comes with it.
+   *
+   * A value that must outlive a close stays outside, with its reason (the
+   * variables after `ov`). So does overviewOpen.
+   *
+   * The drag and marquee gestures live here too: no gesture can outlive
+   * the overview, and closeOverview tears each one down (listeners
+   * included) through finishOverviewDrag, cancelOverviewMarquee and
+   * clearOverviewCancelLatch before the copy is replaced. A rebuild
+   * stops them the same way, so they need no reset of their own.
+   *
+   * @return {Object} A fresh per-open state.
+   */
+  function newOverviewState() {
+    return {
+      // The current root ('' = top level).
+      root: '',
+      // The one box whose reorder controls are shown ('' = none). The v2
+      // interaction (owner feedback 2026-08-27, from post 446): boxes are
+      // OUTLINES around each block, and the commands appear only after
+      // clicking/entering a box — the always-on chip bars obscured
+      // content.
+      selected: '',
+      // Multi-selection (issue #21): every member's clientId, ALWAYS kept
+      // in document order. ov.selected stays the ACTIVE box — the one
+      // whose controls disclosure is open — and, whenever a
+      // multi-selection exists, is one of its members; the controls then
+      // act on the group.
+      selectedIds: [],
+      // The Shift-range anchor: set by a plain pick, a toggle-on, and the
+      // keyboard toggle, so a later Shift+click / Shift+Arrow extends
+      // from the box the author last acted on — the file-manager
+      // convention.
+      anchor: '',
+      // In-flight marquee ({startX, startY, active, additive, baseIds,
+      // prevActive}) — a drag from EMPTY overlay space that draws a
+      // selection rectangle; every box it touches is selected on release.
+      marquee: null,
+      // True while the group-move engine is mid-sequence: a
+      // non-contiguous group is moved as SEVERAL public dispatches (core's
+      // reducer moves one contiguous run per action), and the store
+      // subscription must not rebuild the overlay between them.
+      groupMove: false,
+      // Pan offset (visual px, ≥0) down the current root, and the
+      // author's explicit zoom (0 = fit the current root). Together they
+      // make a very long document SCROLLABLE in the overview instead of
+      // shrinking it past legibility.
+      pan: 0,
+      userScale: 0,
+      metrics: { k: 1, rootTop: 0, fitHeight: 0 },
+      entryScroll: null,
+      signature: '',
+      unsubscribe: null,
+      repositionTimer: null,
+      panFrame: null,
+      hadFrame: false,
+      media: null,
+      // Watches the visual editor's box while the overview is open:
+      // editor chrome above the canvas (the autosave notice) appearing or
+      // being dismissed resizes it with NO resize/scroll event fired, and
+      // the viewport math reads that chrome's height.
+      resizeObserver: null,
+      // The node that observer is actually watching, so healOverview can
+      // tell a React-replaced visual editor from the one observed at
+      // open.
+      resizeTarget: null,
+      // Watches the canvas body's block DOM while the overview is open. A
+      // reorder lands in the canvas when React flushes it, which can be
+      // later than scheduleOverviewSettle's 220 ms pass on a slow
+      // browser; the boxes then kept the old layout (#64). What it runs
+      // reads the canvas and writes only to the overlay and the editor
+      // document, so it cannot trigger the observer again.
+      canvasObserver: null,
+      // The canvas body that observer is watching (see resizeTarget).
+      canvasTarget: null,
+      // Watches the SIZE of the canvas's root block list while the
+      // overview is open. An image or embed that loads, a web font, or a
+      // style change can make the document taller with no childList
+      // change, so the mutation observer alone never saw it (#64, PR #69
+      // review).
+      canvasSizeObserver: null,
+      // The root block list that observer is watching.
+      canvasSizeTarget: null,
+      // The pending refit after a canvas change (a timer id, 0 for none).
+      // At most one is pending, so a canvas that changes all the time
+      // costs one refit per 220 ms, not one per frame.
+      canvasRefitTimer: 0,
+      // Content extent cache. The extent is re-measured only when marked
+      // dirty (open, store change, viewport resize) — the settle/zoom/pan
+      // paths reuse the cache, so no measurement can ever react to a
+      // growth it caused.
+      extent: 0,
+      extentDirty: true,
+      // In-flight box drag ({clientId, startX, startY, active, toIndex}).
+      // Drag-to-reorder is POINTER SUGAR over the same public move the
+      // arrows dispatch (owner ask 2026-08-27) — the keyboard path is the
+      // arrows, and nothing here is reachable only by dragging.
+      drag: null,
+      // The one-shot mouseup listener that arms the click latch
+      // (overviewDragConsumedClick) after Escape abandons a gesture (the
+      // button is still down at that point).
+      cancelLatchUp: null,
+      // The block that was selected when the overview opened — its
+      // floating toolbar stays alive over the zoomed canvas otherwise
+      // (owner feedback 2026-08-27), so the selection is cleared for the
+      // overview's lifetime and put back on close.
+      priorSelection: '',
+      // The block the author last PICKED, MOVED or DRILLED INTO during
+      // this overview session (R11, issue #20). On close, this — not the
+      // entry scroll — is where the author's attention is: the canvas
+      // centers and selects it. '' means the author touched nothing, and
+      // close falls back to the entry scroll + prior selection. Set by
+      // selectOverviewBox, moveOverviewBlockTo (a verified move only) and
+      // drillTo; cleared only on open/close — deselecting a box on the
+      // way out must not forget it.
+      lastTouched: ''
+    };
+  }
+
+  // The open overview's state (see newOverviewState).
+  var ov = newOverviewState();
+
+  // The values below stay OUTSIDE `ov`: each belongs to a frame or timer
+  // that closeOverview does not cancel, so it can still run after the
+  // close has replaced `ov`.
+  //
   // One box reposition per frame, however many mutation batches arrive.
+  // The frame that clears it is never canceled; a fresh `ov` would drop
+  // the flag while that frame is still pending.
   var overviewCanvasSettlePending = false;
-  // The pending refit after a canvas change (a timer id, 0 for none). At
-  // most one is pending, so a canvas that changes all the time costs one
-  // refit per 220 ms, not one per frame.
-  var overviewCanvasRefitTimer = 0;
-  // In-flight box drag ({clientId, startX, startY, active, toIndex}).
-  // Drag-to-reorder is POINTER SUGAR over the same public move the
-  // arrows dispatch (owner ask 2026-08-27) — the keyboard path is the
-  // arrows, and nothing here is reachable only by dragging.
-  var overviewDrag = null;
   // Latched for one tick after a completed drag so the click the
   // browser fires on the same button cannot ALSO toggle its controls.
+  // The timer that clears it is never canceled.
   var overviewDragConsumedClick = false;
-  // The one-shot mouseup listener that arms that latch after Escape
-  // abandons a gesture (the button is still down at that point).
-  var overviewCancelLatchUp = null;
-  // The block that was selected when the overview opened — its floating
-  // toolbar stays alive over the zoomed canvas otherwise (owner
-  // feedback 2026-08-27), so the selection is cleared for the
-  // overview's lifetime and put back on close.
-  var overviewPriorSelection = '';
-  // The block the author last PICKED, MOVED or DRILLED INTO during this
-  // overview session (R11, issue #20). On close, this — not the entry
-  // scroll — is where the author's attention is: the canvas centers and
-  // selects it. '' means the author touched nothing, and close falls
-  // back to the entry scroll + prior selection. Set by selectOverviewBox,
-  // moveOverviewBlockTo (a verified move only) and drillTo; cleared only
-  // on open/close — deselecting a box on the way out must not forget it.
-  var overviewLastTouched = '';
   // The close-centering re-apply (rAF id): one frame behind the close's
   // synchronous pre-scroll, belt for chrome that lands with the render.
   // It outlives closeOverview on purpose; reopening cancels it so it
@@ -7180,7 +7231,7 @@ var DASHICON_NAMES = [
   /** clientIds at the current root, in document order. */
   function overviewOrder() {
     var sel = wp.data.select('core/block-editor');
-    return sel ? sel.getBlockOrder(overviewRoot) : [];
+    return sel ? sel.getBlockOrder(ov.root) : [];
   }
 
   /**
@@ -7192,7 +7243,7 @@ var DASHICON_NAMES = [
    * @return {string} The signature.
    */
   function overviewCurrentSignature() {
-    return overviewRoot + '|' + overviewOrder().join(',');
+    return ov.root + '|' + overviewOrder().join(',');
   }
 
   /**
@@ -7220,13 +7271,6 @@ var DASHICON_NAMES = [
     }
     return { left: r.left, top: r.top, width: r.width, height: r.height };
   }
-
-  // Content extent cache. The extent is re-measured only when marked
-  // dirty (open, store change, viewport resize) — the settle/zoom/pan
-  // paths reuse the cache, so no measurement can ever react to a growth
-  // it caused.
-  var overviewExtent = 0;
-  var overviewExtentDirty = true;
 
   /**
    * The document's CONTENT height: the bottom edge of the lowest
@@ -7318,21 +7362,21 @@ var DASHICON_NAMES = [
       host.classList.add('toolrail-ov-scale-host');
     }
 
-    if (overviewExtentDirty) {
+    if (ov.extentDirty) {
       var measured = measureOverviewExtent(doc);
       if (measured > 0) {
-        overviewExtent = measured;
-        overviewExtentDirty = false;
+        ov.extent = measured;
+        ov.extentDirty = false;
       }
     }
-    if (overviewExtent <= 0) {
+    if (ov.extent <= 0) {
       // Nothing measurable yet (blocks not mounted after a heal, or an
       // emptied canvas): leave NO stale scale/height/translate applied
       // (review 2026-08-27, finding 3) — the next dirty pass refits.
       clearOverviewScale();
       return;
     }
-    var docHeight = Math.ceil(overviewExtent) + 32;
+    var docHeight = Math.ceil(ov.extent) + 32;
     var fitHeight = docHeight;
     // The iframe is sized to the CONTENT extent so a long document can
     // render whole -- but a SHORT document's extent is less than the
@@ -7345,8 +7389,8 @@ var DASHICON_NAMES = [
     var canvasArea = Math.max(0, content.clientHeight - overviewCanvasTop());
     var frameHeight = Math.max(docHeight, canvasArea);
     var rootTop = 0;
-    if (overviewRoot) {
-      var rootEl = doc.querySelector('[data-block="' + String(overviewRoot).replace(/"/g, '') + '"]');
+    if (ov.root) {
+      var rootEl = doc.querySelector('[data-block="' + String(ov.root).replace(/"/g, '') + '"]');
       if (rootEl && rootEl.offsetHeight) {
         fitHeight = rootEl.offsetHeight;
         // The grown iframe cannot scroll internally, so the rect IS the
@@ -7367,7 +7411,7 @@ var DASHICON_NAMES = [
     // reachable by PANNING (wheel, or focusing a box), not by shrinking
     // further. Manual −/+ zoom may still go below this.
     var viewport = overviewViewportHeight();
-    var k = overviewUserScale;
+    var k = ov.userScale;
     if (!k) {
       var heights = [];
       overviewOrder().forEach(function (id) {
@@ -7395,11 +7439,11 @@ var DASHICON_NAMES = [
     // its own". A root taller than the viewport stays top-aligned and
     // pans instead; the two never combine.
     var maxPan = Math.max(0, fitHeight * k - viewport);
-    var centerOffset = overviewRoot && maxPan === 0
+    var centerOffset = ov.root && maxPan === 0
       ? Math.max(0, (viewport - fitHeight * k) / 2)
       : 0;
-    overviewMetrics = { k: k, rootTop: rootTop, fitHeight: fitHeight, centerOffset: centerOffset };
-    overviewPan = Math.min(Math.max(0, overviewPan), maxPan);
+    ov.metrics = { k: k, rootTop: rootTop, fitHeight: fitHeight, centerOffset: centerOffset };
+    ov.pan = Math.min(Math.max(0, ov.pan), maxPan);
 
     var style = document.body.style;
     style.setProperty('--toolrail-overview-scale', String(k));
@@ -7407,7 +7451,7 @@ var DASHICON_NAMES = [
     // Keeps the scale-container's layout footprint at the VISUAL size,
     // for any build whose wrappers do size from their children.
     style.setProperty('--toolrail-ov-mb', (-(1 - k) * frameHeight) + 'px');
-    style.setProperty('--toolrail-ov-ty', (-(rootTop * k + overviewPan) + centerOffset) + 'px');
+    style.setProperty('--toolrail-ov-ty', (-(rootTop * k + ov.pan) + centerOffset) + 'px');
     updateOverviewZoomLabel();
   }
 
@@ -7416,23 +7460,23 @@ var DASHICON_NAMES = [
       wheel burst costs one layout pass per frame, not per event. */
   function setOverviewPan(next) {
     var viewport = overviewViewportHeight();
-    var maxPan = Math.max(0, overviewMetrics.fitHeight * overviewMetrics.k - viewport);
+    var maxPan = Math.max(0, ov.metrics.fitHeight * ov.metrics.k - viewport);
     // Centered means it fits — centering and panning NEVER combine.
     // Recomputing maxPan from live viewport while metrics are a beat
     // stale could otherwise allow both at once (review 2026-08-27,
     // finding 4); a centered view pins the pan at zero until the next
     // refit decides otherwise.
-    if (overviewMetrics.centerOffset) {
+    if (ov.metrics.centerOffset) {
       maxPan = 0;
     }
-    overviewPan = Math.min(Math.max(0, next), maxPan);
+    ov.pan = Math.min(Math.max(0, next), maxPan);
     document.body.style.setProperty(
       '--toolrail-ov-ty',
-      (-(overviewMetrics.rootTop * overviewMetrics.k + overviewPan) + (overviewMetrics.centerOffset || 0)) + 'px'
+      (-(ov.metrics.rootTop * ov.metrics.k + ov.pan) + (ov.metrics.centerOffset || 0)) + 'px'
     );
-    if (!overviewPanFrame) {
-      overviewPanFrame = window.requestAnimationFrame(function () {
-        overviewPanFrame = null;
+    if (!ov.panFrame) {
+      ov.panFrame = window.requestAnimationFrame(function () {
+        ov.panFrame = null;
         positionOverviewBoxes();
       });
     }
@@ -7454,14 +7498,14 @@ var DASHICON_NAMES = [
    * @return {void}
    */
   function setOverviewZoom(nextK, announceIt) {
-    overviewUserScale = Math.min(1, Math.max(OVERVIEW_MIN_SCALE, nextK));
+    ov.userScale = Math.min(1, Math.max(OVERVIEW_MIN_SCALE, nextK));
     applyOverviewScale();
     positionOverviewBoxes();
     if (announceIt) {
       speak(sprintf(
         /* translators: %d: zoom percentage. */
         __('Zoom %d%%.', 'editrail'),
-        Math.round(overviewMetrics.k * 100)
+        Math.round(ov.metrics.k * 100)
       ));
     }
   }
@@ -7478,7 +7522,7 @@ var DASHICON_NAMES = [
    */
   function updateOverviewZoomLabel() {
     var label = document.querySelector('#toolrail-overview .toolrail-ov-zoomlabel');
-    var text = Math.round(overviewMetrics.k * 100) + '%';
+    var text = Math.round(ov.metrics.k * 100) + '%';
     if (label && label.textContent !== text) {
       label.textContent = text;
     }
@@ -7700,7 +7744,7 @@ var DASHICON_NAMES = [
     if (!veils.length) {
       return;
     }
-    var rect = overviewRoot ? overviewBlockViewportRect(overviewRoot) : null;
+    var rect = ov.root ? overviewBlockViewportRect(ov.root) : null;
     if (!rect) {
       veils.forEach(function (v) {
         v.style.display = 'none';
@@ -7770,8 +7814,8 @@ var DASHICON_NAMES = [
     }
     Array.prototype.slice.call(overlay.querySelectorAll('.toolrail-ov-box')).forEach(function (box) {
       var id = box.dataset.clientid;
-      var isActive = id === overviewSelected;
-      var isMember = overviewSelectedIds.indexOf(id) !== -1;
+      var isActive = id === ov.selected;
+      var isMember = ov.selectedIds.indexOf(id) !== -1;
       box.classList.toggle('is-selected', isActive || isMember);
       // The box holding the visible strip must paint above the other
       // selected members — see .toolrail-ov-box.is-active in the CSS.
@@ -7781,7 +7825,7 @@ var DASHICON_NAMES = [
         pick.setAttribute('aria-expanded', isActive ? 'true' : 'false');
         var base = pick.dataset.baseLabel;
         if (base) {
-          pick.setAttribute('aria-label', isMember && overviewSelectedIds.length > 1
+          pick.setAttribute('aria-label', isMember && ov.selectedIds.length > 1
             ? sprintf(
               /* translators: %s: the pick button's base accessible name. */
               __('%s — selected', 'editrail'),
@@ -7804,12 +7848,12 @@ var DASHICON_NAMES = [
       one. The controls are a DISCLOSURE on the box's pick button —
       the outline stays clean until the author asks. */
   function selectOverviewBox(clientId) {
-    overviewSelected = clientId;
+    ov.selected = clientId;
     // A plain pick collapses any multi-selection to this one box and
     // re-anchors the Shift range here (the file-manager convention).
-    overviewSelectedIds = [clientId];
-    overviewAnchor = clientId;
-    overviewLastTouched = clientId;
+    ov.selectedIds = [clientId];
+    ov.anchor = clientId;
+    ov.lastTouched = clientId;
     // REBUILD, not just repaint: the controls strip's content (label,
     // arrow wiring, disabled states) is baked per build and varies
     // with the selection — a strip built in group mode must not
@@ -7834,11 +7878,11 @@ var DASHICON_NAMES = [
    * @return {void}
    */
   function deselectOverviewBox(refocusPick) {
-    if (!overviewSelected) {
+    if (!ov.selected) {
       return;
     }
-    var id = overviewSelected;
-    overviewSelected = '';
+    var id = ov.selected;
+    ov.selected = '';
     // Rebuild for the same reason selectOverviewBox does: the strip's
     // baked content must track the selection. Without refocusPick the
     // rebuild re-derives focus from wherever it is (or leaves it).
@@ -7850,7 +7894,7 @@ var DASHICON_NAMES = [
   /** The multi-selection's members in document order. */
   function overviewSelectionInOrder() {
     return overviewOrder().filter(function (id) {
-      return overviewSelectedIds.indexOf(id) !== -1;
+      return ov.selectedIds.indexOf(id) !== -1;
     });
   }
 
@@ -7861,7 +7905,7 @@ var DASHICON_NAMES = [
     var sel = wp.data.select('core/block-editor');
     if (sel && typeof sel.canMoveBlocks === 'function') {
       try {
-        return !!sel.canMoveBlocks([clientId], overviewRoot);
+        return !!sel.canMoveBlocks([clientId], ov.root);
       } catch (e) {
         return true;
       }
@@ -7877,15 +7921,15 @@ var DASHICON_NAMES = [
     ids.forEach(function (id) {
       members[id] = true;
     });
-    overviewSelectedIds = overviewOrder().filter(function (id) {
+    ov.selectedIds = overviewOrder().filter(function (id) {
       return members[id];
     });
     if (activeId !== undefined) {
-      overviewSelected = activeId || '';
+      ov.selected = activeId || '';
     }
-    if (overviewSelected && overviewSelectedIds.length
-        && overviewSelectedIds.indexOf(overviewSelected) === -1) {
-      overviewSelected = overviewSelectedIds[0];
+    if (ov.selected && ov.selectedIds.length
+        && ov.selectedIds.indexOf(ov.selected) === -1) {
+      ov.selected = ov.selectedIds[0];
     }
     syncOverviewSelection();
   }
@@ -7904,7 +7948,7 @@ var DASHICON_NAMES = [
       a = b;
       fromId = toId;
     }
-    overviewAnchor = fromId;
+    ov.anchor = fromId;
     setOverviewSelection(order.slice(Math.min(a, b), Math.max(a, b) + 1), toId);
   }
 
@@ -7917,18 +7961,18 @@ var DASHICON_NAMES = [
    * @return {void}
    */
   function toggleOverviewSelectionId(clientId) {
-    if (overviewSelectedIds.indexOf(clientId) !== -1) {
+    if (ov.selectedIds.indexOf(clientId) !== -1) {
       removeOverviewSelectionId(clientId);
       return;
     }
-    var ids = overviewSelectedIds.slice();
+    var ids = ov.selectedIds.slice();
     // Toggling onto a lone picked box ADDS to it — the pick was a
     // selection of one, and Ctrl+click means "and this one too".
-    if (!ids.length && overviewSelected && overviewSelected !== clientId) {
-      ids.push(overviewSelected);
+    if (!ids.length && ov.selected && ov.selected !== clientId) {
+      ids.push(ov.selected);
     }
     ids.push(clientId);
-    overviewAnchor = clientId;
+    ov.anchor = clientId;
     setOverviewSelection(ids, clientId);
   }
 
@@ -7936,11 +7980,11 @@ var DASHICON_NAMES = [
       was the active box, the disclosure moves to the nearest remaining
       member — by document distance — or closes when none remain. */
   function removeOverviewSelectionId(clientId) {
-    var ids = overviewSelectedIds.filter(function (id) {
+    var ids = ov.selectedIds.filter(function (id) {
       return id !== clientId;
     });
     var nextActive;
-    if (overviewSelected === clientId) {
+    if (ov.selected === clientId) {
       nextActive = '';
       var order = overviewOrder();
       var from = order.indexOf(clientId);
@@ -7961,8 +8005,8 @@ var DASHICON_NAMES = [
    * is left alone — clearing a group does not close the disclosure.
    */
   function clearOverviewMultiSelection() {
-    overviewSelectedIds = [];
-    overviewAnchor = '';
+    ov.selectedIds = [];
+    ov.anchor = '';
     syncOverviewSelection();
   }
 
@@ -7971,12 +8015,12 @@ var DASHICON_NAMES = [
       user learns before asking for a move, not after (the move engine
       repeats it as its "stays where it is" suffix). */
   function announceOverviewSelection() {
-    var n = overviewSelectedIds.length;
+    var n = ov.selectedIds.length;
     if (!n) {
       speak(__('Selection cleared.', 'editrail'));
       return;
     }
-    var lockedCount = overviewSelectedIds.filter(function (id) {
+    var lockedCount = ov.selectedIds.filter(function (id) {
       return !overviewCanMove(id);
     }).length;
     var message = sprintf(
@@ -8005,11 +8049,11 @@ var DASHICON_NAMES = [
   // -------------------------------------------------------------------
 
   function startOverviewDrag(e, clientId) {
-    if (e.button !== 0 || overviewDrag) {
+    if (e.button !== 0 || ov.drag) {
       return;
     }
     var groupIds = null;
-    if (overviewSelectedIds.length > 1 && overviewSelectedIds.indexOf(clientId) !== -1) {
+    if (ov.selectedIds.length > 1 && ov.selectedIds.indexOf(clientId) !== -1) {
       // Dragging any member drags the whole selection. The FULL
       // ordered selection goes to the move engine — locked members
       // included — because the engine is what excludes them AND what
@@ -8028,7 +8072,7 @@ var DASHICON_NAMES = [
     } else if (!overviewCanMove(clientId)) {
       return;
     }
-    overviewDrag = { clientId: clientId, ids: groupIds, startX: e.clientX, startY: e.clientY, active: false, toIndex: -1, gap: -1 };
+    ov.drag = { clientId: clientId, ids: groupIds, startX: e.clientX, startY: e.clientY, active: false, toIndex: -1, gap: -1 };
     document.addEventListener('mousemove', onOverviewDragMove, true);
     document.addEventListener('mouseup', onOverviewDragEnd, true);
   }
@@ -8043,17 +8087,17 @@ var DASHICON_NAMES = [
    * @return {void}
    */
   function onOverviewDragMove(e) {
-    if (!overviewDrag) {
+    if (!ov.drag) {
       return;
     }
-    if (!overviewDrag.active) {
-      if (Math.abs(e.clientX - overviewDrag.startX) < 5 && Math.abs(e.clientY - overviewDrag.startY) < 5) {
+    if (!ov.drag.active) {
+      if (Math.abs(e.clientX - ov.drag.startX) < 5 && Math.abs(e.clientY - ov.drag.startY) < 5) {
         return;
       }
-      overviewDrag.active = true;
+      ov.drag.active = true;
       document.body.classList.add('toolrail-ov-dragging');
       // A group drag dims EVERY box it will move.
-      (overviewDrag.ids || [overviewDrag.clientId]).forEach(function (id) {
+      (ov.drag.ids || [ov.drag.clientId]).forEach(function (id) {
         var box = overviewBoxFor(id);
         if (box) {
           box.classList.add('is-dragging');
@@ -8097,11 +8141,11 @@ var DASHICON_NAMES = [
       so plain stacks behave exactly as they always did. */
   function updateOverviewDropline(clientX, clientY) {
     var overlay = overviewNode();
-    if (!overlay || !overviewDrag) {
+    if (!overlay || !ov.drag) {
       return;
     }
     var order = overviewOrder();
-    var idx = order.indexOf(overviewDrag.clientId);
+    var idx = order.indexOf(ov.drag.clientId);
     var rtl = overviewIsRtl();
 
     // Visible boxes in document order, each with its order index —
@@ -8123,7 +8167,7 @@ var DASHICON_NAMES = [
       overlay.appendChild(line);
     }
     if (!entries.length) {
-      overviewDrag.toIndex = 0;
+      ov.drag.toIndex = 0;
       line.style.display = 'none';
       return;
     }
@@ -8212,8 +8256,8 @@ var DASHICON_NAMES = [
     // The RAW insertion gap (0..n in the current order) — the group
     // move engine does its own moving-members adjustment; the single
     // path keeps the original already-adjusted index below.
-    overviewDrag.gap = insertIndex;
-    overviewDrag.toIndex = insertIndex > idx ? insertIndex - 1 : insertIndex;
+    ov.drag.gap = insertIndex;
+    ov.drag.toIndex = insertIndex > idx ? insertIndex - 1 : insertIndex;
 
     if (row && row.entries.length > 1) {
       // Vertical line at the gap: the leading edge of the box the
@@ -8268,7 +8312,7 @@ var DASHICON_NAMES = [
    */
   function latchOverviewCancelClick() {
     clearOverviewCancelLatch();
-    overviewCancelLatchUp = function (e) {
+    ov.cancelLatchUp = function (e) {
       clearOverviewCancelLatch();
       // A fresh PRESS means the release this was waiting for happened
       // somewhere unobservable — outside the document, or the pointer
@@ -8289,8 +8333,8 @@ var DASHICON_NAMES = [
         overviewDragConsumedClick = false;
       }, 0);
     };
-    document.addEventListener('mouseup', overviewCancelLatchUp, true);
-    document.addEventListener('mousedown', overviewCancelLatchUp, true);
+    document.addEventListener('mouseup', ov.cancelLatchUp, true);
+    document.addEventListener('mousedown', ov.cancelLatchUp, true);
   }
 
   /**
@@ -8299,10 +8343,10 @@ var DASHICON_NAMES = [
    * the next real click.
    */
   function clearOverviewCancelLatch() {
-    if (overviewCancelLatchUp) {
-      document.removeEventListener('mouseup', overviewCancelLatchUp, true);
-      document.removeEventListener('mousedown', overviewCancelLatchUp, true);
-      overviewCancelLatchUp = null;
+    if (ov.cancelLatchUp) {
+      document.removeEventListener('mouseup', ov.cancelLatchUp, true);
+      document.removeEventListener('mousedown', ov.cancelLatchUp, true);
+      ov.cancelLatchUp = null;
     }
   }
 
@@ -8312,7 +8356,7 @@ var DASHICON_NAMES = [
    * canceled paths, so neither can leave half of it behind.
    */
   function finishOverviewDrag() {
-    if (!overviewDrag) {
+    if (!ov.drag) {
       return;
     }
     var line = document.querySelector('#toolrail-overview .toolrail-ov-dropline');
@@ -8326,7 +8370,7 @@ var DASHICON_NAMES = [
       });
     document.removeEventListener('mousemove', onOverviewDragMove, true);
     document.removeEventListener('mouseup', onOverviewDragEnd, true);
-    overviewDrag = null;
+    ov.drag = null;
   }
 
   /**
@@ -8340,14 +8384,14 @@ var DASHICON_NAMES = [
    * @return {void}
    */
   function onOverviewDragEnd(e) {
-    if (!overviewDrag) {
+    if (!ov.drag) {
       return;
     }
-    var wasActive = overviewDrag.active;
-    var clientId = overviewDrag.clientId;
-    var to = overviewDrag.toIndex;
-    var gap = overviewDrag.gap;
-    var groupIds = overviewDrag.ids;
+    var wasActive = ov.drag.active;
+    var clientId = ov.drag.clientId;
+    var to = ov.drag.toIndex;
+    var gap = ov.drag.gap;
+    var groupIds = ov.drag.ids;
     finishOverviewDrag();
     if (!wasActive) {
       // A plain click — let the disclosure toggle proceed.
@@ -8441,13 +8485,13 @@ var DASHICON_NAMES = [
         }
       });
     }
-    if (!overviewCanvasRefitTimer) {
-      overviewCanvasRefitTimer = window.setTimeout(function () {
-        overviewCanvasRefitTimer = 0;
+    if (!ov.canvasRefitTimer) {
+      ov.canvasRefitTimer = window.setTimeout(function () {
+        ov.canvasRefitTimer = 0;
         if (!overviewOpen) {
           return;
         }
-        overviewExtentDirty = true;
+        ov.extentDirty = true;
         applyOverviewScale();
         positionOverviewBoxes();
       }, 220);
@@ -8456,14 +8500,14 @@ var DASHICON_NAMES = [
 
   /** Point the size observer at the current root block list, if it moved. */
   function watchOverviewCanvasRoot() {
-    if (!overviewCanvasSizeObserver || !overviewCanvasTarget) {
+    if (!ov.canvasSizeObserver || !ov.canvasTarget) {
       return;
     }
-    var root = overviewCanvasTarget.querySelector('.is-root-container');
-    if (root && root !== overviewCanvasSizeTarget) {
-      overviewCanvasSizeObserver.disconnect();
-      overviewCanvasSizeObserver.observe(root);
-      overviewCanvasSizeTarget = root;
+    var root = ov.canvasTarget.querySelector('.is-root-container');
+    if (root && root !== ov.canvasSizeTarget) {
+      ov.canvasSizeObserver.disconnect();
+      ov.canvasSizeObserver.observe(root);
+      ov.canvasSizeTarget = root;
     }
   }
 
@@ -8492,24 +8536,24 @@ var DASHICON_NAMES = [
     if (!doc || doc === document || !doc.body) {
       return false;
     }
-    if (doc.body === overviewCanvasTarget) {
+    if (doc.body === ov.canvasTarget) {
       return false;
     }
-    if (!overviewCanvasObserver) {
-      overviewCanvasObserver = new window.MutationObserver(onOverviewCanvasChange);
+    if (!ov.canvasObserver) {
+      ov.canvasObserver = new window.MutationObserver(onOverviewCanvasChange);
     }
-    overviewCanvasObserver.disconnect();
-    overviewCanvasObserver.observe(doc.body, {
+    ov.canvasObserver.disconnect();
+    ov.canvasObserver.observe(doc.body, {
       childList: true,
       subtree: true,
       attributes: true,
       attributeFilter: ['style']
     });
-    overviewCanvasTarget = doc.body;
-    if (!overviewCanvasSizeObserver && typeof window.ResizeObserver === 'function') {
-      overviewCanvasSizeObserver = new window.ResizeObserver(onOverviewCanvasChange);
+    ov.canvasTarget = doc.body;
+    if (!ov.canvasSizeObserver && typeof window.ResizeObserver === 'function') {
+      ov.canvasSizeObserver = new window.ResizeObserver(onOverviewCanvasChange);
     }
-    overviewCanvasSizeTarget = null;
+    ov.canvasSizeTarget = null;
     watchOverviewCanvasRoot();
     return true;
   }
@@ -8564,7 +8608,7 @@ var DASHICON_NAMES = [
     crumbs.setAttribute('aria-label', __('Overview level', 'editrail'));
 
     var chain = [];
-    var id = overviewRoot;
+    var id = ov.root;
     while (id) {
       chain.unshift(id);
       id = (sel && sel.getBlockRootClientId(id)) || '';
@@ -8600,14 +8644,14 @@ var DASHICON_NAMES = [
     });
     bar.appendChild(crumbs);
 
-    if (overviewRoot) {
+    if (ov.root) {
       var up = document.createElement('button');
       up.type = 'button';
       up.className = 'toolrail-ov-btn toolrail-ov-uplevel';
       up.dataset.ovAction = 'up-level';
       up.textContent = __('Up one level', 'editrail');
       up.addEventListener('click', function () {
-        drillTo((sel && sel.getBlockRootClientId(overviewRoot)) || '');
+        drillTo((sel && sel.getBlockRootClientId(ov.root)) || '');
       });
       bar.appendChild(up);
     }
@@ -8622,13 +8666,13 @@ var DASHICON_NAMES = [
     zoomOut.textContent = '−';
     zoomOut.setAttribute('aria-label', __('Zoom out', 'editrail'));
     zoomOut.addEventListener('click', function () {
-      setOverviewZoom(overviewMetrics.k / 1.25, true);
+      setOverviewZoom(ov.metrics.k / 1.25, true);
     });
     bar.appendChild(zoomOut);
 
     var zoomLabel = settingsRow('span', 'toolrail-ov-zoomlabel');
     zoomLabel.setAttribute('aria-hidden', 'true');
-    zoomLabel.textContent = Math.round(overviewMetrics.k * 100) + '%';
+    zoomLabel.textContent = Math.round(ov.metrics.k * 100) + '%';
     bar.appendChild(zoomLabel);
 
     var zoomIn = document.createElement('button');
@@ -8638,7 +8682,7 @@ var DASHICON_NAMES = [
     zoomIn.textContent = '+';
     zoomIn.setAttribute('aria-label', __('Zoom in', 'editrail'));
     zoomIn.addEventListener('click', function () {
-      setOverviewZoom(overviewMetrics.k * 1.25, true);
+      setOverviewZoom(ov.metrics.k * 1.25, true);
     });
     bar.appendChild(zoomIn);
 
@@ -8673,24 +8717,24 @@ var DASHICON_NAMES = [
       empty.textContent = __('Nothing to reorder here.', 'editrail');
       bar.appendChild(empty);
     }
-    if (overviewSelected && order.indexOf(overviewSelected) === -1) {
-      overviewSelected = '';
+    if (ov.selected && order.indexOf(ov.selected) === -1) {
+      ov.selected = '';
     }
     // Prune the multi-selection too — members can vanish between
     // rebuilds (deleted blocks, a root change) — and keep the
     // active-box invariant (the active box, when a multi-selection
     // exists, is one of its members).
-    if (overviewSelectedIds.length) {
-      if (overviewSelected && overviewSelectedIds.indexOf(overviewSelected) === -1) {
-        overviewSelectedIds.push(overviewSelected);
+    if (ov.selectedIds.length) {
+      if (ov.selected && ov.selectedIds.indexOf(ov.selected) === -1) {
+        ov.selectedIds.push(ov.selected);
       }
       // eslint-disable-next-line no-shadow -- the outer `id` is the breadcrumb loop's scratch value, finished before this line.
-      overviewSelectedIds = order.filter(function (id) {
-        return overviewSelectedIds.indexOf(id) !== -1;
+      ov.selectedIds = order.filter(function (id) {
+        return ov.selectedIds.indexOf(id) !== -1;
       });
     }
-    if (overviewAnchor && order.indexOf(overviewAnchor) === -1) {
-      overviewAnchor = '';
+    if (ov.anchor && order.indexOf(ov.anchor) === -1) {
+      ov.anchor = '';
     }
 
     // Drilled in, everything OUTSIDE the root gets a 50% veil (owner
@@ -8699,7 +8743,7 @@ var DASHICON_NAMES = [
     // overlay chrome — the canvas document is untouched, and removing
     // the overlay removes the veil. Appended BEFORE the boxes so DOM
     // order stacks the boxes above it; the bar carries its own z-index.
-    if (overviewRoot) {
+    if (ov.root) {
       ['top', 'bottom', 'left', 'right'].forEach(function (side) {
         var veil = settingsRow('div', 'toolrail-ov-veil');
         veil.dataset.veil = side;
@@ -8712,9 +8756,9 @@ var DASHICON_NAMES = [
     list.className = 'toolrail-ov-list';
     order.forEach(function (clientId, i) {
       var label = overviewBlockLabel(clientId);
-      var isActive = clientId === overviewSelected;
-      var isMember = overviewSelectedIds.indexOf(clientId) !== -1;
-      var groupSize = overviewSelectedIds.length;
+      var isActive = clientId === ov.selected;
+      var isMember = ov.selectedIds.indexOf(clientId) !== -1;
+      var groupSize = ov.selectedIds.length;
       // Group mode: the active member's controls strip acts on the
       // whole selection (issue #21).
       var groupActive = isActive && isMember && groupSize > 1;
@@ -8771,8 +8815,8 @@ var DASHICON_NAMES = [
         // never run the plain disclosure toggle. Cmd is first-class:
         // macOS gives Ctrl+click to the context menu.
         if (e.shiftKey) {
-          overviewLastTouched = clientId;
-          setOverviewRange(overviewAnchor || overviewSelected || clientId, clientId);
+          ov.lastTouched = clientId;
+          setOverviewRange(ov.anchor || ov.selected || clientId, clientId);
           // Rebuild after every selection gesture: the active strip's
           // content is baked per build (focus re-derives to this pick).
           buildOverviewContent();
@@ -8780,7 +8824,7 @@ var DASHICON_NAMES = [
           return;
         }
         if (e.ctrlKey || e.metaKey) {
-          overviewLastTouched = clientId;
+          ov.lastTouched = clientId;
           toggleOverviewSelectionId(clientId);
           buildOverviewContent();
           announceOverviewSelection();
@@ -8792,7 +8836,7 @@ var DASHICON_NAMES = [
           announceOverviewSelection();
           return;
         }
-        if (overviewSelected === clientId) {
+        if (ov.selected === clientId) {
           clearOverviewMultiSelection();
           deselectOverviewBox(true);
         } else {
@@ -9036,7 +9080,7 @@ var DASHICON_NAMES = [
     if (idx === -1 || to < 0 || to >= order.length || to === idx) {
       return;
     }
-    wp.data.dispatch('core/block-editor').moveBlocksToPosition([clientId], overviewRoot, overviewRoot, to);
+    wp.data.dispatch('core/block-editor').moveBlocksToPosition([clientId], ov.root, ov.root, to);
 
     // VERIFY before announcing: core's action has its own canMoveBlocks
     // guard and returns early — silently — for a locked block. The
@@ -9051,13 +9095,13 @@ var DASHICON_NAMES = [
       ));
       return;
     }
-    overviewSignature = overviewCurrentSignature();
+    ov.signature = overviewCurrentSignature();
     // Only a move that VERIFIED counts as touched — a refused move must
     // not make close center a block the author never actually moved.
-    overviewLastTouched = clientId;
+    ov.lastTouched = clientId;
 
     if (focusAction) {
-      overviewSelected = clientId;
+      ov.selected = clientId;
       var boxSel = '.toolrail-ov-box[data-clientid="' + clientId + '"] ';
       buildOverviewContent([
         boxSel + '[data-ov-action="' + focusAction + '"]',
@@ -9135,7 +9179,7 @@ var DASHICON_NAMES = [
    *
    * Locked members are EXCLUDED and stay where they are — the issue's
    * contract — and the one composed announcement says so. The store
-   * subscription is fenced off for the sequence (overviewGroupMove);
+   * subscription is fenced off for the sequence (ov.groupMove);
    * the final order is VERIFIED before any success is announced.
    *
    * @param {string[]}    ids         Selection members (any order).
@@ -9232,7 +9276,7 @@ var DASHICON_NAMES = [
     }
 
     var dispatcher = wp.data.dispatch('core/block-editor');
-    overviewGroupMove = true;
+    ov.groupMove = true;
     try {
       // COMPACT: fold run 2 up against run 1 until one run remains.
       // Folding a LATER run never shifts the first run's indices, and
@@ -9244,7 +9288,7 @@ var DASHICON_NAMES = [
       var guard = runs.length + 1;
       while (runs.length > 1 && guard-- > 0) {
         dispatcher.moveBlocksToPosition(
-          runs[1].ids, overviewRoot, overviewRoot,
+          runs[1].ids, ov.root, ov.root,
           runs[0].start + runs[0].ids.length
         );
         var next = overviewContiguousRuns(movable);
@@ -9257,10 +9301,10 @@ var DASHICON_NAMES = [
       // start. Skipped if compaction broke out — the verify announces
       // the honest result either way.
       if (runs.length === 1) {
-        dispatcher.moveBlocksToPosition(movable, overviewRoot, overviewRoot, insertAt);
+        dispatcher.moveBlocksToPosition(movable, ov.root, ov.root, insertAt);
       }
     } finally {
-      overviewGroupMove = false;
+      ov.groupMove = false;
     }
 
     // VERIFY before announcing — the moveOverviewBlockTo discipline:
@@ -9270,17 +9314,17 @@ var DASHICON_NAMES = [
     var ok = movable.every(function (id, at) {
       return finalOrder[insertAt + at] === id;
     });
-    overviewSignature = overviewCurrentSignature();
+    ov.signature = overviewCurrentSignature();
     if (ok) {
-      overviewLastTouched = overviewSelected && movable.indexOf(overviewSelected) !== -1
-        ? overviewSelected
+      ov.lastTouched = ov.selected && movable.indexOf(ov.selected) !== -1
+        ? ov.selected
         : movable[0];
     }
     if (focusAction) {
-      if (!overviewSelected || members.indexOf(overviewSelected) === -1) {
-        overviewSelected = movable[0];
+      if (!ov.selected || members.indexOf(ov.selected) === -1) {
+        ov.selected = movable[0];
       }
-      var boxSel = '.toolrail-ov-box[data-clientid="' + overviewSelected + '"] ';
+      var boxSel = '.toolrail-ov-box[data-clientid="' + ov.selected + '"] ';
       buildOverviewContent([
         boxSel + '[data-ov-action="' + focusAction + '"]',
         boxSel + '[data-ov-action="' + (focusAction === 'up' ? 'down' : 'up') + '"]'
@@ -9360,15 +9404,15 @@ var DASHICON_NAMES = [
   // -------------------------------------------------------------------
 
   function startOverviewMarquee(e) {
-    overviewMarquee = {
+    ov.marquee = {
       startX: e.clientX,
       startY: e.clientY,
       active: false,
       // With a modifier held the marquee ADDS to the selection instead
       // of replacing it.
       additive: !!(e.ctrlKey || e.metaKey || e.shiftKey),
-      baseIds: overviewSelectedIds.slice(),
-      prevActive: overviewSelected
+      baseIds: ov.selectedIds.slice(),
+      prevActive: ov.selected
     };
     document.addEventListener('mousemove', onOverviewMarqueeMove, true);
     document.addEventListener('mouseup', onOverviewMarqueeEnd, true);
@@ -9378,11 +9422,11 @@ var DASHICON_NAMES = [
       back the way the mousedown found it; false lets the caller own
       what happens next. */
   function cancelOverviewMarquee(restore) {
-    if (!overviewMarquee) {
+    if (!ov.marquee) {
       return;
     }
-    var m = overviewMarquee;
-    overviewMarquee = null;
+    var m = ov.marquee;
+    ov.marquee = null;
     var rect = document.querySelector('#toolrail-overview .toolrail-ov-marquee');
     if (rect) {
       rect.remove();
@@ -9405,18 +9449,18 @@ var DASHICON_NAMES = [
    * @return {void}
    */
   function onOverviewMarqueeMove(e) {
-    if (!overviewMarquee) {
+    if (!ov.marquee) {
       return;
     }
-    if (!overviewMarquee.active) {
-      if (Math.abs(e.clientX - overviewMarquee.startX) < 5 && Math.abs(e.clientY - overviewMarquee.startY) < 5) {
+    if (!ov.marquee.active) {
+      if (Math.abs(e.clientX - ov.marquee.startX) < 5 && Math.abs(e.clientY - ov.marquee.startY) < 5) {
         return;
       }
-      overviewMarquee.active = true;
+      ov.marquee.active = true;
       // The rectangle replaces the disclosure: a marquee starts on
       // empty space, and empty-space presses have always collapsed the
       // open controls.
-      overviewSelected = '';
+      ov.selected = '';
     }
     e.preventDefault();
     var overlay = overviewNode();
@@ -9424,10 +9468,10 @@ var DASHICON_NAMES = [
       return;
     }
     var oRect = overlay.getBoundingClientRect();
-    var x1 = Math.min(Math.max(Math.min(e.clientX, overviewMarquee.startX), oRect.left), oRect.right);
-    var x2 = Math.min(Math.max(Math.max(e.clientX, overviewMarquee.startX), oRect.left), oRect.right);
-    var y1 = Math.min(Math.max(Math.min(e.clientY, overviewMarquee.startY), oRect.top), oRect.bottom);
-    var y2 = Math.min(Math.max(Math.max(e.clientY, overviewMarquee.startY), oRect.top), oRect.bottom);
+    var x1 = Math.min(Math.max(Math.min(e.clientX, ov.marquee.startX), oRect.left), oRect.right);
+    var x2 = Math.min(Math.max(Math.max(e.clientX, ov.marquee.startX), oRect.left), oRect.right);
+    var y1 = Math.min(Math.max(Math.min(e.clientY, ov.marquee.startY), oRect.top), oRect.bottom);
+    var y2 = Math.min(Math.max(Math.max(e.clientY, ov.marquee.startY), oRect.top), oRect.bottom);
     var rect = overlay.querySelector('.toolrail-ov-marquee');
     if (!rect) {
       rect = document.createElement('div');
@@ -9453,7 +9497,7 @@ var DASHICON_NAMES = [
         hits.push(box.dataset.clientid);
       }
     });
-    setOverviewSelection(overviewMarquee.additive ? overviewMarquee.baseIds.concat(hits) : hits, '');
+    setOverviewSelection(ov.marquee.additive ? ov.marquee.baseIds.concat(hits) : hits, '');
   }
 
   /**
@@ -9466,7 +9510,7 @@ var DASHICON_NAMES = [
    * @return {void}
    */
   function onOverviewMarqueeEnd(e) {
-    var m = overviewMarquee;
+    var m = ov.marquee;
     cancelOverviewMarquee(false);
     if (!m) {
       return;
@@ -9488,9 +9532,9 @@ var DASHICON_NAMES = [
     }, 0);
     var members = overviewSelectionInOrder();
     if (members.length) {
-      overviewSelected = members[0];
-      overviewAnchor = members[0];
-      overviewLastTouched = members[0];
+      ov.selected = members[0];
+      ov.anchor = members[0];
+      ov.lastTouched = members[0];
     }
     // Rebuild: the active member's strip becomes the group's strip.
     buildOverviewContent();
@@ -9511,31 +9555,31 @@ var DASHICON_NAMES = [
     // one at a time is how the fourth gets missed. "Reorder inside"
     // is the one door that refuses instead of announcing, because
     // "inside which of them?" has no answer (MR review 2026-09-01).
-    var hadGroup = overviewSelectedIds.length > 1;
-    overviewRoot = root || '';
+    var hadGroup = ov.selectedIds.length > 1;
+    ov.root = root || '';
     // Drilling INTO a section is touching it; climbing back to the top
     // level ('') is not — the last touched child stays the landing spot.
-    if (overviewRoot) {
-      overviewLastTouched = overviewRoot;
+    if (ov.root) {
+      ov.lastTouched = ov.root;
     }
     // Each level gets its own zoom, pan and selection.
-    overviewSelected = '';
-    overviewSelectedIds = [];
-    overviewAnchor = '';
-    overviewPan = 0;
-    overviewUserScale = 0;
-    overviewSignature = overviewCurrentSignature();
+    ov.selected = '';
+    ov.selectedIds = [];
+    ov.anchor = '';
+    ov.pan = 0;
+    ov.userScale = 0;
+    ov.signature = overviewCurrentSignature();
     applyOverviewScale();
     buildOverviewContent(OVERVIEW_FOCUS_CANDIDATES);
     scheduleOverviewSettle();
 
     var count = overviewOrder().length;
     var message;
-    if (overviewRoot) {
+    if (ov.root) {
       message = sprintf(
         /* translators: 1: block title, 2: number of blocks inside it. */
         _n('Viewing inside %1$s — %2$d block.', 'Viewing inside %1$s — %2$d blocks.', count, 'editrail'),
-        overviewBlockLabel(overviewRoot),
+        overviewBlockLabel(ov.root),
         count
       );
     } else {
@@ -9610,7 +9654,7 @@ var DASHICON_NAMES = [
     }
 
     if (e.key === 'Escape') {
-      if (!inOverlay && !overviewDrag && !overviewMarquee) {
+      if (!inOverlay && !ov.drag && !ov.marquee) {
         return;
       }
       e.preventDefault();
@@ -9635,12 +9679,12 @@ var DASHICON_NAMES = [
       // selection and drill level are view state. Climbing a level
       // keeps "Up one level" and the breadcrumbs; clearing a selection
       // without leaving is Enter on the active box.
-      if (overviewMarquee) {
+      if (ov.marquee) {
         // Abandon the rectangle; the selection goes back as found.
         cancelOverviewMarquee(true);
         latchOverviewCancelClick();
         speak(__('Selection rectangle canceled. Press Escape again to close the overview.', 'editrail'));
-      } else if (overviewDrag) {
+      } else if (ov.drag) {
         // Abandon an in-flight drag; nothing moves.
         finishOverviewDrag();
         latchOverviewCancelClick();
@@ -9670,7 +9714,7 @@ var DASHICON_NAMES = [
       // the toggle must not also flip the disclosure.
       e.preventDefault();
       e.stopPropagation();
-      overviewLastTouched = clientId;
+      ov.lastTouched = clientId;
       toggleOverviewSelectionId(clientId);
       // Rebuild (strip content tracks the selection), focus kept on
       // this same pick button.
@@ -9698,11 +9742,11 @@ var DASHICON_NAMES = [
       if (!neighbor) {
         return;
       }
-      if (!overviewAnchor || order.indexOf(overviewAnchor) === -1) {
-        overviewAnchor = clientId;
+      if (!ov.anchor || order.indexOf(ov.anchor) === -1) {
+        ov.anchor = clientId;
       }
-      setOverviewRange(overviewAnchor, neighbor);
-      overviewLastTouched = neighbor;
+      setOverviewRange(ov.anchor, neighbor);
+      ov.lastTouched = neighbor;
       // Rebuild (strip content tracks the selection) with focus on the
       // neighbor's pick — the focusin handler pans it into view free.
       buildOverviewContent(['.toolrail-ov-box[data-clientid="' + neighbor + '"] [data-ov-action="pick"]']);
@@ -9715,22 +9759,22 @@ var DASHICON_NAMES = [
       its content region (code-editor round trip) closes the overview
       cleanly rather than leaving a scaled ghost. */
   function onOverviewViewportChange() {
-    if (!overviewOpen || overviewRepositionTimer) {
+    if (!overviewOpen || ov.repositionTimer) {
       return;
     }
-    overviewRepositionTimer = window.setTimeout(function () {
-      overviewRepositionTimer = null;
+    ov.repositionTimer = window.setTimeout(function () {
+      ov.repositionTimer = null;
       if (!overviewOpen) {
         return;
       }
-      if (!contentRegion() || (overviewHadFrame && !canvasFrame())) {
+      if (!contentRegion() || (ov.hadFrame && !canvasFrame())) {
         closeOverview(false);
         return;
       }
       placeOverviewOverlay();
       // A viewport change can resize viewport-relative content — the
       // one legitimate reason to re-measure the extent.
-      overviewExtentDirty = true;
+      ov.extentDirty = true;
       applyOverviewScale();
       positionOverviewBoxes();
     }, 50);
@@ -9743,29 +9787,29 @@ var DASHICON_NAMES = [
     if (!overviewOpen) {
       return;
     }
-    if (overviewGroupMove) {
+    if (ov.groupMove) {
       // Mid-sequence dispatches from the group-move engine; it writes
       // the final signature and rebuilds once, after its verify.
       return;
     }
     var sel = wp.data.select('core/block-editor');
-    if (overviewRoot && sel && !sel.getBlock(overviewRoot)) {
+    if (ov.root && sel && !sel.getBlock(ov.root)) {
       // A forced root change is a root change like any other — announce
       // it (review 2026-08-27, finding 5), composed with the reason.
       drillTo('', __('The section you were viewing was removed.', 'editrail'));
       return;
     }
     var sig = overviewCurrentSignature();
-    if (sig === overviewSignature) {
+    if (sig === ov.signature) {
       return;
     }
-    overviewSignature = sig;
+    ov.signature = sig;
     // Refit as well as rebuild: content changes move the document
     // height the scale and pan clamp were computed from (review
     // 2026-08-27, finding 6 — the overlay now captures pointer events,
     // so canvas edits mid-overview are rare, but dispatches from other
     // code are not).
-    overviewExtentDirty = true;
+    ov.extentDirty = true;
     applyOverviewScale();
     buildOverviewContent();
     scheduleOverviewSettle();
@@ -9801,7 +9845,7 @@ var DASHICON_NAMES = [
       if (e.deltaMode === 1) {
         delta *= 16;
       }
-      setOverviewPan(overviewPan + delta);
+      setOverviewPan(ov.pan + delta);
     }, { passive: false });
 
     overlay.addEventListener('mousedown', function (e) {
@@ -9810,9 +9854,9 @@ var DASHICON_NAMES = [
         // the clear/collapse this always did now runs on the RELEASE
         // of a press that never crossed the threshold, so a plain
         // click behaves exactly as before.
-        if (e.button === 0 && !overviewDrag && !overviewMarquee) {
+        if (e.button === 0 && !ov.drag && !ov.marquee) {
           startOverviewMarquee(e);
-        } else if (!overviewMarquee) {
+        } else if (!ov.marquee) {
           clearOverviewMultiSelection();
           deselectOverviewBox(false);
         }
@@ -9829,9 +9873,9 @@ var DASHICON_NAMES = [
       var bar = overlay.querySelector('.toolrail-ov-bar');
       var topEdge = oRect.top + (bar ? bar.offsetHeight + 16 : 8);
       if (bRect.top < topEdge) {
-        setOverviewPan(overviewPan - (topEdge - bRect.top));
+        setOverviewPan(ov.pan - (topEdge - bRect.top));
       } else if (bRect.bottom > oRect.bottom - 8) {
-        setOverviewPan(overviewPan + Math.min(bRect.bottom - (oRect.bottom - 8), bRect.top - topEdge));
+        setOverviewPan(ov.pan + Math.min(bRect.bottom - (oRect.bottom - 8), bRect.top - topEdge));
       }
     });
 
@@ -9900,14 +9944,9 @@ var DASHICON_NAMES = [
     }
 
     overviewOpen = true;
-    overviewRoot = '';
-    overviewSelected = '';
-    overviewSelectedIds = [];
-    overviewAnchor = '';
-    overviewLastTouched = '';
-    overviewPan = 0;
-    overviewUserScale = 0;
-    overviewExtentDirty = true;
+    // Every per-open value starts from its start value: top level, no
+    // selection, no pan, the fitted zoom, a dirty extent.
+    ov = newOverviewState();
     // A close still winding down — its re-apply/corrective scrolls, the
     // fading overlay, the body's closing stamp — must not leak into a
     // fresh open: cancel the scroll writes (they would fight the
@@ -9942,21 +9981,21 @@ var DASHICON_NAMES = [
     var frame = canvasFrame();
     if (frame && frame.contentWindow) {
       try {
-        overviewEntryScroll = frame.contentWindow.scrollY || 0;
+        ov.entryScroll = frame.contentWindow.scrollY || 0;
       } catch (e) {
-        overviewEntryScroll = 0;
+        ov.entryScroll = 0;
       }
     } else {
-      overviewEntryScroll = content.scrollTop;
+      ov.entryScroll = content.scrollTop;
     }
-    overviewHadFrame = !!frame;
+    ov.hadFrame = !!frame;
     // A selected block keeps its floating toolbar alive over the zoomed
     // canvas — clear the selection for the overview's lifetime (the
     // reorder chrome is the only chrome this mode shows) and put it
     // back on close. Selection is editor state, not content: neither
     // direction dirties the post.
     var editorSel = wp.data.select('core/block-editor');
-    overviewPriorSelection = editorSel && typeof editorSel.getSelectedBlockClientId === 'function'
+    ov.priorSelection = editorSel && typeof editorSel.getSelectedBlockClientId === 'function'
       ? (editorSel.getSelectedBlockClientId() || '')
       : '';
     if (wp.data.dispatch('core/block-editor').clearSelectedBlock) {
@@ -9977,7 +10016,7 @@ var DASHICON_NAMES = [
         /* Nothing to home. */
       }
     }
-    overviewSignature = overviewCurrentSignature();
+    ov.signature = overviewCurrentSignature();
     buildOverviewContent(OVERVIEW_FOCUS_CANDIDATES);
     scheduleOverviewSettle();
 
@@ -9993,20 +10032,20 @@ var DASHICON_NAMES = [
     if (typeof window.ResizeObserver === 'function') {
       var visual = visualEditorNode();
       if (visual) {
-        overviewResizeObserver = new window.ResizeObserver(onOverviewViewportChange);
-        overviewResizeObserver.observe(visual);
-        overviewResizeTarget = visual;
+        ov.resizeObserver = new window.ResizeObserver(onOverviewViewportChange);
+        ov.resizeObserver.observe(visual);
+        ov.resizeTarget = visual;
       }
     }
     observeOverviewCanvas();
     if (window.matchMedia) {
-      overviewMedia = window.matchMedia('(max-width: 782px)');
-      if (typeof overviewMedia.addEventListener === 'function') {
-        overviewMedia.addEventListener('change', onOverviewMediaChange);
+      ov.media = window.matchMedia('(max-width: 782px)');
+      if (typeof ov.media.addEventListener === 'function') {
+        ov.media.addEventListener('change', onOverviewMediaChange);
       }
     }
     if (wp.data && typeof wp.data.subscribe === 'function') {
-      overviewUnsubscribe = wp.data.subscribe(onOverviewStoreChange, 'core/block-editor');
+      ov.unsubscribe = wp.data.subscribe(onOverviewStoreChange, 'core/block-editor');
     }
     syncPressed(true);
     announceModeChange();
@@ -10153,14 +10192,13 @@ var DASHICON_NAMES = [
     // scroll + prior selection. Captured BEFORE the state resets below.
     var closeSel = wp.data.select('core/block-editor');
     var landing = '';
-    [overviewLastTouched, overviewRoot].some(function (id) {
+    [ov.lastTouched, ov.root].some(function (id) {
       if (id && closeSel && closeSel.getBlock(id)) {
         landing = id;
         return true;
       }
       return false;
     });
-    overviewLastTouched = '';
     finishOverviewDrag();
     cancelOverviewMarquee(false);
     clearOverviewCancelLatch();
@@ -10201,18 +10239,18 @@ var DASHICON_NAMES = [
     // come up empty (no DOM element for the block yet) — then the
     // entry restore runs as if nothing was touched.
     var landed = landing ? centerBlockAfterClose(landing) : false;
-    if (!landed && overviewEntryScroll !== null) {
+    if (!landed && ov.entryScroll !== null) {
       var frame = canvasFrame();
       if (frame && frame.contentWindow) {
         try {
-          frame.contentWindow.scrollTo(0, overviewEntryScroll);
+          frame.contentWindow.scrollTo(0, ov.entryScroll);
         } catch (e) {
           /* Cross-origin surprise — nothing to restore. */
         }
       } else {
         var content = contentRegion();
         if (content) {
-          content.scrollTop = overviewEntryScroll;
+          content.scrollTop = ov.entryScroll;
         }
       }
     }
@@ -10231,55 +10269,40 @@ var DASHICON_NAMES = [
         document.body.classList.remove('toolrail-ov-closing');
       }, 100);
     }
-    overviewEntryScroll = null;
-    overviewRoot = '';
-    overviewSelected = '';
-    overviewSelectedIds = [];
-    overviewAnchor = '';
-    overviewPan = 0;
-    overviewUserScale = 0;
-    overviewExtent = 0;
-    overviewExtentDirty = true;
+    // Release what this overview holds, in this order, THEN replace its
+    // state with a fresh copy — the replacement is the reset. The prior
+    // selection is copied out first, for the reselect below.
     document.removeEventListener('keydown', onOverviewKeydown, true);
     document.removeEventListener('scroll', onOverviewViewportChange, true);
     window.removeEventListener('resize', onOverviewViewportChange);
-    if (overviewResizeObserver) {
-      overviewResizeObserver.disconnect();
-      overviewResizeObserver = null;
+    if (ov.resizeObserver) {
+      ov.resizeObserver.disconnect();
     }
-    overviewResizeTarget = null;
-    if (overviewCanvasObserver) {
-      overviewCanvasObserver.disconnect();
-      overviewCanvasObserver = null;
+    if (ov.canvasObserver) {
+      ov.canvasObserver.disconnect();
     }
-    overviewCanvasTarget = null;
-    if (overviewCanvasSizeObserver) {
-      overviewCanvasSizeObserver.disconnect();
-      overviewCanvasSizeObserver = null;
+    if (ov.canvasSizeObserver) {
+      ov.canvasSizeObserver.disconnect();
     }
-    overviewCanvasSizeTarget = null;
-    if (overviewCanvasRefitTimer) {
-      window.clearTimeout(overviewCanvasRefitTimer);
-      overviewCanvasRefitTimer = 0;
+    if (ov.canvasRefitTimer) {
+      window.clearTimeout(ov.canvasRefitTimer);
     }
-    if (overviewMedia) {
-      if (typeof overviewMedia.removeEventListener === 'function') {
-        overviewMedia.removeEventListener('change', onOverviewMediaChange);
+    if (ov.media) {
+      if (typeof ov.media.removeEventListener === 'function') {
+        ov.media.removeEventListener('change', onOverviewMediaChange);
       }
-      overviewMedia = null;
     }
-    if (overviewUnsubscribe) {
-      overviewUnsubscribe();
-      overviewUnsubscribe = null;
+    if (ov.unsubscribe) {
+      ov.unsubscribe();
     }
-    if (overviewRepositionTimer) {
-      window.clearTimeout(overviewRepositionTimer);
-      overviewRepositionTimer = null;
+    if (ov.repositionTimer) {
+      window.clearTimeout(ov.repositionTimer);
     }
-    if (overviewPanFrame) {
-      window.cancelAnimationFrame(overviewPanFrame);
-      overviewPanFrame = null;
+    if (ov.panFrame) {
+      window.cancelAnimationFrame(ov.panFrame);
     }
+    var priorSelection = ov.priorSelection;
+    ov = newOverviewState();
     // Select the landing block — or, when nothing was touched, restore
     // the selection the overview cleared on open, if the block is still
     // there. A dispatched selectBlock takes no DOM focus itself, but
@@ -10292,14 +10315,13 @@ var DASHICON_NAMES = [
     if (landing) {
       wp.data.dispatch('core/block-editor').selectBlock(landing);
       reselected = landing;
-    } else if (overviewPriorSelection) {
+    } else if (priorSelection) {
       var editorSel = wp.data.select('core/block-editor');
-      if (editorSel && editorSel.getBlock(overviewPriorSelection)) {
-        wp.data.dispatch('core/block-editor').selectBlock(overviewPriorSelection);
-        reselected = overviewPriorSelection;
+      if (editorSel && editorSel.getBlock(priorSelection)) {
+        wp.data.dispatch('core/block-editor').selectBlock(priorSelection);
+        reselected = priorSelection;
       }
     }
-    overviewPriorSelection = '';
     syncPressed(true);
     announceModeChange();
     if (refocus) {
@@ -10356,7 +10378,7 @@ var DASHICON_NAMES = [
     }
     var content = contentRegion();
     var body = skeletonBody();
-    if (!content || !body || (overviewHadFrame && !canvasFrame())) {
+    if (!content || !body || (ov.hadFrame && !canvasFrame())) {
       closeOverview(false);
       return;
     }
@@ -10368,12 +10390,12 @@ var DASHICON_NAMES = [
     // given at open time, and a replaced visual editor leaves it
     // watching a detached box that never resizes again (review
     // 2026-08-28, finding 5).
-    if (overviewResizeObserver) {
+    if (ov.resizeObserver) {
       var visual = visualEditorNode();
-      if (visual && visual !== overviewResizeTarget) {
-        overviewResizeObserver.disconnect();
-        overviewResizeObserver.observe(visual);
-        overviewResizeTarget = visual;
+      if (visual && visual !== ov.resizeTarget) {
+        ov.resizeObserver.disconnect();
+        ov.resizeObserver.observe(visual);
+        ov.resizeTarget = visual;
       }
     }
     // A replaced canvas iframe has a new body; watch that one instead. A
@@ -12310,7 +12332,7 @@ var DASHICON_NAMES = [
     return {
       frameRect: rect,
       scale: scale,
-      pan: overviewOpen ? overviewPan : 0,
+      pan: overviewOpen ? ov.pan : 0,
       scrollX: scrollX,
       scrollY: scrollY,
       mode: railMode()
