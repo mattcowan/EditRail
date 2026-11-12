@@ -78,6 +78,9 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true
 const { chromium } = require('@playwright/test');
 
 const { assertSafeBaseUrl, assertSafeLoginPage } = require('./lib/safe-base-url');
+// Every rail preference a shot is allowed to write: the e2e suite's own
+// list, so the two cannot drift (#104).
+const { RAIL_PREF_KEYS } = require('../tests/e2e/prefs-account');
 
 const BASE = (process.env.TOOLRAIL_URL || 'http://localhost:8888').replace(/\/+$/, '');
 // Plain HTTP to a non-local host would send PASS in clear text: stop before
@@ -100,27 +103,6 @@ const HEADED = !!process.env.TOOLRAIL_HEADED;
 
 const OUT_DIR = path.join(__dirname, '..', '.wordpress-org');
 const VIEWPORT = { width: 1440, height: 900 };
-
-/** Every rail preference a shot is allowed to write. Mirrors RAIL_PREF_KEYS
-    in tests/e2e/helpers.js — keep the two lists identical. */
-const RAIL_PREF_KEYS = [
-  'toolrail-help-seen',
-  'toolrail-position',
-  'toolrail-quick-slots',
-  'toolrail-slot-configs',
-  'toolrail-slots-migrated',
-  'toolrail-help-hidden',
-  'toolrail-wide',
-  'toolrail-wide-toggle',
-  'toolrail-appearance',
-  'toolrail-group-seeded',
-  'toolrail-hide-core-inserter',
-  'toolrail-pin-meta',
-  'toolrail-set-meta',
-  'toolrail-sidebar-width',
-  'toolrail-sidebar-resize',
-  'toolrail-sets-button-hidden',
-];
 
 /**
  * Core preferences the shots change, and therefore have to restore:

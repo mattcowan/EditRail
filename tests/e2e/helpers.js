@@ -12,34 +12,11 @@
  */
 const { expect } = require('@playwright/test');
 const path = require('path');
-const { setRailScope, apiForPage, readPrefs } = require('./prefs-account');
+// RAIL_PREF_KEYS: every rail preference this suite is allowed to write,
+// in both stores. One list, in prefs-account.js (#104).
+const { setRailScope, apiForPage, readPrefs, RAIL_PREF_KEYS } = require('./prefs-account');
 
 const AUTH = path.join(__dirname, '.auth', 'admin.json');
-
-/**
- * Every rail preference this suite is allowed to write, in both stores.
- *
- * `toolrail-help-seen` is the retired first-run stamp (the auto-open
- * went in 0.1.22); clearing it tidies an account that still carries it.
- */
-const RAIL_PREF_KEYS = [
-  'toolrail-help-seen',
-  'toolrail-position',
-  'toolrail-quick-slots',
-  'toolrail-slot-configs',
-  'toolrail-slots-migrated',
-  'toolrail-help-hidden',
-  'toolrail-wide',
-  'toolrail-wide-toggle',
-  'toolrail-appearance',
-  'toolrail-group-seeded',
-  'toolrail-hide-core-inserter',
-  'toolrail-pin-meta',
-  'toolrail-set-meta',
-  'toolrail-sidebar-width',
-  'toolrail-sidebar-resize',
-  'toolrail-sets-button-hidden',
-];
 
 /**
  * Return the rail's stored state to a fresh-install baseline, in the page

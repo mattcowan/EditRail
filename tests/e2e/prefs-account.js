@@ -52,7 +52,15 @@ const LEGACY_SNAPSHOT_FILES = [
   path.join(__dirname, '..', 'e2e-sr', 'rail-prefs-snapshot.json'),
 ];
 
-/** The rail's own keys: what a test resets. Extension keys are not touched. */
+/**
+ * The rail's own keys: what a test resets. Extension keys are not touched.
+ *
+ * The one list: helpers.js and scripts/screenshots.js import it (#104). A
+ * new rail preference key goes here.
+ *
+ * `toolrail-help-seen` is the retired first-run stamp (the auto-open
+ * went in 0.1.22); clearing it tidies an account that still carries it.
+ */
 const RAIL_PREF_KEYS = [
   'toolrail-help-seen',
   'toolrail-position',
