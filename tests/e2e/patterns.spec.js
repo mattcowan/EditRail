@@ -19,6 +19,15 @@ const {
 
 test.use({ storageState: AUTH });
 
+/** Drop a 'wp-blocks' payload on the rail, the way the browser would. */
+const dropOnRail = (page, payload) => page.evaluate((data) => {
+  const dt = new DataTransfer();
+  dt.setData('wp-blocks', JSON.stringify(data));
+  const region = document.getElementById('toolrail-region');
+  region.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }));
+  region.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+}, payload);
+
 test.describe('pattern pins and drag (0.1.23)', () => {
   /**
    * A registered pattern this site can insert at the root, and that a
@@ -42,15 +51,6 @@ test.describe('pattern pins and drag (0.1.23)', () => {
       return null;
     });
   }
-
-  /** Drop a 'wp-blocks' payload on the rail, the way the browser would. */
-  const dropOnRail = (page, payload) => page.evaluate((data) => {
-    const dt = new DataTransfer();
-    dt.setData('wp-blocks', JSON.stringify(data));
-    const region = document.getElementById('toolrail-region');
-    region.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }));
-    region.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
-  }, payload);
 
   test('a registered pattern is found in the settings search, pinned, armed and inserted, then unpinned', async ({ page }) => {
     await openNewPost(page);
@@ -270,14 +270,6 @@ test.describe('pattern pins and drag (0.1.23)', () => {
 });
 
 test.describe('review 2026-09-03 follow-ups (patterns and drag)', () => {
-  const dropOnRail = (page, payload) => page.evaluate((data) => {
-    const dt = new DataTransfer();
-    dt.setData('wp-blocks', JSON.stringify(data));
-    const region = document.getElementById('toolrail-region');
-    region.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }));
-    region.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
-  }, payload);
-
   async function seedQuote(page) {
     return page.evaluate(() => {
       const { createBlock } = window.wp.blocks;
