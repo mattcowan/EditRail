@@ -279,7 +279,7 @@ async function seedOverviewBlocks(page) {
 /** Text of core's polite live region — what wp.a11y.speak() last said. */
 const liveText = (page) => page.evaluate(() => {
   const el = document.getElementById('a11y-speak-polite');
-  return el ? el.textContent.replace(/ /g, ' ').trim() : '';
+  return el ? el.textContent.replace(/\u00a0/g, ' ').trim() : '';
 });
 
 module.exports = {

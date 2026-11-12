@@ -58,10 +58,11 @@ jobs:
       - run: composer install --no-interaction --prefer-dist
       - run: vendor/bin/phpunit
 
-  # ESLint and stylelint on assets/, PHPCS on the PHP (#99). No wp-env and
-  # no browser, so it reports long before the browser jobs. The browser
-  # jobs need this job: a lint finding stops them before they start, so a
-  # PR with a lint error does not use 9 browser jobs. The
+  # ESLint on assets/, tests/ and scripts/ (#105), stylelint on assets/,
+  # PHPCS on the PHP (#99). No wp-env and no browser, so it reports long
+  # before the browser jobs. The browser jobs need this job: a lint
+  # finding stops them before they start, so a PR with a lint error does
+  # not use 9 browser jobs. The
   # configurations (eslint.config.js, stylelint.config.js,
   # phpcs.xml.dist) say what each linter checks and why.
   lint:

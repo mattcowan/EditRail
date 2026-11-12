@@ -170,7 +170,7 @@ Separate plugins by the same author use this contract and nothing else: rulers a
 | `npm run test:php` | Runs the PHPUnit suite in `tests/phpunit/`. It needs no WordPress install. The bootstrap stubs the few WordPress functions the PHP uses. |
 | `npm run test:e2e` | Runs the Playwright suite in `tests/e2e/` against a WordPress site. |
 | `npm run test:sr` | Runs the NVDA screen-reader journeys in `tests/e2e-sr/` against a WordPress site. Windows only. It drives a headed Firefox with Guidepup's portable NVDA, and it takes the keyboard for several minutes. Do not type while it runs. |
-| `npm run lint` | Runs ESLint and stylelint on `assets/`. ESLint reports undeclared, unused and shadowed names, unsafe syntax, and syntax above ES5. `eslint.config.js` and `stylelint.config.js` give the rules. |
+| `npm run lint` | Runs ESLint on `assets/`, `tests/` and `scripts/`, and stylelint on `assets/`. ESLint reports undeclared, unused and shadowed names, and unsafe syntax. In `assets/`, it also reports syntax above ES5. `eslint.config.js` and `stylelint.config.js` give the rules. |
 | `composer lint` | Runs PHPCS on `editrail.php`, `uninstall.php` and `includes/`. It reports security problems, PHP features above 7.4, and incorrect use of WordPress functions. `phpcs.xml.dist` gives the rules. |
 | `npm run check-versions` | Checks that all six version numbers agree. |
 | `npm run package` | Runs the version check, then builds `editrail.zip`. |
