@@ -258,7 +258,7 @@ async function main() {
     const meta = window.toolrail.getPinMeta(name);
     // setPinMeta keeps only title/description/icon; extension data lives
     // under `ext` in the raw preference and is restored with setPinData.
-    let ext = null;
+    let ext;
     try {
       const raw = window.wp.data.select('core/preferences').get('toolrail', 'toolrail-pin-meta');
       const map = raw ? JSON.parse(raw) : {};
@@ -271,9 +271,10 @@ async function main() {
   await page.evaluate((name) => window.toolrail.unpinBlock(name), BLOCK);
   await page.waitForSelector('#toolrail-rail [data-tool="pin:' + BLOCK + '"]', { state: 'detached' });
 
-  let names = [];
-  let tStart = 0;
-  let tEnd = 0;
+  // Set inside the try. A throw skips every read below the finally.
+  let names;
+  let tStart;
+  let tEnd;
   try {
 
     // Top of the document, so the display headline leads the shot.
@@ -416,12 +417,10 @@ async function main() {
     blocks: names,
   };
   fs.writeFileSync(path.join(OUT_DIR, 'record-drag.json'), JSON.stringify(result, null, 2));
-  // eslint-disable-next-line no-console
   console.log(JSON.stringify(result, null, 2));
 }
 
 main().catch((err) => {
-  // eslint-disable-next-line no-console
   console.error(err);
   process.exit(1);
 });
