@@ -6,7 +6,7 @@
  * Writes .wordpress-org/screenshot-1.png … screenshot-N.png at
  * 1440x900, deviceScaleFactor 1, from a real WordPress install with
  * EditRail active. It drives the same DOM the e2e suite drives
- * (tests/e2e/rail.spec.js); the selectors are deliberately the same
+ * (tests/e2e/*.spec.js); the selectors are deliberately the same
  * strings, so a rename that breaks the suite breaks this too.
  *
  * Environment:
@@ -102,7 +102,7 @@ const OUT_DIR = path.join(__dirname, '..', '.wordpress-org');
 const VIEWPORT = { width: 1440, height: 900 };
 
 /** Every rail preference a shot is allowed to write. Mirrors RAIL_PREF_KEYS
-    in tests/e2e/rail.spec.js — keep the two lists identical. */
+    in tests/e2e/helpers.js — keep the two lists identical. */
 const RAIL_PREF_KEYS = [
   'toolrail-help-seen',
   'toolrail-position',
