@@ -60,6 +60,15 @@ function ovSelectedBoxes(page) {
   return page.locator('#toolrail-overview .toolrail-ov-box.is-selected');
 }
 
+/** An overview box's bounding box, read only once the box is visible.
+    The overview hides a box (display: none) until its block has canvas
+    DOM, so a read right after the overview opens can get null under
+    load (#103). */
+async function visibleBox(locator) {
+  await expect(locator).toBeVisible();
+  return locator.boundingBox();
+}
+
 test.describe('section overview (R6)', () => {
   test('the Overview tool zooms a tall document fully into view with chips in document order; closing restores everything', async ({ page }) => {
     await openNewPost(page);
@@ -232,8 +241,8 @@ test.describe('section overview (R6)', () => {
       window.wp.data.select('core/block-editor').getBlockOrder('')
     );
     const boxSel = (id) => page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${id}"]`);
-    const lastBox = await boxSel(ids[5]).boundingBox();
-    const targetBox = await boxSel(ids[4]).boundingBox();
+    const lastBox = await visibleBox(boxSel(ids[5]));
+    const targetBox = await visibleBox(boxSel(ids[4]));
     const overlayBox = await page.locator('#toolrail-overview').boundingBox();
 
     // Start on EMPTY overlay space below the last box, then draw up
@@ -319,8 +328,8 @@ test.describe('section overview (R6)', () => {
     await overviewBoxButton(page, ids[1], 'pick').click({ modifiers: ['Shift'] });
     await expect(ovSelectedBoxes(page)).toHaveCount(2);
 
-    const firstBox = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[0]}"]`).boundingBox();
-    const lastBox = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[5]}"]`).boundingBox();
+    const firstBox = await visibleBox(page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[0]}"]`));
+    const lastBox = await visibleBox(page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[5]}"]`));
     await page.mouse.move(firstBox.x + firstBox.width / 2, firstBox.y + firstBox.height / 2);
     await page.mouse.down();
     await page.mouse.move(firstBox.x + firstBox.width / 2, lastBox.y + lastBox.height + 20, { steps: 10 });
@@ -772,8 +781,8 @@ test.describe('section overview (R6)', () => {
     const before = await overviewContents(page);
 
     // Start a real drag and cross the threshold.
-    const firstBox = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[0]}"]`).boundingBox();
-    const lastBox = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[5]}"]`).boundingBox();
+    const firstBox = await visibleBox(page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[0]}"]`));
+    const lastBox = await visibleBox(page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[5]}"]`));
     await page.mouse.move(firstBox.x + firstBox.width / 2, firstBox.y + firstBox.height / 2);
     await page.mouse.down();
     await page.mouse.move(firstBox.x + firstBox.width / 2, lastBox.y + lastBox.height / 2, { steps: 10 });
@@ -811,7 +820,7 @@ test.describe('section overview (R6)', () => {
     // Nothing selected to begin with.
     await expect(ovSelectedBoxes(page)).toHaveCount(0);
 
-    const box = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[0]}"]`).boundingBox();
+    const box = await visibleBox(page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[0]}"]`));
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
 
@@ -883,7 +892,7 @@ test.describe('section overview (R6)', () => {
     );
     await expect(ovSelectedBoxes(page)).toHaveCount(0);
 
-    const box = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[0]}"]`).boundingBox();
+    const box = await visibleBox(page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[0]}"]`));
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
 
@@ -901,7 +910,7 @@ test.describe('section overview (R6)', () => {
     // The next genuine click must still work. Without the fix that
     // click's own mouseup spent the stale latch, and the `click` that
     // followed was discarded, so the box never picked.
-    const target = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[2]}"]`).boundingBox();
+    const target = await visibleBox(page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[2]}"]`));
     await page.mouse.click(target.x + target.width / 2, target.y + target.height / 2);
 
     await expect(ovSelectedBoxes(page)).toHaveCount(1);
@@ -931,8 +940,8 @@ test.describe('section overview (R6)', () => {
     await overviewBoxButton(page, ids[1], 'pick').click({ modifiers: ['Shift'] });
     await expect(ovSelectedBoxes(page)).toHaveCount(2);
 
-    const firstBox = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[0]}"]`).boundingBox();
-    const lastBox = await page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[5]}"]`).boundingBox();
+    const firstBox = await visibleBox(page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[0]}"]`));
+    const lastBox = await visibleBox(page.locator(`#toolrail-overview .toolrail-ov-box[data-clientid="${ids[5]}"]`));
     await page.mouse.move(firstBox.x + firstBox.width / 2, firstBox.y + firstBox.height / 2);
     await page.mouse.down();
     await page.mouse.move(firstBox.x + firstBox.width / 2, lastBox.y + lastBox.height + 20, { steps: 10 });
