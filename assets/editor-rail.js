@@ -550,21 +550,97 @@
     return pos;
   }
 
-  // Defaults until boot() re-loads from storage — reads must wait for the
-  // editor to attach the preferences persistence layer, and nothing
-  // consumes `position` before mount anyway.
-  var position = { dock: DEFAULT_DOCK, x: 24, y: 24 };
-
   /**
-   * Persist the current dock and floating offsets.
+   * The state of ONE toolbar, at its start values (#95). A function that
+   * reads or changes this state takes the toolbar as its first argument,
+   * so the code that builds, places and moves a toolbar names no
+   * particular one. Exactly one toolbar exists: mainToolbar, below.
+   *
+   * A value that belongs to one toolbar goes here, with its start value.
+   * Two kinds do not, on purpose:
+   *
+   *  - The toolbar's NODES. They are looked up by id on every use
+   *    (regionId, railId): the editor's re-render can remove the region
+   *    at any time, and "not in the document" is how mount() learns that
+   *    it must build a new one. A kept reference would outlive the node.
+   *  - The roving tab stop. It has no variable: it is the one
+   *    .toolrail-tool with tabIndex 0 inside the toolbar's rail node, and
+   *    buildRail binds the two listeners that move it to that node. The
+   *    pinned slots have none either: loadSlots() reads the stored list
+   *    on every use.
+   *
+   * State that is ONE FOR THE PAGE stays outside. Where that choice was
+   * not obvious, the reason is beside the variable: the armed tool
+   * (activeTool), the open flyout (openFlyout), a toolbar drag in flight
+   * (drag), a tool drag in flight (railDragActive) and the pressed-state
+   * signature (lastPaintedSignature). The flyout and the drag each record
+   * the toolbar they belong to. The rest is shared by its nature: the
+   * tool registry (`registered`) is what providers register, not what one
+   * toolbar shows; the settings, help and add-to-toolbar dialogs are one
+   * surface each, opened from the main toolbar's buttons and hung in its
+   * region; the Section overview is a mode of the canvas; and wide mode,
+   * the appearance and the saved sets are stored preferences with no
+   * variable here.
+   *
+   * @param {string} id       The toolbar's name in code.
+   * @param {string} regionId The id of its region node.
+   * @param {string} railId   The id of its role="toolbar" node.
+   * @return {Object} A fresh toolbar state.
    */
-  function savePosition() {
-    writeKey(POSITION_KEY, JSON.stringify(position));
+  function newToolbar(id, regionId, railId) {
+    return {
+      // The toolbar's name in code. Nothing stores or renders it.
+      id: id,
+      // The ids of the toolbar's two nodes: the positioned region that
+      // hangs in the editor's skeleton, and the role="toolbar" rail
+      // inside it.
+      regionId: regionId,
+      railId: railId,
+      // The dock and the floating offsets. Defaults until boot() re-loads
+      // from storage — reads must wait for the editor to attach the
+      // preferences persistence layer, and nothing consumes `position`
+      // before mount anyway.
+      position: { dock: DEFAULT_DOCK, x: 24, y: 24 },
+      // Every React root created for a pinned-block icon, so the previous
+      // generation can be unmounted. A discarded root keeps its fiber tree
+      // alive, and the rail rebuilds on every slot change (the ↑/↓ buttons
+      // in the settings dialog rebuild it per click) — so these accumulate
+      // fast unless they are disposed. buildRail() is the ONLY producer
+      // and always creates a complete new set, which makes it the correct
+      // disposal point. Per toolbar, because that set is one rail's: a
+      // shared list would let one toolbar's rebuild unmount the icons of
+      // a different toolbar.
+      iconRoots: [],
+      // The tools section's ResizeObserver, disposed on the same rule as
+      // the icon roots: buildRail is the only producer, so it disconnects
+      // the previous generation before creating the next.
+      scrollObserver: null
+    };
   }
 
-  /** Top and bottom docks lay the rail out as a horizontal bar. */
-  function isVertical() {
-    return position.dock !== 'top' && position.dock !== 'bottom';
+  // The one toolbar. Its two ids are public: extension plugins read the
+  // --toolrail-* tokens off #toolrail-region, and the browser tests name
+  // #toolrail-rail.
+  var mainToolbar = newToolbar('main', 'toolrail-region', 'toolrail-rail');
+
+  /**
+   * Persist a toolbar's dock and floating offsets.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {void}
+   */
+  function savePosition(tb) {
+    writeKey(POSITION_KEY, JSON.stringify(tb.position));
+  }
+
+  /**
+   * Top and bottom docks lay the rail out as a horizontal bar.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {boolean} True for a left, right or floating toolbar.
+   */
+  function isVertical(tb) {
+    return tb.position.dock !== 'top' && tb.position.dock !== 'bottom';
   }
 
   /**
@@ -591,11 +667,14 @@
    * Where the region belongs for the current dock, as a parent plus the
    * node to insert before (null = append). Returns null when the editor
    * chrome for that dock is not on the page yet — mount() then retries.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {Object|null} {parent, before}, or null.
    */
-  function dockPlacement() {
+  function dockPlacement(tb) {
     var body = skeletonBody();
     var editor = skeletonEditor();
-    switch (position.dock) {
+    switch (tb.position.dock) {
       case 'right':
       case 'float':
         return body ? { parent: body, before: null } : null;
@@ -646,34 +725,28 @@
     chevron: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8.6 5.4L10 4l8 8-8 8-1.4-1.4L15.2 12z"/></svg>'
   };
 
-  // Every React root created for a pinned-block icon, so the previous
-  // generation can be unmounted. A discarded root keeps its fiber tree
-  // alive, and the rail rebuilds on every slot change (the ↑/↓ buttons in
-  // the settings dialog rebuild it per click) — so these accumulate fast
-  // unless they are disposed. buildRail() is the ONLY producer and always
-  // creates a complete new set, which makes it the correct disposal point.
-  var iconRoots = [];
-
-  // The tools section's ResizeObserver, disposed on the same rule as the
-  // icon roots: buildRail is the only producer, so it disconnects the
-  // previous generation before creating the next.
-  var railScrollObserver = null;
+  // The pinned-icon React roots and the tools section's ResizeObserver
+  // of one rail generation are the toolbar's own (iconRoots and
+  // scrollObserver in newToolbar).
 
   /**
    * Unmount every React root from the previous rail generation. A
    * discarded root keeps its fiber tree alive, so leaving these behind
    * leaks one tree per rebuild — and the settings dialog rebuilds the rail
    * on each reorder click.
+   *
+   * @param {Object} tb The toolbar whose rail is being replaced.
+   * @return {void}
    */
-  function disposeIconRoots() {
-    iconRoots.forEach(function (root) {
+  function disposeIconRoots(tb) {
+    tb.iconRoots.forEach(function (root) {
       try {
         root.unmount();
       } catch (e) {
         /* Already gone with its container — nothing to release. */
       }
     });
-    iconRoots = [];
+    tb.iconRoots = [];
   }
 
   /**
@@ -682,8 +755,14 @@
    * component} (inline-SVG block.json icons arrive as the last) — the
    * React shapes render through wp.element so a pinned third-party block
    * shows its real icon instead of a generic glyph.
+   *
+   * @param {Object}      tb   The toolbar the icon is built for; it owns
+   *                           the React root.
+   * @param {HTMLElement} span The icon span.
+   * @param {*}           icon The block type's icon.
+   * @return {void}
    */
-  function renderBlockIcon(span, icon) {
+  function renderBlockIcon(tb, span, icon) {
     var src = icon && typeof icon === 'object' && 'src' in icon ? icon.src : icon;
     if (typeof src === 'string' && src !== '') {
       span.className += ' dashicons dashicons-' + src;
@@ -694,7 +773,7 @@
         var node = typeof src === 'function' ? wp.element.createElement(src) : src;
         var root = wp.element.createRoot(span);
         root.render(node);
-        iconRoots.push(root);
+        tb.iconRoots.push(root);
         return;
       } catch (e) {
         /* Fall through to the generic glyph. */
@@ -754,7 +833,9 @@
    */
   function setWide(on) {
     writeKey(WIDE_KEY, on ? '1' : '0');
-    var region = document.getElementById('toolrail-region');
+    // Wide mode is one stored preference, not a toolbar's own state (see
+    // newToolbar), so this names the toolbar instead of taking one.
+    var region = document.getElementById(mainToolbar.regionId);
     if (region) {
       if (on) {
         region.dataset.wide = 'true';
@@ -771,7 +852,7 @@
     }
     // The region's width just changed; a floating palette re-clamps so
     // widening it cannot push it off the editor.
-    applyFloatPosition();
+    applyFloatPosition(mainToolbar);
   }
 
   // -------------------------------------------------------------------
@@ -1660,7 +1741,7 @@
    *                               persisting each intermediate value.
    */
   function applyAppearance(region, tokens) {
-    region = region || document.getElementById('toolrail-region');
+    region = region || document.getElementById(mainToolbar.regionId);
     if (!region) {
       return;
     }
@@ -1907,7 +1988,7 @@
     });
 
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    rerender();
+    rerender(mainToolbar);
     return true;
   }
 
@@ -2109,7 +2190,7 @@
     slots.push(blockName);
     saveSlots(slots);
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    rerender();
+    rerender(mainToolbar);
     return true;
   }
 
@@ -2135,7 +2216,7 @@
       announcePinMetaChange(blockName);
     }
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    rerender();
+    rerender(mainToolbar);
     return true;
   }
 
@@ -2151,7 +2232,7 @@
     slots.splice(to, 0, blockName);
     saveSlots(slots);
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    rerender();
+    rerender(mainToolbar);
     return true;
   }
 
@@ -2495,7 +2576,7 @@ var DASHICON_NAMES = [
     persistPinMeta(map);
     announcePinMetaChange(blockName);
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    rerender();
+    rerender(mainToolbar);
     return true;
   }
 
@@ -2786,7 +2867,7 @@ var DASHICON_NAMES = [
       changed.forEach(announcePinMetaChange);
     }
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    rerender();
+    rerender(mainToolbar);
     return true;
   }
 
@@ -2859,7 +2940,7 @@ var DASHICON_NAMES = [
    * @return {boolean} True when the rail was rebuilt.
    */
   function reconcileSetsButton() {
-    var rail = document.getElementById('toolrail-rail');
+    var rail = document.getElementById(mainToolbar.railId);
     if (!rail) {
       return false;
     }
@@ -2867,7 +2948,7 @@ var DASHICON_NAMES = [
     if (rendered === isSetsButtonShown()) {
       return false;
     }
-    rerender();
+    rerender(mainToolbar);
     return true;
   }
 
@@ -2926,7 +3007,7 @@ var DASHICON_NAMES = [
         name
       ));
     }
-    var btn = document.querySelector('#toolrail-rail ' + toolSelector(SETS_TOOL_ID)) || gearButton();
+    var btn = document.querySelector('#' + mainToolbar.railId + ' ' + toolSelector(SETS_TOOL_ID)) || gearButton();
     if (btn) {
       btn.focus();
     }
@@ -3255,7 +3336,7 @@ var DASHICON_NAMES = [
             return;
           }
           window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-          rerender();
+          rerender(mainToolbar);
           if (settingsOpen) {
             refreshSettings('#toolrail-settings-search');
           }
@@ -3474,6 +3555,9 @@ var DASHICON_NAMES = [
   // Armed-tool state + canvas insertion
   // -------------------------------------------------------------------
 
+  // The armed tool. One for the page, not one for each toolbar (see
+  // newToolbar): an armed tool is a mode of the CANVAS — the next canvas
+  // click inserts its block — and the canvas has one mode at a time.
   var activeTool = 'select';
 
   /**
@@ -4120,7 +4204,7 @@ var DASHICON_NAMES = [
     if (t === document.body || t === document.documentElement) {
       return true;
     }
-    var region = document.getElementById('toolrail-region');
+    var region = document.getElementById(mainToolbar.regionId);
     if (region && region.contains(t)) {
       return true;
     }
@@ -4251,7 +4335,7 @@ var DASHICON_NAMES = [
    * @return {void}
    */
   function handleCanvasPointerdownClose(e) {
-    var region = document.getElementById('toolrail-region');
+    var region = document.getElementById(mainToolbar.regionId);
     if (e && e.target && region && region.contains(e.target)) {
       return;
     }
@@ -4410,6 +4494,12 @@ var DASHICON_NAMES = [
   // arrows move within, Escape returns focus to the parent)
   // -------------------------------------------------------------------
 
+  // The open flyout: {node, parentBtn, toolbar}, or null. One for the
+  // page, not one for each toolbar (see newToolbar): a flyout takes focus
+  // when it opens and closes when focus leaves it, so two cannot be open
+  // together, and its three document listeners are single functions that
+  // read this one record. The record names the toolbar the menu hangs
+  // in.
   var openFlyout = null;
 
   /**
@@ -4426,13 +4516,14 @@ var DASHICON_NAMES = [
       return;
     }
     var parentBtn = openFlyout.parentBtn;
+    var tb = openFlyout.toolbar;
     openFlyout.node.remove();
     document.removeEventListener('mousedown', onDocMousedown, true);
     document.removeEventListener('keydown', onFlyoutKeydown, true);
     document.removeEventListener('focusin', onFlyoutFocusin, true);
     parentBtn.setAttribute('aria-expanded', 'false');
     openFlyout = null;
-    syncLayer();
+    syncLayer(tb);
     if (refocusParent) {
       parentBtn.focus();
     }
@@ -4522,11 +4613,13 @@ var DASHICON_NAMES = [
    * one. The surface must already be in the DOM — the overflow clamp
    * measures it.
    *
+   * @param {Object}      tb      The toolbar the surface belongs to; its
+   *                              dock gives the direction.
    * @param {HTMLElement} node    The surface.
    * @param {HTMLElement} anchor  Button to align with (falls back to the rail).
    * @param {HTMLElement} wrapper The positioned region the surface lives in.
    */
-  function placeSurface(node, anchor, wrapper) {
+  function placeSurface(tb, node, anchor, wrapper) {
     var wrapperRect = wrapper.getBoundingClientRect();
     var anchorRect = anchor ? anchor.getBoundingClientRect() : wrapperRect;
 
@@ -4535,13 +4628,13 @@ var DASHICON_NAMES = [
     node.style.bottom = '';
     node.style.left = '';
 
-    if (position.dock === 'top') {
+    if (tb.position.dock === 'top') {
       node.style.top = 'calc(100% + 4px)';
       node.style.left = Math.max(0, anchorRect.left - wrapperRect.left) + 'px';
-    } else if (position.dock === 'bottom') {
+    } else if (tb.position.dock === 'bottom') {
       node.style.bottom = 'calc(100% + 4px)';
       node.style.left = Math.max(0, anchorRect.left - wrapperRect.left) + 'px';
-    } else if (position.dock === 'right') {
+    } else if (tb.position.dock === 'right') {
       node.style.right = 'calc(100% + 4px)';
       node.style.top = Math.max(0, anchorRect.top - wrapperRect.top) + 'px';
     } else {
@@ -4552,7 +4645,7 @@ var DASHICON_NAMES = [
     // Pull back anything that would run off the viewport. Horizontal docks
     // clamp sideways, vertical docks clamp downward.
     var rect = node.getBoundingClientRect();
-    if (isVertical()) {
+    if (isVertical(tb)) {
       var overshootY = rect.bottom - window.innerHeight + 8;
       if (overshootY > 0 && node.style.top) {
         node.style.top = Math.max(0, parseFloat(node.style.top) - overshootY) + 'px';
@@ -4570,12 +4663,13 @@ var DASHICON_NAMES = [
    * menu is built fresh per open, placed by placeSurface(), and holds
    * document-level listeners for the whole time it is up.
    *
+   * @param {Object}      tb      The toolbar the button is in.
    * @param {HTMLElement} btn     The parent tool button.
    * @param {Object}      tool    Its railModel() entry.
    * @param {HTMLElement} wrapper The positioned region the menu lives in.
    * @return {void}
    */
-  function openFlyoutFor(btn, tool, wrapper) {
+  function openFlyoutFor(tb, btn, tool, wrapper) {
     closeFlyout(false);
     if (!tool.children.length) {
       return;
@@ -4654,10 +4748,10 @@ var DASHICON_NAMES = [
     });
 
     wrapper.appendChild(menu);
-    placeSurface(menu, btn, wrapper);
+    placeSurface(tb, menu, btn, wrapper);
     btn.setAttribute('aria-expanded', 'true');
-    openFlyout = { node: menu, parentBtn: btn };
-    syncLayer();
+    openFlyout = { node: menu, parentBtn: btn, toolbar: tb };
+    syncLayer(tb);
     document.addEventListener('mousedown', onDocMousedown, true);
     document.addEventListener('keydown', onFlyoutKeydown, true);
     document.addEventListener('focusin', onFlyoutFocusin, true);
@@ -4728,7 +4822,7 @@ var DASHICON_NAMES = [
    * @return {HTMLElement|null} The button, or null.
    */
   function gearButton() {
-    var rail = document.getElementById('toolrail-rail');
+    var rail = document.getElementById(mainToolbar.railId);
     return rail ? rail.querySelector('[data-tool="settings"]') : null;
   }
 
@@ -4762,7 +4856,7 @@ var DASHICON_NAMES = [
     editFormError = '';
     iconBrowserOpen = false;
     iconBrowserQuery = '';
-    syncLayer();
+    syncLayer(mainToolbar);
     // Drop any message that never got rendered — closing the dialog
     // before an in-flight file read resolves used to strand it here, and
     // it then surfaced out of context the NEXT time settings was opened.
@@ -5064,7 +5158,7 @@ var DASHICON_NAMES = [
       input.type = 'radio';
       input.name = 'toolrail-dock';
       input.value = dock;
-      input.checked = position.dock === dock;
+      input.checked = mainToolbar.position.dock === dock;
       input.dataset.dock = dock;
       input.addEventListener('change', function () {
         if (!input.checked) {
@@ -5074,8 +5168,8 @@ var DASHICON_NAMES = [
         // with focus back on the radio the author just chose. A refused
         // dock leaves the radio showing a position the rail is not in, so
         // repaint the dialog from the real state instead.
-        if (!setDock(dock, { reopenSettings: true })) {
-          refreshSettings('input[data-dock="' + position.dock + '"]');
+        if (!setDock(mainToolbar, dock, { reopenSettings: true })) {
+          refreshSettings('input[data-dock="' + mainToolbar.position.dock + '"]');
         }
       });
       row.appendChild(input);
@@ -5138,7 +5232,7 @@ var DASHICON_NAMES = [
       // The chevron enters or leaves the rail — rebuild it. Focus stays
       // on this checkbox (rerender only moves focus when it was IN the
       // rail).
-      rerender();
+      rerender(mainToolbar);
     });
     var toggleText = settingsRow('span', '');
     toggleText.textContent = __('Show an expand/contract button on the toolbar', 'editrail');
@@ -6226,7 +6320,7 @@ var DASHICON_NAMES = [
       }
       saveSlots(current.concat(missing));
       window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-      rerender();
+      rerender(mainToolbar);
       pinnedStatus = sprintf(
         /* translators: %d: number of default tools restored. */
         _n('Restored %d default tool.', 'Restored %d default tools.', missing.length, 'editrail'),
@@ -6502,7 +6596,7 @@ var DASHICON_NAMES = [
       writeKey(SETS_BUTTON_HIDDEN_KEY, setsButtonToggle.checked ? '0' : '1');
       // Focus stays on this checkbox: rerender() only moves focus when
       // it was in the rail.
-      rerender();
+      rerender(mainToolbar);
     });
     var setsButtonText = settingsRow('span', '');
     setsButtonText.textContent = __('Show a Saved sets button on the toolbar when you have a saved set', 'editrail');
@@ -6546,7 +6640,7 @@ var DASHICON_NAMES = [
     helpRow.appendChild(settingsButton(__('Open toolbar help', 'editrail'), function () {
       // openHelp closes this dialog on purpose — the panel and the
       // dialog are sibling surfaces anchored to the same rail.
-      var wrapper = document.getElementById('toolrail-region');
+      var wrapper = document.getElementById(mainToolbar.regionId);
       if (wrapper) {
         openHelp(wrapper);
       }
@@ -6562,7 +6656,7 @@ var DASHICON_NAMES = [
       writeKey(HELP_HIDDEN_KEY, hideHelp.checked ? '1' : '0');
       // Rebuild the rail with/without the "?" tool. Focus stays on this
       // checkbox — rerender() only moves focus when it was in the rail.
-      rerender();
+      rerender(mainToolbar);
     });
     var hideHelpText = settingsRow('span', '');
     hideHelpText.textContent = __('Hide the Help button from the toolbar (help stays available here)', 'editrail');
@@ -6599,13 +6693,13 @@ var DASHICON_NAMES = [
     buildSettingsContent(node, '');
     wrapper.appendChild(node);
     settingsOpen = true;
-    syncLayer();
+    syncLayer(mainToolbar);
 
     var gear = gearButton();
     if (gear) {
       gear.setAttribute('aria-expanded', 'true');
     }
-    placeSurface(node, gear, wrapper);
+    placeSurface(mainToolbar, node, gear, wrapper);
     document.addEventListener('mousedown', onSettingsMousedown, true);
     document.addEventListener('keydown', onSettingsKeydown, true);
     document.addEventListener('focusin', onSettingsFocusin, true);
@@ -6648,7 +6742,7 @@ var DASHICON_NAMES = [
    * @return {HTMLElement|null} The button, or null.
    */
   function helpButton() {
-    var rail = document.getElementById('toolrail-rail');
+    var rail = document.getElementById(mainToolbar.railId);
     return rail ? rail.querySelector('[data-tool="help"]') : null;
   }
 
@@ -6682,7 +6776,7 @@ var DASHICON_NAMES = [
       node.remove();
     }
     helpOpen = false;
-    syncLayer();
+    syncLayer(mainToolbar);
     document.removeEventListener('mousedown', onHelpMousedown, true);
     document.removeEventListener('keydown', onHelpKeydown, true);
     document.removeEventListener('focusin', onHelpFocusin, true);
@@ -6896,13 +6990,13 @@ var DASHICON_NAMES = [
 
     wrapper.appendChild(node);
     helpOpen = true;
-    syncLayer();
+    syncLayer(mainToolbar);
 
     var btn = helpButton();
     if (btn) {
       btn.setAttribute('aria-expanded', 'true');
     }
-    placeSurface(node, btn || gearButton(), wrapper);
+    placeSurface(mainToolbar, node, btn || gearButton(), wrapper);
     document.addEventListener('mousedown', onHelpMousedown, true);
     document.addEventListener('keydown', onHelpKeydown, true);
 
@@ -7206,7 +7300,7 @@ var DASHICON_NAMES = [
    * @return {HTMLElement|null} The button, or null.
    */
   function overviewButton() {
-    var rail = document.getElementById('toolrail-rail');
+    var rail = document.getElementById(mainToolbar.railId);
     return rail ? rail.querySelector('[data-tool="overview"]') : null;
   }
 
@@ -10343,7 +10437,7 @@ var DASHICON_NAMES = [
       // guard protects the rail's own focus, nothing more).
       if (reselected && typeof window.requestAnimationFrame === 'function') {
         var reassertFocus = function () {
-          var rail = document.getElementById('toolrail-rail');
+          var rail = document.getElementById(mainToolbar.railId);
           var fresh = overviewButton();
           if (fresh && (!rail || !rail.contains(document.activeElement))) {
             fresh.focus();
@@ -10441,13 +10535,16 @@ var DASHICON_NAMES = [
    * fine. So this owns only "does the rail want to be on top", and the
    * stylesheet vetoes it synchronously for modals with
    * `body:has(.components-modal__screen-overlay)`.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {void}
    */
-  function syncLayer() {
-    var region = document.getElementById('toolrail-region');
+  function syncLayer(tb) {
+    var region = document.getElementById(tb.regionId);
     if (!region) {
       return;
     }
-    var wantsTop = settingsOpen || helpOpen || addDialogOpen || !!openFlyout || !!drag || position.dock === 'float';
+    var wantsTop = settingsOpen || helpOpen || addDialogOpen || !!openFlyout || !!drag || tb.position.dock === 'float';
     region.classList.toggle('is-raised', wantsTop);
   }
 
@@ -10493,9 +10590,13 @@ var DASHICON_NAMES = [
    * dozen provider tools is taller than the usable area, and offsetHeight
    * has to already reflect the cap for the clamp to be right. A no-op for
    * every docked position, which clears the inline styles instead.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {void}
    */
-  function applyFloatPosition() {
-    var region = document.getElementById('toolrail-region');
+  function applyFloatPosition(tb) {
+    var position = tb.position;
+    var region = document.getElementById(tb.regionId);
     if (!region) {
       return;
     }
@@ -10532,15 +10633,17 @@ var DASHICON_NAMES = [
    * rail's orientation, arrow keys and surface directions all change with
    * it.
    *
+   * @param {Object} tb   The toolbar to move.
    * @param {string} dock One of DOCKS.
    * @param {Object} opts {x, y} for a float, {reopenSettings} to keep the
    *                      settings dialog open across the move.
    * @return {boolean} Whether the dock was applied.
    */
-  function setDock(dock, opts) {
+  function setDock(tb, dock, opts) {
     if (DOCKS.indexOf(dock) === -1) {
       return false;
     }
+    var position = tb.position;
     var options = opts || {};
     var reopen = !!options.reopenSettings;
     var previous = position.dock;
@@ -10551,7 +10654,7 @@ var DASHICON_NAMES = [
     // off a different node in the editor's skeleton, and a dock whose node
     // is not on the page would leave the rail unmounted with nothing but
     // an unrelated DOM mutation to bring it back.
-    if (!dockPlacement()) {
+    if (!dockPlacement(tb)) {
       position.dock = previous;
       warn('cannot dock to "' + dock + '" — that part of the editor is not present.');
       return false;
@@ -10565,20 +10668,20 @@ var DASHICON_NAMES = [
         position.y = options.y;
       }
     }
-    savePosition();
+    savePosition(tb);
 
     closeFlyout(false);
     closeSettings(false);
     closeHelp(false);
 
-    var existing = document.getElementById('toolrail-region');
+    var existing = document.getElementById(tb.regionId);
     if (existing) {
       existing.remove();
     }
-    mount();
+    mount(tb);
 
     if (reopen) {
-      var wrapper = document.getElementById('toolrail-region');
+      var wrapper = document.getElementById(tb.regionId);
       if (wrapper) {
         openSettings(wrapper, 'input[data-dock="' + dock + '"]');
       }
@@ -10658,6 +10761,11 @@ var DASHICON_NAMES = [
     el.style.height = box.height + 'px';
   }
 
+  // The toolbar drag in flight: {toolbar, startDock, startX, startY,
+  // grabX, grabY, candidate, torn}, or null. One for the page, not one
+  // for each toolbar (see newToolbar): there is one pointer, so one drag,
+  // and its three document listeners are single functions that read this
+  // one record. The record names the toolbar that is moving.
   var drag = null;
 
   /**
@@ -10665,14 +10773,16 @@ var DASHICON_NAMES = [
    * grab offset and the dock to return to on Escape, then listen for the
    * move, the release and the cancel.
    *
-   * @param {MouseEvent} e The grip mousedown.
+   * @param {Object}     tb The toolbar the grip belongs to.
+   * @param {MouseEvent} e  The grip mousedown.
    * @return {void}
    */
-  function startDrag(e) {
+  function startDrag(tb, e) {
     if (e.button !== 0) {
       return;
     }
-    var region = document.getElementById('toolrail-region');
+    var position = tb.position;
+    var region = document.getElementById(tb.regionId);
     if (!region) {
       return;
     }
@@ -10683,6 +10793,7 @@ var DASHICON_NAMES = [
 
     var rect = region.getBoundingClientRect();
     drag = {
+      toolbar: tb,
       startDock: position.dock,
       startX: position.x,
       startY: position.y,
@@ -10692,7 +10803,7 @@ var DASHICON_NAMES = [
       torn: position.dock === 'float'
     };
 
-    syncLayer();
+    syncLayer(tb);
     document.body.classList.add('toolrail-dragging');
     document.addEventListener('mousemove', onDragMove, true);
     document.addEventListener('mouseup', onDragEnd, true);
@@ -10712,6 +10823,7 @@ var DASHICON_NAMES = [
       return;
     }
     e.preventDefault();
+    var tb = drag.toolbar;
 
     // Tear a docked rail off on first movement so it follows the pointer,
     // the way a docked palette in a graphics editor does.
@@ -10719,18 +10831,18 @@ var DASHICON_NAMES = [
       drag.torn = true;
       var parent = skeletonBody();
       var parentRect = parent ? parent.getBoundingClientRect() : { left: 0, top: 0 };
-      setDock('float', {
+      setDock(tb, 'float', {
         x: e.clientX - parentRect.left - drag.grabX,
         y: e.clientY - parentRect.top - drag.grabY
       });
     }
 
-    var region = document.getElementById('toolrail-region');
+    var region = document.getElementById(tb.regionId);
     var host = region && region.parentNode ? region.parentNode.getBoundingClientRect() : null;
     if (region && host) {
-      position.x = e.clientX - host.left - drag.grabX;
-      position.y = e.clientY - host.top - drag.grabY;
-      applyFloatPosition();
+      tb.position.x = e.clientX - host.left - drag.grabX;
+      tb.position.y = e.clientY - host.top - drag.grabY;
+      applyFloatPosition(tb);
     }
 
     drag.candidate = snapCandidate(e.clientX, e.clientY);
@@ -10743,13 +10855,14 @@ var DASHICON_NAMES = [
    * Escape path, so neither can leave the rail stuck in drag state.
    */
   function finishDrag() {
+    var tb = drag.toolbar;
     showSnapPreview('float');
     document.body.classList.remove('toolrail-dragging');
     document.removeEventListener('mousemove', onDragMove, true);
     document.removeEventListener('mouseup', onDragEnd, true);
     document.removeEventListener('keydown', onDragKey, true);
     drag = null;
-    syncLayer();
+    syncLayer(tb);
   }
 
   /**
@@ -10760,11 +10873,12 @@ var DASHICON_NAMES = [
     if (!drag) {
       return;
     }
+    var tb = drag.toolbar;
     var candidate = drag.candidate;
-    var x = position.x;
-    var y = position.y;
+    var x = tb.position.x;
+    var y = tb.position.y;
     finishDrag();
-    setDock(candidate === 'float' ? 'float' : candidate, { x: x, y: y });
+    setDock(tb, candidate === 'float' ? 'float' : candidate, { x: x, y: y });
   }
 
   /** Escape abandons a drag and puts the rail back where it started. */
@@ -10774,18 +10888,19 @@ var DASHICON_NAMES = [
     }
     e.preventDefault();
     e.stopPropagation();
+    var tb = drag.toolbar;
     var startDock = drag.startDock;
     var startX = drag.startX;
     var startY = drag.startY;
     finishDrag();
-    setDock(startDock, { x: startX, y: startY });
+    setDock(tb, startDock, { x: startX, y: startY });
   }
 
   // Keep a floating rail inside the editor when the window resizes, and
   // re-clamp the settings sidebar, whose maximum follows the window.
   window.addEventListener('resize', function () {
-    if (position.dock === 'float') {
-      applyFloatPosition();
+    if (mainToolbar.position.dock === 'float') {
+      applyFloatPosition(mainToolbar);
     }
     syncSidebarWidth();
   });
@@ -10808,11 +10923,12 @@ var DASHICON_NAMES = [
    * canvas, carrying the payload core's own inserter sends so core's drop
    * zone owns the rest; the keyboard path stays arm, then Ctrl+Enter.
    *
+   * @param {Object}      tb      The toolbar the button is built for.
    * @param {Object}      tool    A railModel() entry.
    * @param {HTMLElement} wrapper The positioned region, for flyout placing.
    * @return {HTMLButtonElement} The button.
    */
-  function buildToolButton(tool, wrapper) {
+  function buildToolButton(tb, tool, wrapper) {
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'toolrail-tool';
@@ -10850,7 +10966,7 @@ var DASHICON_NAMES = [
     if (tool.customIcon) {
       renderCustomIcon(icon, tool.customIcon);
     } else if (tool.pinnedBlock) {
-      renderBlockIcon(icon, tool.blockIcon);
+      renderBlockIcon(tb, icon, tool.blockIcon);
     } else if (tool.icon) {
       icon.innerHTML = tool.icon;
     } else {
@@ -10900,7 +11016,7 @@ var DASHICON_NAMES = [
         if (openFlyout && openFlyout.parentBtn === btn) {
           closeFlyout(true);
         } else {
-          openFlyoutFor(btn, tool, wrapper);
+          openFlyoutFor(tb, btn, tool, wrapper);
         }
         return;
       }
@@ -10954,13 +11070,18 @@ var DASHICON_NAMES = [
    * unfocusable, because the keyboard and screen-reader path for
    * repositioning is the settings dialog's "Toolbar position" radio
    * group.
+   *
+   * @param {Object} tb The toolbar the grip moves.
+   * @return {HTMLElement} The grip.
    */
-  function buildGrip() {
+  function buildGrip(tb) {
     var grip = document.createElement('div');
     grip.className = 'toolrail-grip';
     grip.setAttribute('aria-hidden', 'true');
     grip.title = __('Drag to move the toolbar', 'editrail');
-    grip.addEventListener('mousedown', startDrag);
+    grip.addEventListener('mousedown', function (e) {
+      startDrag(tb, e);
+    });
     return grip;
   }
 
@@ -10971,22 +11092,23 @@ var DASHICON_NAMES = [
    * toolbar, arrows within — and disposes the previous generation's icon
    * roots and scroll observer, since it is their only producer.
    *
+   * @param {Object}      tb      The toolbar to build.
    * @param {HTMLElement} wrapper The positioned region.
    * @return {HTMLElement} The rail.
    */
-  function buildRail(wrapper) {
+  function buildRail(tb, wrapper) {
     // The previous generation of pinned-icon React roots belongs to the
     // rail this one replaces — and so does its scroll observer.
-    disposeIconRoots();
-    if (railScrollObserver) {
-      railScrollObserver.disconnect();
-      railScrollObserver = null;
+    disposeIconRoots(tb);
+    if (tb.scrollObserver) {
+      tb.scrollObserver.disconnect();
+      tb.scrollObserver = null;
     }
 
     var rail = document.createElement('div');
-    rail.id = 'toolrail-rail';
+    rail.id = tb.railId;
     rail.setAttribute('role', 'toolbar');
-    rail.setAttribute('aria-orientation', isVertical() ? 'vertical' : 'horizontal');
+    rail.setAttribute('aria-orientation', isVertical(tb) ? 'vertical' : 'horizontal');
     rail.setAttribute('aria-label', __('Tools', 'editrail'));
 
     // The head shares the scroll/tail container grammar (and, crucially,
@@ -10996,7 +11118,7 @@ var DASHICON_NAMES = [
     // outside the rail onto the editor (review 2026-08-27, finding 1).
     var head = document.createElement('div');
     head.className = 'toolrail-head';
-    head.appendChild(buildGrip());
+    head.appendChild(buildGrip(tb));
 
     // Wide-mode chevron, at the rail's head beside the grip — OPT-IN
     // via Toolbar settings (isWideToggleShown; owner decision
@@ -11009,7 +11131,7 @@ var DASHICON_NAMES = [
     // palette only — a label-per-tool row makes a horizontal bar
     // unusably long, so the toggle does not render on top/bottom (V1
     // decision, roadmap R2).
-    if (isVertical() && isWideToggleShown()) {
+    if (isVertical(tb) && isWideToggleShown()) {
       var wideToggle = document.createElement('button');
       wideToggle.type = 'button';
       wideToggle.className = 'toolrail-tool toolrail-tool--wide-toggle';
@@ -11071,18 +11193,18 @@ var DASHICON_NAMES = [
       byId[t.id] = t;
     });
 
-    scrollArea.appendChild(buildToolButton(byId.select, wrapper));
+    scrollArea.appendChild(buildToolButton(tb, byId.select, wrapper));
     if (byId.section) {
-      scrollArea.appendChild(buildToolButton(byId.section, wrapper));
+      scrollArea.appendChild(buildToolButton(tb, byId.section, wrapper));
     }
 
     model.slots.forEach(function (slot) {
-      scrollArea.appendChild(buildToolButton(slot, wrapper));
+      scrollArea.appendChild(buildToolButton(tb, slot, wrapper));
     });
 
     scrollArea.appendChild(buildSeparator());
     if (byId.overview) {
-      scrollArea.appendChild(buildToolButton(byId.overview, wrapper));
+      scrollArea.appendChild(buildToolButton(tb, byId.overview, wrapper));
     }
 
     var registeredTop = model.tools.filter(function (t) {
@@ -11091,7 +11213,7 @@ var DASHICON_NAMES = [
     if (registeredTop.length) {
       scrollArea.appendChild(buildSeparator());
       registeredTop.forEach(function (tool) {
-        scrollArea.appendChild(buildToolButton(tool, wrapper));
+        scrollArea.appendChild(buildToolButton(tb, tool, wrapper));
       });
     }
 
@@ -11126,7 +11248,7 @@ var DASHICON_NAMES = [
         var delta = dir === 'prev' ? -1 : 1;
         // Instant, not smooth — a smooth scroll here would need the
         // triple motion-flatten; an instant step needs nothing.
-        if (isVertical()) {
+        if (isVertical(tb)) {
           scrollArea.scrollBy(0, delta * Math.max(88, scrollArea.clientHeight * 0.6));
         } else {
           // RTL x-scrolling runs NEGATIVE from the right edge, so
@@ -11147,7 +11269,7 @@ var DASHICON_NAMES = [
      * from the start on either side.
      */
     function syncScrollSteps() {
-      var vertical = isVertical();
+      var vertical = isVertical(tb);
       // abs() because RTL reports scrollLeft as 0..-max; the distance
       // from the start is what the buttons care about on either side.
       var pos = vertical ? scrollArea.scrollTop : Math.abs(scrollArea.scrollLeft);
@@ -11163,8 +11285,8 @@ var DASHICON_NAMES = [
       // sizes read 0, so both buttons hide); the observer fires once
       // the section gets its real box after insertion, and again on any
       // editor resize — panel toggles included.
-      railScrollObserver = new ResizeObserver(syncScrollSteps);
-      railScrollObserver.observe(scrollArea);
+      tb.scrollObserver = new ResizeObserver(syncScrollSteps);
+      tb.scrollObserver.observe(scrollArea);
     }
     syncScrollSteps();
     // Post-insertion pass: mount() inserts the rail synchronously after
@@ -11189,7 +11311,7 @@ var DASHICON_NAMES = [
     // other toolbar-level controls and stays visible however many tools
     // scroll above it.
     if (isSetsButtonShown()) {
-      tail.appendChild(buildToolButton(setsMenuTool(wrapper), wrapper));
+      tail.appendChild(buildToolButton(tb, setsMenuTool(wrapper), wrapper));
     }
     if (!isHelpHidden()) {
       var help = document.createElement('button');
@@ -11275,7 +11397,7 @@ var DASHICON_NAMES = [
     // horizontal rail moves on Left/Right and opens its flyouts with
     // ArrowDown. The move axis and the open key are never the same key.
     rail.addEventListener('keydown', function (e) {
-      var vertical = isVertical();
+      var vertical = isVertical(tb);
       var nextKey = vertical ? 'ArrowDown' : 'ArrowRight';
       var prevKey = vertical ? 'ArrowUp' : 'ArrowLeft';
       var openKey = vertical ? 'ArrowRight' : 'ArrowDown';
@@ -11297,7 +11419,7 @@ var DASHICON_NAMES = [
         // Same gate as the click path: a fully dimmed container offers
         // no flyout by keyboard either (review 2026-08-29).
         if (tool && tool.children && tool.children.length && buttonAvailable(tool)) {
-          openFlyoutFor(btns[idx], tool, wrapper);
+          openFlyoutFor(tb, btns[idx], tool, wrapper);
         }
         return;
       }
@@ -11318,11 +11440,12 @@ var DASHICON_NAMES = [
    * target. It joins the editor's region-navigation cycle, so the rail is
    * reachable by that shortcut like any other editor region.
    *
+   * @param {Object} tb The toolbar to build.
    * @return {HTMLElement} The region.
    */
-  function buildWrapper() {
+  function buildWrapper(tb) {
     var wrapper = document.createElement('div');
-    wrapper.id = 'toolrail-region';
+    wrapper.id = tb.regionId;
     // interface-navigable-region joins the editor's region-navigation cycle
     // (the Phase 0 gap: the theme rail was unreachable via that shortcut).
     wrapper.className = 'interface-navigable-region toolrail-region';
@@ -11331,7 +11454,7 @@ var DASHICON_NAMES = [
     wrapper.tabIndex = -1;
     // Every dock-dependent style keys off this: rail orientation, which
     // border carries the edge, and which way surfaces open.
-    wrapper.dataset.dock = position.dock;
+    wrapper.dataset.dock = tb.position.dock;
     // Wide mode is persisted independently of the dock; the wide CSS is
     // keyed to vertical docks + float, so a stored wide state is simply
     // inert while the rail is horizontal.
@@ -11340,7 +11463,7 @@ var DASHICON_NAMES = [
     }
     applyAppearance(wrapper);
 
-    wrapper.appendChild(buildRail(wrapper));
+    wrapper.appendChild(buildRail(tb, wrapper));
 
     // Drop target: a block type or a pattern dragged from the inserter
     // pins at once; a block dragged out of the canvas opens the
@@ -11398,6 +11521,10 @@ var DASHICON_NAMES = [
    * on every rerender (the worst that can follow is a no-op re-pin of a
    * tool that is already pinned) and on any dragend or drop the editor
    * document sees.
+   *
+   * One for the page, not one for each toolbar (see newToolbar): the
+   * browser runs one drag at a time, and the flag says where that drag
+   * STARTED, which is what a region's dragover asks.
    */
   var railDragActive = false;
 
@@ -11629,7 +11756,7 @@ var DASHICON_NAMES = [
       node.remove();
     }
     addDialogOpen = false;
-    syncLayer();
+    syncLayer(mainToolbar);
     document.removeEventListener('mousedown', onAddDialogMousedown, true);
     document.removeEventListener('keydown', onAddDialogKeydown, true);
     document.removeEventListener('focusin', onAddDialogFocusin, true);
@@ -11794,7 +11921,7 @@ var DASHICON_NAMES = [
    * @return {boolean} Whether the dialog opened.
    */
   function openAddToToolbar(clientIds, wrapper) {
-    wrapper = wrapper || document.getElementById('toolrail-region');
+    wrapper = wrapper || document.getElementById(mainToolbar.regionId);
     var sel = wp.data.select('core/block-editor');
     var ids = Array.isArray(clientIds) ? clientIds.filter(function (id) { return !!sel.getBlock(id); }) : [];
     if (!wrapper || !ids.length) {
@@ -11939,8 +12066,8 @@ var DASHICON_NAMES = [
     node.appendChild(status);
     wrapper.appendChild(node);
     addDialogOpen = true;
-    syncLayer();
-    placeSurface(node, gearButton(), wrapper);
+    syncLayer(mainToolbar);
+    placeSurface(mainToolbar, node, gearButton(), wrapper);
     document.addEventListener('mousedown', onAddDialogMousedown, true);
     document.addEventListener('keydown', onAddDialogKeydown, true);
     document.addEventListener('focusin', onAddDialogFocusin, true);
@@ -11957,6 +12084,9 @@ var DASHICON_NAMES = [
   // fresh buttons carry default state).
   // -------------------------------------------------------------------
 
+  // One for the page, not one for each toolbar (see newToolbar): the
+  // signature is built from the armed tool, the mode and each registered
+  // tool's own state, and none of those belongs to one toolbar.
   var lastPaintedSignature = false;
 
   /**
@@ -11998,7 +12128,7 @@ var DASHICON_NAMES = [
    * @return {void}
    */
   function syncPressed(force) {
-    var rail = document.getElementById('toolrail-rail');
+    var rail = document.getElementById(mainToolbar.railId);
     if (!rail) {
       return;
     }
@@ -12063,21 +12193,30 @@ var DASHICON_NAMES = [
   // Mount machinery
   // -------------------------------------------------------------------
 
-  function mount() {
-    var place = dockPlacement();
+  /**
+   * Put a toolbar's region where its dock hangs: build it when it is not
+   * in the document, and move it back when the editor's re-render moved
+   * it.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {boolean} False when the editor chrome for the dock is not on
+   *                   the page yet.
+   */
+  function mount(tb) {
+    var place = dockPlacement(tb);
     if (!place) {
       return false;
     }
     bindCanvas();
 
-    var existing = document.getElementById('toolrail-region');
+    var existing = document.getElementById(tb.regionId);
     if (existing) {
       // Re-home a rail that the editor's own re-render moved out from
       // under its dock, without rebuilding it.
       if (!isPlacedCorrectly(existing, place)) {
         place.parent.insertBefore(existing, place.before);
-        applyFloatPosition();
-        syncLayer();
+        applyFloatPosition(tb);
+        syncLayer(tb);
       }
       return true;
     }
@@ -12091,9 +12230,9 @@ var DASHICON_NAMES = [
     closeSettings(false);
     closeHelp(false);
 
-    place.parent.insertBefore(buildWrapper(), place.before);
-    applyFloatPosition();
-    syncLayer();
+    place.parent.insertBefore(buildWrapper(tb), place.before);
+    applyFloatPosition(tb);
+    syncLayer(tb);
     // Force: a re-mounted rail carries brand-new buttons.
     syncPressed(true);
     return true;
@@ -12110,14 +12249,17 @@ var DASHICON_NAMES = [
    * focus to Select, so a rebuild the author did not start (an extension
    * registering a tool, a set import finishing) moved them off their
    * place in the toolbar (PR #97 review).
+   *
+   * @param {Object} tb The toolbar to rebuild.
+   * @return {void}
    */
-  function rerender() {
-    var wrapper = document.getElementById('toolrail-region');
+  function rerender(tb) {
+    var wrapper = document.getElementById(tb.regionId);
     if (!wrapper) {
       return;
     }
     railDragActive = false;
-    var oldRail = document.getElementById('toolrail-rail');
+    var oldRail = document.getElementById(tb.railId);
     var hadFocus = !!(oldRail && oldRail.contains(document.activeElement));
     var focusedTool = hadFocus && document.activeElement.dataset
       ? document.activeElement.dataset.tool || ''
@@ -12131,7 +12273,7 @@ var DASHICON_NAMES = [
       focusedTool = openFlyout.parentBtn.dataset.tool || '';
     }
     closeFlyout(false);
-    var newRail = buildRail(wrapper);
+    var newRail = buildRail(tb, wrapper);
     if (oldRail) {
       wrapper.replaceChild(newRail, oldRail);
     } else {
@@ -12160,7 +12302,7 @@ var DASHICON_NAMES = [
     var tries = 0;
     var timer = window.setInterval(function () {
       tries++;
-      if (mount() || tries > 100) {
+      if (mount(mainToolbar) || tries > 100) {
         window.clearInterval(timer);
         observe();
       }
@@ -12195,8 +12337,8 @@ var DASHICON_NAMES = [
       }
       pending = window.setTimeout(function () {
         pending = null;
-        mount();
-        syncLayer();
+        mount(mainToolbar);
+        syncLayer(mainToolbar);
         healOverview();
         syncSidebarWidth();
       }, 100);
@@ -12386,9 +12528,12 @@ var DASHICON_NAMES = [
     getMode: railMode,
     prefs: extPrefs,
     getCanvasGeometry: getCanvasGeometry,
-    getDock: function () { return position.dock; },
-    setDock: function (dock) { return setDock(dock); },
-    getPosition: function () { return { dock: position.dock, x: position.x, y: position.y }; }
+    getDock: function () { return mainToolbar.position.dock; },
+    setDock: function (dock) { return setDock(mainToolbar, dock); },
+    getPosition: function () {
+      var position = mainToolbar.position;
+      return { dock: position.dock, x: position.x, y: position.y };
+    }
   };
 
   // -------------------------------------------------------------------
@@ -12543,14 +12688,14 @@ var DASHICON_NAMES = [
         migrateLocalToPrefs();
         migrateSlots();
         var restored = loadPosition();
-        position.dock = restored.dock;
-        position.x = restored.x;
-        position.y = restored.y;
-        var existingRegion = document.getElementById('toolrail-region');
+        mainToolbar.position.dock = restored.dock;
+        mainToolbar.position.x = restored.x;
+        mainToolbar.position.y = restored.y;
+        var existingRegion = document.getElementById(mainToolbar.regionId);
         if (existingRegion) {
           existingRegion.remove();
         }
-        mount();
+        mount(mainToolbar);
       } finally {
         repairing = false;
       }
@@ -12583,7 +12728,7 @@ var DASHICON_NAMES = [
     // the account preferences FIRST, then read position and run the slot
     // migration against the lifted state.
     migrateLocalToPrefs();
-    position = loadPosition();
+    mainToolbar.position = loadPosition();
     migrateSlots();
     // These writes can still lose a race with the preferences store's
     // own async attach — watchPersistenceAttach() catches and repairs
