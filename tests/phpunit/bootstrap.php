@@ -196,6 +196,37 @@ if (!isset($GLOBALS['wpdb'])) {
     $GLOBALS['wpdb'] = new Toolrail_Test_WPDB();
 }
 
+// --- Asset registration stubs (#102): record what rail.php registers, in
+// order, so a test can check that every rail script is registered and that
+// each dependency is registered before the script that needs it.
+$GLOBALS['toolrail_test_scripts'] = [];
+$GLOBALS['toolrail_test_styles']  = [];
+
+if (!function_exists('wp_register_script')) {
+    /** Record a script registration; the last one for a handle wins. */
+    function wp_register_script($handle, $src, $deps = [], $ver = false, $in_footer = false) {
+        $GLOBALS['toolrail_test_scripts'][$handle] = [
+            'src'       => $src,
+            'deps'      => $deps,
+            'ver'       => $ver,
+            'in_footer' => $in_footer,
+        ];
+        return true;
+    }
+}
+
+if (!function_exists('wp_register_style')) {
+    /** Record a style registration; the last one for a handle wins. */
+    function wp_register_style($handle, $src, $deps = [], $ver = false, $media = 'all') {
+        $GLOBALS['toolrail_test_styles'][$handle] = [
+            'src'  => $src,
+            'deps' => $deps,
+            'ver'  => $ver,
+        ];
+        return true;
+    }
+}
+
 require_once TOOLRAIL_PLUGIN_DIR . 'includes/providers.php';
 require_once TOOLRAIL_PLUGIN_DIR . 'includes/rail.php';
 require_once TOOLRAIL_PLUGIN_DIR . 'includes/uninstall.php';
