@@ -89,6 +89,11 @@ test.describe('regressions', () => {
           // and they only exist while the overview is open. Their ring
           // is measured by its own test in the overview suite.
           if (rule.selectorText.indexOf('.toolrail-ov-') !== -1) continue;
+          // The canvas selection bar (#14) is the same case: it draws on
+          // the editor with the overview bar's fixed palette, and exists
+          // only while a selection is kept. Its ring is measured in
+          // canvas-select.spec.js.
+          if (rule.selectorText.indexOf('.toolrail-csel-') !== -1) continue;
           const declared = rule.style.getPropertyValue('outline');
           if (!declared) continue;
           // Every focus ring must go through the shared token, or it is

@@ -1734,6 +1734,133 @@ body.toolrail-hides-inserter .block-editor-block-list__block-side-inserter-popov
     display: none !important;
 }
 
+/* --- Canvas selection (issue #14) ---
+   Three things draw in the EDITOR document: the rectangle a drag from
+   empty canvas space draws, the bar with the group actions, and (while
+   the rectangle is drawn) the rule that keeps core's between-block "+"
+   from rising under the pointer. The outlines on the selected blocks
+   are inside the canvas iframe, where this stylesheet does not reach;
+   editor-rail.js injects those rules there (CANVAS_SELECT_CSS).
+
+   The rectangle: position: fixed, placed by the script from the canvas
+   geometry, so nothing is added to the canvas body. Same two-tone look
+   as the overview's marquee. It never takes the pointer. */
+.toolrail-canvas-marquee {
+    position: fixed;
+    z-index: 30;
+    box-sizing: border-box;
+    border: 2px solid #3858e9;
+    border-radius: 2px;
+    background: rgba(56, 88, 233, 0.12);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.85);
+    pointer-events: none;
+}
+
+body.toolrail-canvas-marquee .block-editor-block-popover__inbetween .block-editor-block-list__insertion-point.is-with-inserter {
+    display: none !important;
+}
+
+/* The bar: fixed under the middle of the canvas's bottom edge (the
+   script sets left and bottom). z-index 31 puts it over the canvas and
+   under core's side panels, popovers and modals, like the flyouts. The
+   colors are fixed, like the overview's bar: it draws on the editor,
+   not on the rail, so the rail's appearance tokens do not reach it. */
+.toolrail-csel-bar {
+    position: fixed;
+    z-index: 31;
+    transform: translateX(-50%);
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 8px;
+    background: #1e1e1e;
+    color: #e0e0e0;
+    border: 1px solid #3f3f3f;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    font-size: 13px;
+}
+
+.toolrail-csel-bar[hidden] {
+    display: none;
+}
+
+.toolrail-csel-count {
+    padding: 0 6px;
+    color: #fff;
+    white-space: nowrap;
+}
+
+.toolrail-csel-btn {
+    box-sizing: border-box;
+    min-width: 44px;
+    min-height: 36px;
+    padding: 4px 10px;
+    background: #2a2a2a;
+    color: #e0e0e0;
+    border: 1px solid #4f4f4f;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.toolrail-csel-btn:hover {
+    background: #3a3a3a;
+    color: #fff;
+}
+
+/* A dimmed action stays focusable and keeps its name; the script says
+   why when it is pressed. */
+.toolrail-csel-btn[aria-disabled="true"] {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.toolrail-csel-btn[aria-disabled="true"]:hover {
+    background: #2a2a2a;
+    color: #e0e0e0;
+}
+
+.toolrail-csel-btn:focus-visible {
+    outline: 2px solid #7b90ff;
+    outline-offset: 2px;
+}
+
+/* Below the admin small-screen breakpoint the rail is hidden and canvas
+   selection is off with it (canvasSelectEnabled). */
+@media (max-width: 782px) {
+    .toolrail-csel-bar,
+    .toolrail-canvas-marquee {
+        display: none;
+    }
+}
+
+@media (forced-colors: active) {
+    /* The translucent fill would be forced OPAQUE (the veil lesson);
+       the border survives in system colors. */
+    .toolrail-canvas-marquee {
+        background: none;
+    }
+
+    .toolrail-csel-bar {
+        border: 1px solid CanvasText;
+    }
+
+    /* Opacity alone does not survive; GrayText is the system's own
+       "inactive". */
+    .toolrail-csel-btn[aria-disabled="true"] {
+        opacity: 1;
+        color: GrayText;
+    }
+
+    .toolrail-csel-btn:focus-visible {
+        outline: 2px solid Highlight;
+    }
+}
+
 /* --- Settings sidebar width (issue #28) ---
    editor-rail.js keeps --toolrail-sidebar-width on the body and adds
    .toolrail-sidebar-sized only when the stored width is not core's
