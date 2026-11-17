@@ -6,8 +6,7 @@
  *
  * Like every spec in this folder, it NEVER saves a post (helpers.js).
  */
-const { test, expect } = require('@playwright/test');
-const { AUTH } = require('./helpers');
+const { test, expect, AUTH } = require('./helpers');
 
 test.use({ storageState: AUTH });
 
