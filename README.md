@@ -60,6 +60,7 @@ Open a post in the editor. The toolbar is on the left edge. `readme.txt` describ
 - Save pinned arrangements as named sets. Export a set as a JSON file and import it on a different site.
 - Switch between saved sets from the Saved sets button on the toolbar. It appears when you have a saved set.
 - Move the toolbar to any edge, or float it. Change its colors. Show tool names beside the icons.
+- Add up to three more toolbars in Toolbar settings. Each toolbar has its own name, pinned tools, position and tool names. Two toolbars can dock on the same edge, side by side. Show or hide each one from the Toolbars button on the main toolbar, or in Toolbar settings. When a toolbar change makes the content area narrower than 600 pixels (`MIN_CANVAS_WIDTH`, core's small breakpoint), the toolbar says so. It refuses nothing.
 - Optional, off by default: turn on "Let me make the settings sidebar wider" in Toolbar settings. Then type a width in Toolbar settings, use its Narrower and Wider buttons (50px a step), or drag the inner edge of the editor's settings sidebar. The width goes up to 640px or half the window, whichever is less. The edge is also a keyboard separator: the Left and Right arrow keys change the width. A double-click, or a button in Toolbar settings, resets it to 280px.
 - Open the Section overview to zoom out, outline every top-level block, and reorder blocks by drag or by keyboard.
 
@@ -69,9 +70,11 @@ Every action has a keyboard path, and screen readers hear every state change. Dr
 
 **The toolbar is plain DOM inside the editor's own layout.** `assets/editor-rail.js` inserts the toolbar into the editor's skeleton, so the canvas reflows around it and is not under it. The toolbar lives outside the React tree, and a debounced MutationObserver puts it back when the editor re-renders. That is why it survives the round trip through the code editor.
 
+**Each toolbar is one region in that layout.** On a shared edge the main toolbar is against the edge, and each added toolbar is nearer the canvas. The order in the document is the order on screen, so the Tab order follows it. The places of all toolbars are set in one pass. Two toolbars that each want to be the last child of the same parent would otherwise move each other on every observer pass. The main toolbar keeps its old preference keys. The added toolbars are one value, `toolrail-toolbars`, so data from an older version shows the same single toolbar.
+
 **A tool arms.** The active tool is a mode, not an action. The next click in the canvas resolves where the block goes, inserts it with the editor's own insert action, and returns the toolbar to Select. The saved post is what the inserter would have written. Ctrl+Enter is the keyboard form of the click. It puts the block after the selected block, which is where the inserter puts it. Like the inserter, it replaces a selected empty paragraph.
 
-**Preferences are per user, per site.** The toolbar position, pins, saved sets, colors, toggles and the settings sidebar width go through the `core/preferences` store under the `toolrail` scope. WordPress persists that store to the user's account and preloads it into every editor page, so a setup follows the author across browsers and devices. The plugin writes no options and no post data. A localStorage fallback covers a browser whose storage fails mid-session.
+**Preferences are per user, per site.** The position and pins of each toolbar, saved sets, colors, toggles and the settings sidebar width go through the `core/preferences` store under the `toolrail` scope. WordPress persists that store to the user's account and preloads it into every editor page, so a setup follows the author across browsers and devices. The plugin writes no options and no post data. A localStorage fallback covers a browser whose storage fails mid-session.
 
 **Delete removes the preferences.** `uninstall.php` strips the `toolrail` scope from every user's preferences on every site of a network. Each write is conditional on the value that was read, so a save from an open editor tab at the same moment survives. Deactivation keeps the preferences. The docblock of `includes/uninstall.php` gives the details.
 
@@ -116,6 +119,8 @@ A tool gives one of three actions. `insertBlock` names a block type to insert at
 
 `parent` accepts a slot id, a block name such as `core/paragraph`, or one of the aliases `text`, `heading`, `image` and `section`. Screen readers hear a flyout tool that has `isActive` as a checked menu item.
 
+A tool with no `parent` is on the main toolbar. A tool whose `parent` is a pinned slot is in the flyout of that slot on each toolbar that shows the slot.
+
 ### 3. Read the toolbar's state
 
 | Call or event | What it gives |
@@ -123,8 +128,11 @@ A tool gives one of three actions. `insertBlock` names a block type to insert at
 | `window.toolrail.getMode()` | The toolbar's mode. |
 | `toolrail:mode-changed` window event | Fires when the mode changes, with `{ mode }` in `detail`. |
 | `toolrail:tools-updated` window event | Fires when the tool registry or the pins change. |
-| `toolrail:position-changed` window event | Fires when the toolbar docks or floats. |
-| `window.toolrail.getDock()` | The current dock. |
+| `toolrail:position-changed` window event | Fires when the main toolbar docks or floats, and when a different toolbar is added, removed, moved, shown or hidden. Each of these can move the canvas. `detail` is always the main toolbar's `{ dock, x, y }`. |
+| `toolrail:toolbars-changed` window event | Fires after `toolrail:position-changed` and when a toolbar is renamed, with `{ toolbar, change }` in `detail`. `toolbar` is the toolbar's id. `change` is `added`, `removed`, `renamed`, `position`, `shown`, `hidden` or `synced`. For `synced`, the stored list changed outside the page and `toolbar` is empty. |
+| `window.toolrail.getDock(id)` | The dock of a toolbar. Without `id`, the main toolbar's dock. |
+| `window.toolrail.getPosition(id)` | `{ dock, x, y }` of a toolbar. Without `id`, the main toolbar's. |
+| `window.toolrail.getToolbars()` | Every toolbar, the main toolbar first: `[{ id, name, dock, x, y, hidden }]`. The main toolbar's id is `main`. |
 | `window.toolrail.getCanvasGeometry()` | Where the canvas is on screen: `{ frameRect, scale, pan, scrollX, scrollY, mode }`. Use it to draw an overlay in the parent document that lines up with the canvas. |
 | `window.toolrail.refresh()` | Repaints the pressed state of every tool. Call it when your `isActive()` result changes for a reason the editor's data stores do not see, such as a pick mode you cancel yourself or a sidebar section held in React state. The toolbar repaints itself on every store change, so you do not need this for state that lives in a store. It is cheap to call more often than necessary. |
 
@@ -140,12 +148,12 @@ Keys must start with `toolrail-ext:`. Values are strings. The store is the same 
 
 `window.toolrail` also has calls for these. The header comment of `assets/editor-rail.js` documents each one.
 
-- Pins: `pinBlock`, `unpinBlock`, `isPinned`, `moveSlot`.
+- Pins: `pinBlock`, `unpinBlock`, `isPinned`, `moveSlot`. Each takes a toolbar id as an optional last argument. Without it, `pinBlock` pins to the main toolbar and refuses a slot that a shown toolbar has, `unpinBlock` unpins from every shown toolbar, `isPinned` is true when a shown toolbar has the slot, and `moveSlot` moves the slot on the first shown toolbar that has it. The pins of a hidden toolbar do not count, and these calls do not change them. With an id, each call acts on that toolbar, also when it is hidden. An unknown id makes the call return false.
 - A pin's own name, description and icon: `getPinMeta(slot)`, `setPinMeta(slot, { title, description, icon })`. Text only. The icon is the name of a Dashicon WordPress ships (`dashicons-star-filled`) or up to three characters.
 - Your extension's data on a pin: `getPinData(slot, namespace)`, `setPinData(slot, namespace, value)`. The namespace is your short name in lowercase: a lowercase letter or a digit, then lowercase letters, digits and hyphens, up to 40 characters. An uppercase letter makes `setPinData` return false. The value is plain JSON, up to 2,048 characters once serialized; `null` removes it. The rail stores it and nothing more: it is removed when the pin is unpinned, including when a loaded set does not name the pin. It is saved with sets, carried in set files, and applied when a set is loaded, one namespace at a time, so a namespace the set does not carry stays as it is. Give it meaning with a tool registered under the pin, `parent: 'pin:<slot>'`, whose `createBlock` reads it. The `toolrail:pin-meta-changed` window event fires with `{ slot }` in `detail` on every change to a pin's entry.
-- Saved sets: `saveConfig`, `loadConfig`, `deleteConfig`, `getConfigs`, `exportConfig`, `importConfig`.
-- The active tool: `getActiveTool`, `setActiveTool`.
-- The dock: `setDock`.
+- Saved sets: `saveConfig`, `loadConfig`, `deleteConfig`, `getConfigs`, `exportConfig`, `importConfig`. A set holds the pins of one toolbar. `saveConfig(name, id)` saves the pins of a toolbar, and `loadConfig(name, id)` loads a set into a toolbar. Without `id`, both use the main toolbar.
+- The active tool: `getActiveTool`, `setActiveTool`. One tool is armed at a time, on all toolbars.
+- The dock: `setDock(dock, id)`. Without `id`, it moves the main toolbar.
 
 ### Set files
 

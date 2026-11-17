@@ -78,6 +78,8 @@ const RAIL_PREF_KEYS = [
   'toolrail-sidebar-width',
   'toolrail-sidebar-resize',
   'toolrail-sets-button-hidden',
+  'toolrail-toolbars',
+  'toolrail-toolbars-button-hidden',
 ];
 
 /** A fresh install after its one-time migrations: the four default pins. */
