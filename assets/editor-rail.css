@@ -930,11 +930,29 @@ body.toolrail-dragging * {
 }
 
 .toolrail-settings-pinnedrow,
-.toolrail-settings-setrow {
+.toolrail-settings-setrow,
+.toolrail-settings-sharedrow {
     display: flex;
     align-items: center;
     gap: 4px;
     padding: 2px 0;
+}
+
+/* Shared sets (#98): a set row with share controls, and every row of the
+   Shared sets list, has more buttons than the dialog's width holds on one
+   line, so it wraps. The name keeps the first line when it is long. */
+.toolrail-settings-wraprow,
+.toolrail-settings-sharedrow {
+    flex-wrap: wrap;
+}
+
+/* "Shared by <display name>": the name comes from another user and can be
+   long; the buttons' accessible names carry it in full. */
+.toolrail-settings-sharedby {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .toolrail-settings-pinnedname {
