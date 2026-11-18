@@ -5679,7 +5679,29 @@ var DASHICON_NAMES = [
     return bar;
   }
 
-  /** Put the bar under the middle of the canvas's bottom edge. */
+  /**
+   * The window changed size while the bar is shown. Below the admin
+   * small-screen breakpoint the rail is display:none and the gestures are
+   * off (canvasSelectEnabled), and the stylesheet hides the bar. A kept
+   * set would then stay outlined with no way to act on it or to reach the
+   * bar, so it ends there, and says so (PR #124 review).
+   *
+   * @return {void}
+   */
+  function onCanvasSelectResize() {
+    var region = document.getElementById('toolrail-region');
+    if (csel.ids.length && !(region && region.getClientRects().length)) {
+      endCanvasSelection(true);
+      return;
+    }
+    placeCanvasSelectBar();
+  }
+
+  /**
+   * Put the bar under the middle of the canvas's bottom edge.
+   *
+   * @return {void}
+   */
   function placeCanvasSelectBar() {
     var bar = document.getElementById('toolrail-csel-bar');
     var geo = getCanvasGeometry();
@@ -5712,7 +5734,7 @@ var DASHICON_NAMES = [
           csel.barObserver.disconnect();
           csel.barObserver = null;
         }
-        window.removeEventListener('resize', placeCanvasSelectBar);
+        window.removeEventListener('resize', onCanvasSelectResize);
         if (hadFocus) {
           focusCanvasFromBar(false);
         }
@@ -5741,7 +5763,7 @@ var DASHICON_NAMES = [
     });
     if (bar.hidden) {
       bar.hidden = false;
-      window.addEventListener('resize', placeCanvasSelectBar);
+      window.addEventListener('resize', onCanvasSelectResize);
       // The sidebar opening or closing moves the canvas with no window
       // resize; the content region's own box changes then.
       var content = contentRegion();
@@ -6344,12 +6366,22 @@ var DASHICON_NAMES = [
 
   /**
    * Give a rectangle up (Escape, a canceled pointer, a mode change): the
-   * selection stays as the press found it. While the button is still
-   * down, the click that its release fires is swallowed too.
+   * selection stays as the press found it.
    *
+   * After Escape the button is still down, and its release fires a click
+   * nobody made: that one click is swallowed (buttonDown). The latch ends
+   * just after the release. Every other way here has no click to come (a
+   * canceled pointer, a button that went up unseen, a mode change, the
+   * canvas unbound), so it sets no latch: a latch left set stopped the
+   * next keyboard click in the canvas, such as Enter on a link (PR #124
+   * review).
+   *
+   * @param {boolean} [buttonDown] True only from the Escape key, while the
+   *                               button is still held. A listener passes
+   *                               its event here, which does not count.
    * @return {void}
    */
-  function cancelCanvasMarquee() {
+  function cancelCanvasMarquee(buttonDown) {
     var m = csel.marquee;
     if (!m) {
       return;
@@ -6357,8 +6389,24 @@ var DASHICON_NAMES = [
     csel.marquee = null;
     stopCanvasMarquee(m);
     if (m.active) {
-      csel.swallowClick = true;
       paintCanvasSelection();
+      if (buttonDown === true) {
+        csel.swallowClick = true;
+        var doc = boundDoc;
+        var release = function () {
+          doc.removeEventListener('pointerup', release, true);
+          doc.removeEventListener('pointercancel', release, true);
+          // After the click that follows the release, which is sent
+          // before this timer runs.
+          window.setTimeout(function () {
+            csel.swallowClick = false;
+          }, 0);
+        };
+        if (doc) {
+          doc.addEventListener('pointerup', release, true);
+          doc.addEventListener('pointercancel', release, true);
+        }
+      }
     }
   }
 
@@ -6542,7 +6590,7 @@ var DASHICON_NAMES = [
         // does nothing else.
         e.preventDefault();
         e.stopPropagation();
-        cancelCanvasMarquee();
+        cancelCanvasMarquee(true);
         return;
       }
       if (csel.escapeEvent === e) {

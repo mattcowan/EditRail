@@ -26,6 +26,19 @@ async function seedCanvas(page) {
   // openNewPost waits for the rail, which can be up before the canvas
   // iframe has rendered its block list (seen once in Firefox).
   await expect(canvas(page).locator('.is-root-container')).toBeVisible({ timeout: 20000 });
+  // The boxes and the pointer park below assume the settings sidebar is
+  // open, which is WordPress's default. An account where a narrow window
+  // closed it (core saves that) would move the canvas.
+  const reopened = await page.evaluate(() => {
+    if (window.wp.data.select('core/interface').getActiveComplementaryArea('core')) {
+      return false;
+    }
+    window.wp.data.dispatch('core/interface').enableComplementaryArea('core', 'edit-post/document');
+    return true;
+  });
+  if (reopened) {
+    await expect(page.locator('.interface-complementary-area')).toBeVisible();
+  }
   const ids = await page.evaluate(() => {
     const { createBlock } = window.wp.blocks;
     const pad = { spacing: { padding: { top: '40px', bottom: '40px', left: '40px', right: '40px' } } };
@@ -227,6 +240,29 @@ const recordSpeech = (page) => page.evaluate(() => {
 });
 const spoken = (page) => page.evaluate(() => window.__toolrailSpoken.slice());
 
+/**
+ * Count clicks in the canvas from now on: `seen` in the canvas window's
+ * capture phase (before the rail's document listener), `passed` in the
+ * document's bubble phase (after it). A click the rail swallows is seen
+ * and does not pass.
+ */
+const countCanvasClicks = (page) => canvas(page).locator('body').evaluate((body) => {
+  const doc = body.ownerDocument;
+  const win = doc.defaultView;
+  win.__toolrailClicks = { seen: 0, passed: 0 };
+  if (!win.__toolrailClicksBound) {
+    win.__toolrailClicksBound = true;
+    win.addEventListener('click', () => {
+      win.__toolrailClicks.seen += 1;
+    }, true);
+    doc.addEventListener('click', () => {
+      win.__toolrailClicks.passed += 1;
+    });
+  }
+});
+const canvasClicks = (page) => canvas(page).locator('body').evaluate((body) =>
+  Object.assign({}, body.ownerDocument.defaultView.__toolrailClicks));
+
 const bar = (page) => page.locator('#toolrail-csel-bar');
 const barButton = (page, action) => page.locator('#toolrail-csel-bar [data-csel-action="' + action + '"]');
 
@@ -421,6 +457,55 @@ test.describe('canvas selection (#14): the rectangle', () => {
     await page.waitForTimeout(200);
     expect(await selected(page)).toEqual([]);
     expect(await outlined(page)).toEqual([]);
+  });
+
+  test('a rectangle ended by pointercancel swallows no click: a later click with no press still reaches its listeners', async ({ page }) => {
+    await openNewPost(page);
+    const ids = await seedCanvas(page);
+    const alpha = await boxOf(page, ids.alpha);
+    const gamma = await boxOf(page, ids.gamma);
+    const x = await marginX(page, ids.alpha);
+    await countCanvasClicks(page);
+
+    await drag(page, { x, y: alpha.top - 4 }, { x: alpha.left + 200, y: gamma.top + 10 }, { hold: true });
+    await expect(page.locator('#toolrail-canvas-marquee')).toBeVisible();
+    // The browser gave the pointer up (a touch scroll, a lost capture):
+    // no pointerup and no click follow.
+    await canvas(page).locator('body').evaluate((body) => {
+      body.ownerDocument.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, isPrimary: true }));
+    });
+    await expect(page.locator('#toolrail-canvas-marquee')).toHaveCount(0);
+
+    // A click made with no press: what Enter on a focused link or
+    // button in the canvas sends.
+    await canvas(page).locator('body').evaluate((body) => body.click());
+    expect(await canvasClicks(page)).toEqual({ seen: 1, passed: 1 });
+    await page.mouse.up();
+  });
+
+  test('Escape during a drag swallows the one click its release makes, and no click after it', async ({ page }) => {
+    await openNewPost(page);
+    const ids = await seedCanvas(page);
+    const alpha = await boxOf(page, ids.alpha);
+    const gamma = await boxOf(page, ids.gamma);
+    const x = await marginX(page, ids.alpha);
+
+    await drag(page, { x, y: alpha.top - 4 }, { x: alpha.left + 200, y: gamma.top + 10 }, { hold: true });
+    await expect(page.locator('#toolrail-canvas-marquee')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#toolrail-canvas-marquee')).toHaveCount(0);
+
+    await countCanvasClicks(page);
+    await page.mouse.up();
+    // The release made a click (seen in the window's capture phase), and
+    // the rail stopped it before the document's listeners.
+    await expect.poll(() => canvasClicks(page)).toEqual({ seen: 1, passed: 0 });
+
+    // The latch ends with a zero-delay timer after the release. A timer
+    // set now in the page runs after it.
+    await page.evaluate(() => new Promise((resolve) => window.setTimeout(resolve, 0)));
+    await canvas(page).locator('body').evaluate((body) => body.click());
+    expect(await canvasClicks(page)).toEqual({ seen: 2, passed: 1 });
   });
 
   test('a pointerdown that another listener canceled is left alone', async ({ page }) => {
@@ -1169,6 +1254,36 @@ test.describe('canvas selection (#14): the kept set follows the document and the
     await expect(page.locator('#toolrail-overview .toolrail-ov-box.is-selected')).toHaveCount(0);
   });
 
+  test('a window narrower than the admin breakpoint ends the kept set, and a wide window does not bring it back', async ({ page }) => {
+    await openNewPost(page);
+    const ids = await seedCanvas(page);
+    const wide = page.viewportSize();
+    await keepWithClicks(page, [ids.alpha, ids.gamma]);
+    await expect(bar(page)).toBeVisible();
+
+    await recordSpeech(page);
+    await page.setViewportSize({ width: 700, height: wide.height });
+    await expect.poll(() => outlined(page)).toEqual([]);
+    await expect(bar(page)).toBeHidden();
+    await expect.poll(() => spoken(page)).toEqual(['Selection cleared.']);
+
+    await page.setViewportSize(wide);
+    await expect(page.locator('#toolrail-rail')).toBeVisible();
+    expect(await outlined(page)).toEqual([]);
+    await expect(bar(page)).toBeHidden();
+    expect(await spoken(page)).toEqual(['Selection cleared.']);
+
+    // Core closed the settings sidebar at 700px, and saves that in the
+    // account; every later test would start without it. Open it again
+    // and wait for the server copy.
+    await page.evaluate(() => window.wp.data.dispatch('core/interface').enableComplementaryArea('core', 'edit-post/document'));
+    await expect.poll(() => page.evaluate(() => window.wp.apiFetch({ path: '/wp/v2/users/me?context=edit' })
+      .then((user) => {
+        const saved = ((user.meta || {}).persisted_preferences || {}).core || {};
+        return saved.isComplementaryAreaVisible === true;
+      })), { timeout: 20000 }).toBe(true);
+  });
+
   test('the outline comes back when the editor makes a member\'s element again', async ({ page }) => {
     await openNewPost(page);
     const ids = await seedCanvas(page);
@@ -1229,7 +1344,14 @@ test.describe('canvas selection (#14): outlines and the post', () => {
     const ids = await seedCanvas(page);
     await page.evaluate(() => window.wp.data.dispatch('core/editor').setDeviceType('Tablet'));
     await expect.poll(async () => (await page.locator('iframe[name="editor-canvas"]').boundingBox()).width).toBeLessThan(900);
-    await page.waitForTimeout(400);
+    // The preview frame settles over a few frames: wait until a block's
+    // box holds still across two animation frames.
+    await expect.poll(async () => {
+      const a = await boxOf(page, ids.alpha);
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const b = await boxOf(page, ids.alpha);
+      return a.left === b.left && a.top === b.top && a.width === b.width;
+    }).toBe(true);
     const alpha = await boxOf(page, ids.alpha);
     const beta = await boxOf(page, ids.beta);
     const x = await marginX(page, ids.alpha);
