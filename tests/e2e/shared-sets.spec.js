@@ -460,6 +460,92 @@ test.describe('shared sets (#98)', () => {
     }
   });
 
+  /**
+   * More than one toolbar (#95). A set is a snapshot loaded INTO a
+   * toolbar, and a shared set is no different: Load in Toolbar settings
+   * fills the toolbar chosen there, and the Saved sets menu fills the main
+   * toolbar, which has the menu. These tests live here, not in
+   * toolbars.spec.js, because a shared set needs a second user to share it.
+   * They run as author2, whose account no other test changes.
+   */
+  async function seedExtraToolbar(page, slots) {
+    await page.evaluate((list) => {
+      window.wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-toolbars', JSON.stringify({
+        version: 1,
+        toolbars: [{ id: 't1', name: 'Animation', dock: 'left', x: 40, y: 40, slots: list, wide: false, hidden: false }],
+      }));
+    }, slots);
+    await expect(page.locator('#toolrail-rail-t1')).toBeVisible();
+  }
+
+  /** The pins a rail shows, in order. */
+  const railPins = (page, railId) => page.evaluate((id) => Array.from(document.querySelectorAll('#' + id + ' [data-tool^="pin:"]')).map((x) => x.dataset.tool), railId);
+
+  test('with an extra toolbar chosen, a shared set\'s Load fills that toolbar and leaves the main toolbar alone (#95)', async ({ browser }) => {
+    const name = `into extra ${tag}`;
+    await shareAs('author', setJson(name, ['core/quote', 'core/list'], { 'core/quote': { title: 'Shared quote' } }));
+    const { context, page } = await editorAs(browser, 'author2');
+    try {
+      await seedExtraToolbar(page, ['core/verse']);
+      // A pin that the set does not have, on both toolbars, with a label: a
+      // load that also wrote the main toolbar would take it away, and the
+      // label must stay while the main toolbar still has the pin.
+      // The id is needed: without one, pinBlock refuses a slot that a
+      // shown toolbar already has.
+      expect(await page.evaluate(() => window.toolrail.pinBlock('core/verse', 'main'))).toBe(true);
+      await page.evaluate(() => window.toolrail.setPinMeta('core/verse', { title: 'My verse' }));
+      const mainBefore = await railPins(page, 'toolrail-rail');
+      expect(mainBefore).toContain('pin:core/verse');
+
+      await page.locator('#toolrail-rail [data-tool="settings"]').click();
+      await page.locator('#toolrail-settings-toolbar').selectOption('t1');
+      const load = page.locator('.toolrail-settings-sharedrow', { hasText: name }).locator('.toolrail-settings-sharedload');
+      // The name says which toolbar Load fills, as an own set's Load does.
+      await expect(load).toHaveAttribute('aria-label', `Load the set ${name}, shared by ${users.author.displayName}, into Animation`);
+      await load.click();
+      await expect(page.locator('#toolrail-settings-status')).toHaveText(`Loaded "${name}" into the Animation toolbar.`);
+      await expect.poll(() => liveText(page)).toContain(`Loaded "${name}" into the Animation toolbar.`);
+      expect(await railPins(page, 'toolrail-rail-t1')).toEqual(['pin:core/quote', 'pin:core/list']);
+      expect(await railPins(page, 'toolrail-rail')).toEqual(mainBefore);
+      expect(await page.evaluate(() => window.toolrail.getPinMeta('core/quote').title)).toBe('Shared quote');
+      expect(await page.evaluate(() => window.toolrail.getPinMeta('core/verse').title)).toBe('My verse');
+
+      // With the main toolbar chosen, the name is the main toolbar's.
+      await page.locator('#toolrail-settings-toolbar').selectOption('main');
+      await expect(page.locator('.toolrail-settings-sharedrow', { hasText: name }).locator('.toolrail-settings-sharedload'))
+        .toHaveAttribute('aria-label', `Load the set ${name}, shared by ${users.author.displayName}, into Main toolbar`);
+      await page.keyboard.press('Escape');
+    } finally {
+      await context.close();
+      await unshareAll('author');
+    }
+  });
+
+  test('the Saved sets menu loads a shared set into the main toolbar, with an extra toolbar shown (#95)', async ({ browser }) => {
+    const name = `into main ${tag}`;
+    await shareAs('author', setJson(name, ['core/quote', 'core/list']));
+    const { context, page } = await editorAs(browser, 'author2');
+    try {
+      await seedExtraToolbar(page, ['core/verse']);
+      const setsBtn = page.locator('#toolrail-rail [data-tool="saved-sets"]');
+      await expect(setsBtn).toBeVisible({ timeout: 15000 });
+      await setsBtn.click();
+      const item = page.locator('.toolrail-flyout[aria-label="Saved sets"] [role="menuitemradio"]', { hasText: name });
+      await item.click();
+      await expect.poll(() => liveText(page)).toBe(`Loaded "${name}".`);
+      await expect(setsBtn).toBeFocused();
+      expect(await railPins(page, 'toolrail-rail')).toEqual(['pin:core/quote', 'pin:core/list']);
+      expect(await railPins(page, 'toolrail-rail-t1')).toEqual(['pin:core/verse']);
+      // The check mark follows the main toolbar's pins.
+      await setsBtn.click();
+      await expect(item).toHaveAttribute('aria-checked', 'true');
+      await page.keyboard.press('Escape');
+    } finally {
+      await context.close();
+      await unshareAll('author');
+    }
+  });
+
   test('another author\'s pattern in a shared set loads with the not-available message', async ({ browser }) => {
     test.slow(); // two browser contexts and two editor loads, each waiting for the pattern catalog
     // A published pattern of the Author's. Core lists a pattern in the
