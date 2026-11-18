@@ -38,7 +38,10 @@ test.describe('end-of-test save wait (#113)', () => {
     // the account 3 s later, sent from the test with the page's nonce.
     const late = page.request;
     let applied = Promise.resolve();
-    let appliedAt = 0;
+    // When the held write is SENT to the server. The account can show the new
+    // value before the response is read, so the time of the response is not
+    // the time of the save (PR #122 review).
+    let sentAt = 0;
     let applyError = null;
     await page.route(isPrefsWrite, async (route) => {
       const req = route.request();
@@ -56,14 +59,16 @@ test.describe('end-of-test save wait (#113)', () => {
       const call = { url: req.url(), method: req.method(), headers, data: req.postData() };
       applied = applied
         .then(() => new Promise((r) => setTimeout(r, 3000)))
-        .then(() => late.fetch(call.url, { method: call.method, headers: call.headers, data: call.data }))
+        .then(() => {
+          sentAt = Date.now();
+          return late.fetch(call.url, { method: call.method, headers: call.headers, data: call.data });
+        })
         .then((response) => {
           // A refused write must fail HERE, with its status, not later as a
           // missing key (PR #122 review).
           if (!response.ok()) {
             throw new Error(`the late save was refused: HTTP ${response.status()}`);
           }
-          appliedAt = Date.now();
         })
         .catch((error) => { applyError = error; });
       await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
@@ -74,11 +79,13 @@ test.describe('end-of-test save wait (#113)', () => {
       const result = await waitForAccountSaves([page.context()], 20000);
       const returnedAt = Date.now();
 
-      expect(applyError, 'the late save reached the server').toBeNull();
       expect(result.pending).toEqual([]);
-      // It returned only after the late save was on the server.
-      expect(appliedAt).toBeGreaterThan(0);
-      expect(returnedAt).toBeGreaterThanOrEqual(appliedAt);
+      // It returned only after the held write was sent, 3 s after the page
+      // saved: before that, the account held the old value.
+      expect(sentAt).toBeGreaterThan(0);
+      expect(returnedAt).toBeGreaterThanOrEqual(sentAt);
+      await applied;
+      expect(applyError, 'the late save reached the server').toBeNull();
       const scope = (await readPrefs(await apiForPage(page))).toolrail || {};
       expect(scope['toolrail-ext:e2e:late-save']).toBe('1');
     } finally {

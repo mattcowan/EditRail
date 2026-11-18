@@ -179,13 +179,25 @@ function sameScopeJSON(a, b) {
  *
  * @param {import('@playwright/test').BrowserContext[]} contexts Contexts to check.
  * @param {number} timeoutMs How long to wait.
- * @return {Promise<{waitedMs: number, restReads: number, pending: Array}>}
- *   `pending` is empty when every save has landed.
+ * @return {Promise<{waitedMs: number, restReads: number, pending: Array, unanswered: boolean}>}
+ *   `pending` is empty when every save has landed. `unanswered` is true
+ *   when an open page never answered, so its saves could not be checked.
  */
 async function waitForAccountSaves(contexts, timeoutMs) {
   const names = { prefix: LOCAL_PREFS_PREFIX, slot: STAMPS_AT_LOAD };
   const started = Date.now();
   const deadline = started + timeoutMs;
+  // Each probe gets at most the time that is left. page.evaluate() and a
+  // request have no timeout of their own, and this runs in a fixture's
+  // teardown, which the test timeout does not cut off: a hung page held
+  // the wait past its deadline (PR #122 review).
+  const bounded = (promise) => {
+    let timer;
+    const limit = new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('probe timed out')), Math.max(1, deadline - Date.now()));
+    });
+    return Promise.race([promise, limit]).finally(() => clearTimeout(timer));
+  };
   const apis = new Map();
   let restReads = 0;
   let pending = [];
@@ -198,7 +210,7 @@ async function waitForAccountSaves(contexts, timeoutMs) {
       let answered = false;
       for (const page of pages) {
         try {
-          const copies = await page.evaluate(localPrefsSavedHere, names);
+          const copies = await bounded(page.evaluate(localPrefsSavedHere, names));
           answered = true;
           // A page with no storage (about:blank, an opaque origin) answers
           // with no copies. It must not stand for the editor page beside
@@ -224,14 +236,14 @@ async function waitForAccountSaves(contexts, timeoutMs) {
       let copiesNow = null;
       try {
         if (!apis.has(context)) {
-          apis.set(context, await apiForPage(saved.page));
+          apis.set(context, await bounded(apiForPage(saved.page)));
         }
-        prefs = await readPrefs(apis.get(context));
+        prefs = await bounded(readPrefs(apis.get(context)));
         restReads += 1;
         // Read the local copies again: a store change during the account
         // read wrote a newer copy, and the account answer is then older
         // than the page's last save (PR #122 review).
-        copiesNow = await saved.page.evaluate(localPrefsSavedHere, names);
+        copiesNow = await bounded(saved.page.evaluate(localPrefsSavedHere, names));
       } catch (e) {
         // The page closed under us, or one read failed; the next pass
         // decides.
@@ -249,7 +261,7 @@ async function waitForAccountSaves(contexts, timeoutMs) {
     // hangs; the test's own result reports that).
     const answered = !unanswered || Date.now() - started >= UNANSWERED_MS;
     if ((!pending.length && answered) || Date.now() >= deadline) {
-      return { waitedMs: Date.now() - started, restReads, pending };
+      return { waitedMs: Date.now() - started, restReads, pending, unanswered };
     }
     await new Promise((r) => setTimeout(r, 250));
   }
@@ -449,7 +461,9 @@ async function openNewPost(page, opts) {
   // A boot save that has not landed could reach the account after the
   // reset and replace it, and a page on BASELINE does not save again to put
   // that right. So setup stops here (PR #122 review).
-  if (boot.pending.length) {
+  // A page that never answered could not be checked, so the reset is not
+  // safe either (PR #122 review).
+  if (boot.pending.length || boot.unanswered) {
     throw new Error(`openNewPost: after ${boot.waitedMs} ms the account still did not hold the first load's preference save, or the page stopped answering, so the reset would not be safe: ${JSON.stringify(boot.pending)}.`);
   }
 
