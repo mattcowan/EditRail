@@ -24,7 +24,7 @@
  * own. The plugin's own `toolrail-*` localStorage fallback keys are out of
  * PHP's reach. Only four of them are ever lifted back into the account
  * (position, pins, saved sets, migration stamp — migrateLocalToPrefs in
- * assets/editor-rail.js; colors and the help/inserter toggles stay gone),
+ * assets/editor-rail-core.js; colors and the help/inserter toggles stay gone),
  * and since 0.1.25 the rail deletes a browser's copy of those four the
  * first time it boots against an account that already holds them, so a
  * browser in regular use has nothing left to lift after a delete +

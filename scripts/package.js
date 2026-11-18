@@ -36,8 +36,11 @@ if (!fs.existsSync(distignorePath)) {
 const ig = ignore().add(fs.readFileSync(distignorePath, 'utf8'));
 
 // Preflight: the main file does an unconditional require_once on the
-// includes, and enqueues the two assets — a zip without any of these
-// fatals on activation or mounts nothing.
+// includes, and enqueues the assets — a zip without any of these fatals
+// on activation or mounts nothing. The rail's scripts are the files that
+// toolrail_rail_scripts() in includes/rail.php registers (#102): when one
+// is missing, WordPress drops `toolrail-editor-rail` and every provider
+// script that depends on it.
 const requiredFiles = [
   'editrail.php',
   'readme.txt',
@@ -45,6 +48,12 @@ const requiredFiles = [
   'includes/rail.php',
   'uninstall.php',
   'includes/uninstall.php',
+  'assets/editor-rail-core.js',
+  'assets/editor-rail-registry.js',
+  'assets/editor-rail-tools.js',
+  'assets/editor-rail-settings.js',
+  'assets/editor-rail-overview.js',
+  'assets/editor-rail-dom.js',
   'assets/editor-rail.js',
   'assets/editor-rail.css',
 ];

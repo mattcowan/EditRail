@@ -67,7 +67,9 @@ Every action has a keyboard path, and screen readers hear every state change. Dr
 
 ## How it works
 
-**The toolbar is plain DOM inside the editor's own layout.** `assets/editor-rail.js` inserts the toolbar into the editor's skeleton, so the canvas reflows around it and is not under it. The toolbar lives outside the React tree, and a debounced MutationObserver puts it back when the editor re-renders. That is why it survives the round trip through the code editor.
+**The toolbar is plain DOM inside the editor's own layout.** `assets/editor-rail-dom.js` inserts the toolbar into the editor's skeleton, so the canvas reflows around it and is not under it. The toolbar lives outside the React tree, and a debounced MutationObserver puts it back when the editor re-renders. That is why it survives the round trip through the code editor.
+
+**The JavaScript is seven files that load in a fixed order.** `includes/rail.php` registers them, and each file is a dependency of the next. `assets/editor-rail.js` is the last file. It sets `window.toolrail` and starts the toolbar. Its handle, `toolrail-editor-rail`, is the handle that a provider depends on. While they load, the files share names through `window.toolrailInternal`. This object is private: its names can change in any release. The last file removes it from `window` when all seven files have run, so an extension cannot use it. The header comment of each file tells which part of the toolbar it holds. The start of each file lists the names that it uses from the files before it.
 
 **A tool arms.** The active tool is a mode, not an action. The next click in the canvas resolves where the block goes, inserts it with the editor's own insert action, and returns the toolbar to Select. The saved post is what the inserter would have written. Ctrl+Enter is the keyboard form of the click. It puts the block after the selected block, which is where the inserter puts it. Like the inserter, it replaces a selected empty paragraph.
 
@@ -77,7 +79,7 @@ Every action has a keyboard path, and screen readers hear every state change. Dr
 
 **The sidebar width is an opt-in stylesheet override.** It is off until the author turns it on in Toolbar settings; while it is off there is no handle and no override. The handle sits in the sidebar region of the editor's skeleton, next to the canvas. A width other than core's 280px sets one custom property and one body class, and the stylesheet overrides the sidebar's width from there. At 280px, and below the 782px breakpoint where core shows the sidebar full screen, nothing is overridden. The canvas and a docked toolbar are in the same flex row, so they take the space that is left.
 
-**The plugin emits nothing for the front end.** It registers one script and one stylesheet, for the post editor only. It has no REST routes, no shortcodes, no blocks of its own, and no output on the public site.
+**The plugin emits nothing for the front end.** It registers seven scripts and one stylesheet, for the post editor only. It has no REST routes, no shortcodes, no blocks of its own, and no output on the public site.
 
 ## Extending
 
