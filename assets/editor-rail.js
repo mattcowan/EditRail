@@ -661,6 +661,13 @@
       // preferences persistence layer, and nothing consumes `position`
       // before mount anyway.
       position: { dock: DEFAULT_DOCK, x: 24, y: 24 },
+      // An extra toolbar's floating offsets as STORED in its record.
+      // `position` holds the painted offsets, which applyFloatPosition()
+      // clamps into the window; only a move of this toolbar
+      // (savePosition) or a stored change (syncToolbars) changes these,
+      // so a save for a different toolbar never stores a clamp. The first
+      // toolbar does not use them: only its own moves write its key.
+      stored: { x: 24, y: 24 },
       // Every React root created for a pinned-block icon, so the previous
       // generation can be unmounted. A discarded root keeps its fiber tree
       // alive, and the rail rebuilds on every slot change (the ↑/↓ buttons
@@ -706,6 +713,8 @@
     if (tb === mainToolbar) {
       writeKey(POSITION_KEY, JSON.stringify(tb.position));
     } else {
+      // This toolbar moved: its painted offsets become its stored ones.
+      tb.stored = { x: tb.position.x, y: tb.position.y };
       saveToolbars();
     }
   }
@@ -926,14 +935,32 @@
       rec.id = tb.id;
       rec.name = tb.name;
       rec.dock = tb.position.dock;
-      rec.x = tb.position.x;
-      rec.y = tb.position.y;
+      // The STORED offsets, not the painted ones: applyFloatPosition()
+      // clamps tb.position into a narrow window, and a save made for a
+      // different toolbar wrote that clamp as this toolbar's place
+      // (PR #126 review, CodeRabbit). savePosition() updates them when
+      // the author moves this toolbar.
+      rec.x = tb.stored.x;
+      rec.y = tb.stored.y;
       rec.slots = tb.slots.slice();
       rec.wide = tb.wide;
       rec.hidden = tb.hidden;
       return rec;
     });
-    writeKey(TOOLBARS_KEY, JSON.stringify({ version: 1, toolbars: list.concat(split.leftOut) }));
+    // A left-out record with the id of a toolbar the author just deleted
+    // (shown before, not in `toolbars` now) is a duplicate of it. Kept, it
+    // would be the next record the reader accepts for that id, and the
+    // deleted toolbar would come back with its pins (PR #126 review,
+    // CodeRabbit). It goes with the toolbar. Other left-out records stay.
+    var known = Object.create(null);
+    toolbars.forEach(function (tb) {
+      known[tb.id] = true;
+    });
+    var leftOut = split.leftOut.filter(function (rec) {
+      var id = rec && typeof rec === 'object' ? rec.id : null;
+      return !(typeof id === 'string' && stored[id] && !known[id]);
+    });
+    writeKey(TOOLBARS_KEY, JSON.stringify({ version: 1, toolbars: list.concat(leftOut) }));
     // This page's own change is already in the objects, so the next
     // syncToolbars() has nothing to do for it. The signature is built
     // from the objects, not read back: when a delete makes room for a
@@ -944,8 +971,8 @@
         id: tb.id,
         name: tb.name,
         dock: tb.position.dock,
-        x: tb.position.x,
-        y: tb.position.y,
+        x: tb.stored.x,
+        y: tb.stored.y,
         slots: tb.slots,
         wide: tb.wide,
         hidden: tb.hidden
@@ -1074,6 +1101,9 @@
     toolbarsSynced = signature;
 
     var changed = false;
+    // Offsets alone changed: no rebuild, but the layout moved, so
+    // listeners still hear of it (PR #126 review, CodeRabbit).
+    var moved = false;
     var next = [mainToolbar];
     records.forEach(function (rec) {
       var tb = toolbarById(rec.id);
@@ -1087,11 +1117,18 @@
         || (!dragging && tb.position.dock !== rec.dock)) {
         removeToolbarRegion(tb);
         changed = true;
+        // removeToolbarRegion() ends a drag of this toolbar. A drag that
+        // ended no longer owns the position, so the stored one applies
+        // (PR #126 review, CodeRabbit).
+        dragging = !!drag && drag.toolbar === tb;
+      } else if (!dragging && (tb.stored.x !== rec.x || tb.stored.y !== rec.y)) {
+        moved = true;
       }
       tb.name = rec.name;
       tb.slots = rec.slots;
       tb.wide = rec.wide;
       tb.hidden = rec.hidden;
+      tb.stored = { x: rec.x, y: rec.y };
       if (!dragging) {
         tb.position.dock = rec.dock;
         tb.position.x = rec.x;
@@ -1115,6 +1152,13 @@
       if (!toolbarById(settingsToolbarId)) {
         settingsToolbarId = mainToolbar.id;
       }
+      // An open Toolbars menu shows the old list: a checked item would
+      // now do the opposite of what it says. Close it, and keep the
+      // focus on its button when the focus was in it (PR #126 review,
+      // CodeRabbit).
+      if (openFlyout && openFlyout.parentBtn.dataset.tool === TOOLBAR_LIST_TOOL_ID) {
+        closeFlyout(openFlyout.node.contains(document.activeElement));
+      }
       mountToolbars();
       syncLayers();
       // A provider tool under a pin of a changed toolbar can move to or
@@ -1124,14 +1168,21 @@
       // toolbar exists.
       reconcileToolbarsButton();
       disarmIfToolGone();
+    }
+    // Paint every floating toolbar BEFORE the events below, so a
+    // listener that measures the layout sees the new boxes (PR #126
+    // review, CodeRabbit). A toolbar whose offsets alone changed keeps
+    // its region.
+    toolbars.forEach(applyFloatPosition);
+    if (changed || reordered || moved) {
       announceToolbarsChange('', 'synced');
+    }
+    if (changed || reordered) {
       if (settingsOpen) {
         refreshSettings();
       }
       placeOpenDialogs();
     }
-    // A floating toolbar whose offsets alone changed keeps its region.
-    toolbars.forEach(applyFloatPosition);
     return changed || reordered;
   }
 
@@ -1170,6 +1221,7 @@
     tb.position.dock = mainToolbar.position.dock;
     tb.position.x = mainToolbar.position.x + 24 * toolbars.length;
     tb.position.y = mainToolbar.position.y + 24 * toolbars.length;
+    tb.stored = { x: tb.position.x, y: tb.position.y };
     toolbars.push(tb);
     saveToolbars();
     mount(tb);
@@ -4629,6 +4681,25 @@ var DASHICON_NAMES = [
   }
 
   /**
+   * One top-level tool or pin of ONE toolbar's model, by id: the entry
+   * that toolbar's button was built from, with that toolbar's flyout.
+   *
+   * @param {Object} tb The toolbar.
+   * @param {string} id Tool id.
+   * @return {Object|null} The model entry, or null.
+   */
+  function modelTool(tb, id) {
+    var model = railModel(tb);
+    var all = model.tools.concat(model.slots);
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].id === id) {
+        return all[i];
+      }
+    }
+    return null;
+  }
+
+  /**
    * One tool by id, searched across top-level tools, pinned slots and
    * every flyout child.
    *
@@ -5796,6 +5867,28 @@ var DASHICON_NAMES = [
       var overshootX = rect.right - window.innerWidth + 8;
       if (overshootX > 0) {
         node.style.left = Math.max(0, parseFloat(node.style.left) - overshootX) + 'px';
+      }
+    }
+
+    // A dialog that opens past a stack of toolbars can start beyond the
+    // window: four wide toolbars on the left take 800px. The dialog is the
+    // way to undo that layout, so it is pulled back into the window on
+    // the dock's own axis too, over part of the stack when it must
+    // (PR #126 review, CodeRabbit). Flyouts are not moved: they open next
+    // to their own toolbar.
+    if (pastStack) {
+      rect = node.getBoundingClientRect();
+      var maxRight = window.innerWidth - 8;
+      var maxBottom = window.innerHeight - 8;
+      var dock = tb.position.dock;
+      if (dock === 'right' && rect.left < 8) {
+        node.style.right = Math.round(wrapperRect.right - 8 - rect.width) + 'px';
+      } else if (dock === 'top' && rect.bottom > maxBottom) {
+        node.style.top = Math.round(maxBottom - rect.height - wrapperRect.top) + 'px';
+      } else if (dock === 'bottom' && rect.top < 8) {
+        node.style.bottom = Math.round(wrapperRect.bottom - 8 - rect.height) + 'px';
+      } else if (dock !== 'right' && dock !== 'top' && dock !== 'bottom' && rect.right > maxRight) {
+        node.style.left = Math.round(Math.max(8, maxRight - rect.width) - wrapperRect.left) + 'px';
       }
     }
   }
@@ -12323,20 +12416,23 @@ var DASHICON_NAMES = [
   }
 
   /**
-   * How far from an edge a toolbar lands when it docks there: the room
-   * the toolbars BEFORE it in toolbar order already take on that edge.
-   * Each later toolbar sits between the one before it and the canvas
-   * (placeToolbarRegions), so the snap preview shows that place (#95).
+   * The room the docked toolbars on an edge take, counting only those
+   * BEFORE a toolbar in toolbar order, or only those AFTER it. Each later
+   * toolbar sits between the one before it and the canvas
+   * (placeToolbarRegions), so the snap preview can show where a toolbar
+   * lands (#95).
    *
-   * @param {Object} tb   The toolbar being dragged.
-   * @param {string} edge 'left', 'right', 'top' or 'bottom'.
-   * @return {number} The offset in px, 0 or more.
+   * @param {Object}  tb    The toolbar being dragged.
+   * @param {string}  edge  'left', 'right', 'top' or 'bottom'.
+   * @param {boolean} after Count the toolbars after tb, not before it.
+   * @return {number} The size in px, 0 or more.
    */
-  function edgeOffset(tb, edge) {
+  function edgeOffset(tb, edge, after) {
     var offset = 0;
     var index = toolbars.indexOf(tb);
     toolbars.forEach(function (other, i) {
-      var region = i < index && other.position.dock === edge ? document.getElementById(other.regionId) : null;
+      var counts = after ? i > index : i < index;
+      var region = counts && other.position.dock === edge ? document.getElementById(other.regionId) : null;
       if (region) {
         var r = region.getBoundingClientRect();
         offset += edge === 'top' || edge === 'bottom' ? r.height : r.width;
@@ -12366,18 +12462,26 @@ var DASHICON_NAMES = [
     }
     var r = body.getBoundingClientRect();
     var box = { left: r.left, top: r.top, width: r.width, height: r.height };
-    var offset = tb ? edgeOffset(tb, edge) : 0;
+    // The left and right docks hang INSIDE __body, so its edge is the
+    // editor's edge and the toolbars before tb push the band inward. The
+    // top and bottom docks hang OUTSIDE __body, in __editor, so its edge
+    // is already past every docked bar there: tb lands next to __body,
+    // past only the bars that come AFTER it in toolbar order (PR #126
+    // review, CodeRabbit: counting the ones before it put the band one
+    // bar too far).
     if (edge === 'left') {
-      box.left = r.left + offset;
+      box.left = r.left + (tb ? edgeOffset(tb, edge, false) : 0);
       box.width = RAIL_BAND;
     } else if (edge === 'right') {
-      box.left = r.right - RAIL_BAND - offset;
+      box.left = r.right - RAIL_BAND - (tb ? edgeOffset(tb, edge, false) : 0);
       box.width = RAIL_BAND;
     } else if (edge === 'top') {
-      box.top = r.top + offset;
+      // At __body's top, where the bar lands as __body moves down for it
+      // (the band as it was with one toolbar), above the later bars.
+      box.top = r.top - (tb ? edgeOffset(tb, edge, true) : 0);
       box.height = RAIL_BAND;
     } else {
-      box.top = r.bottom - RAIL_BAND - offset;
+      box.top = r.bottom - RAIL_BAND + (tb ? edgeOffset(tb, edge, true) : 0);
       box.height = RAIL_BAND;
     }
     el.style.left = box.left + 'px';
@@ -12632,10 +12736,11 @@ var DASHICON_NAMES = [
     if (isArmingTool(tool)) {
       btn.draggable = true;
       btn.addEventListener('dragstart', function (e) {
-        onToolDragStart(e, tool);
+        onToolDragStart(e, tool, tb);
       });
       btn.addEventListener('dragend', function () {
         railDragActive = false;
+        railDragToolbar = null;
       });
     }
 
@@ -13142,9 +13247,14 @@ var DASHICON_NAMES = [
         var toolId = btns[idx].dataset.tool;
         // The Saved sets and Toolbars buttons are rail chrome, not
         // registered tools, so findTool() does not know them.
+        // A tool is looked up in THIS toolbar's model: the same pin can
+        // have a different flyout on two toolbars (a provider child can
+        // nest under a provider tool on the first toolbar and under the
+        // pin on an extra one), and the page-wide findTool() returns the
+        // first toolbar's (PR #126 review, CodeRabbit).
         var tool = toolId === SETS_TOOL_ID ? setsMenuTool(wrapper)
           : toolId === TOOLBAR_LIST_TOOL_ID ? toolbarsMenuTool()
-            : findTool(toolId);
+            : modelTool(tb, toolId);
         // Same gate as the click path: a fully dimmed container offers
         // no flyout by keyboard either (review 2026-08-29).
         if (tool && tool.children && tool.children.length && buttonAvailable(tool)) {
@@ -13256,14 +13366,24 @@ var DASHICON_NAMES = [
    * One for the page, not one for each toolbar (see newToolbar): the
    * browser runs one drag at a time, and the flag says where that drag
    * STARTED, which is what a region's dragover asks.
+   *
+   * With several toolbars (#95), only a rebuild of the toolbar the drag
+   * started on clears it (railDragToolbar): that rebuild is what can
+   * detach the source. A rebuild of a different toolbar left the drag
+   * unguarded, and a drop on a third toolbar then pinned the tool there
+   * (PR #126 review, CodeRabbit).
    */
   var railDragActive = false;
+  // The toolbar whose tool is mid-drag, or null.
+  var railDragToolbar = null;
 
   document.addEventListener('dragend', function () {
     railDragActive = false;
+    railDragToolbar = null;
   }, true);
   document.addEventListener('drop', function () {
     railDragActive = false;
+    railDragToolbar = null;
   }, true);
 
   /**
@@ -13274,9 +13394,10 @@ var DASHICON_NAMES = [
    *
    * @param {DragEvent} e    The dragstart.
    * @param {Object}    tool The tool's model entry.
+   * @param {Object}    tb   The toolbar the tool's button is on.
    * @return {void}
    */
-  function onToolDragStart(e, tool) {
+  function onToolDragStart(e, tool, tb) {
     if (!e.dataTransfer || !toolAvailable(tool)) {
       e.preventDefault();
       return;
@@ -13288,11 +13409,13 @@ var DASHICON_NAMES = [
     }
     closeFlyout(false);
     railDragActive = true;
+    railDragToolbar = tb || null;
     try {
       e.dataTransfer.setData('wp-blocks', JSON.stringify({ type: 'inserter', blocks: blocks }));
       e.dataTransfer.effectAllowed = 'copy';
     } catch (err) {
       railDragActive = false;
+      railDragToolbar = null;
       e.preventDefault();
     }
   }
@@ -13726,6 +13849,14 @@ var DASHICON_NAMES = [
             singleTitle
           ),
           function () {
+            // A stored change can delete the toolbar while the dialog is
+            // open; a pin on a deleted object is lost in silence. Pin to
+            // the first toolbar then, and the message says which, the
+            // same rule as the pattern save below (PR #126 review,
+            // CodeRabbit).
+            if (toolbars.indexOf(target) === -1) {
+              target = mainToolbar;
+            }
             pinBlock(target, single.name);
             speak(target === mainToolbar
               ? sprintf(
@@ -14059,7 +14190,12 @@ var DASHICON_NAMES = [
     if (!wrapper) {
       return;
     }
-    railDragActive = false;
+    // Only this toolbar's rebuild can detach the drag source (see
+    // railDragActive). With no recorded source, as before #95.
+    if (!railDragToolbar || railDragToolbar === tb) {
+      railDragActive = false;
+      railDragToolbar = null;
+    }
     var oldRail = document.getElementById(tb.railId);
     var hadFocus = !!(oldRail && oldRail.contains(document.activeElement));
     var focusedTool = hadFocus && document.activeElement.dataset
