@@ -91,7 +91,8 @@ const TOOLRAIL_SHARED_SET_REST_BASE      = 'sets';
  * - per_author: shared sets one user can have on a site. Every share is a
  *   post and every editor load lists them all, so one account (or a script
  *   with its cookie) must not be able to fill the table.
- * - list: the most sets one list response holds, oldest first.
+ * - list: the most sets one list response holds. Past it, the newest are
+ *   kept and the oldest are left out.
  *
  * Pure.
  *
@@ -476,7 +477,9 @@ function toolrail_shared_set_unpack($content) {
 /**
  * The post_name of one author's shared copy of one set: a hash, so that it
  * is unique without core's numbered-suffix loop (one query per taken
- * suffix) and says nothing about the set. Pure.
+ * suffix) and says nothing about the set. It is a name for the row, not
+ * the way a row is found: toolrail_shared_set_find_own() matches the
+ * stored set name, because a row can carry a different slug. Pure.
  *
  * @param int    $user_id The author.
  * @param string $name    The normalized set name.
@@ -697,7 +700,8 @@ function toolrail_shared_set_response($post) {
 }
 
 /**
- * GET /editrail/v1/sets: every valid shared set on this site, oldest first,
+ * GET /editrail/v1/sets: the valid shared sets on this site (the newest
+ * `list` of them), oldest first,
  * and whether the current user can share.
  *
  * @return WP_REST_Response
@@ -710,13 +714,17 @@ function toolrail_rest_list_shared_sets() {
         'post_status'            => 'publish',
         'posts_per_page'         => $limits['list'],
         'orderby'                => 'ID',
-        'order'                  => 'ASC',
+        // The NEWEST `list` sets, so that past the cap a new share still
+        // shows and the oldest drop out (PR #123 review). They are put
+        // back in oldest-first order below, which is the order the rail
+        // lists them in.
+        'order'                  => 'DESC',
         'no_found_rows'          => true,
         'update_post_meta_cache' => false,
         'update_post_term_cache' => false,
     ]);
     $sets = [];
-    foreach ($posts as $post) {
+    foreach (array_reverse($posts) as $post) {
         $item = toolrail_shared_set_response($post);
         if (null !== $item) {
             $sets[] = $item;
@@ -751,19 +759,26 @@ function toolrail_rest_get_shared_set($request) {
  * @return WP_Post|null
  */
 function toolrail_shared_set_find_own($user_id, $name) {
-    $posts = get_posts([
+    // Every published set of the author, oldest first, matched by the
+    // STORED name and not by the slug. The slug can differ from this
+    // author's hash in two cases, and a search by slug then missed the row,
+    // so a share of the same name made a second copy that no later share
+    // could reach (PR #123 review): two parallel first shares (core gives
+    // the second a "-2" suffix), and a set that core moved to this author
+    // when its first author was deleted with "attribute all content to".
+    // The list is small: the per-author cap, plus such strays.
+    $limits = toolrail_shared_set_limits();
+    $posts  = get_posts([
         'post_type'              => TOOLRAIL_SHARED_SET_TYPE,
         'post_status'            => 'publish',
         'author'                 => (int) $user_id,
-        'name'                   => toolrail_shared_set_slug($user_id, $name),
-        'posts_per_page'         => 5,
+        'posts_per_page'         => $limits['per_author'] + 25,
         'orderby'                => 'ID',
         'order'                  => 'ASC',
         'no_found_rows'          => true,
         'update_post_meta_cache' => false,
         'update_post_term_cache' => false,
     ]);
-    // The slug is a hash of the name: confirm with the stored name.
     foreach ($posts as $post) {
         $set = toolrail_shared_set_unpack($post->post_content);
         if (null !== $set && $set['name'] === $name) {
