@@ -752,13 +752,28 @@ function toolrail_rest_get_shared_set($request) {
 }
 
 /**
- * The current user's published copy of one set name, or null.
+ * The current user's published copy of one set name, or null: the oldest
+ * of toolrail_shared_set_own_copies().
  *
  * @param int    $user_id The author.
  * @param string $name    The normalized set name.
  * @return WP_Post|null
  */
 function toolrail_shared_set_find_own($user_id, $name) {
+    $copies = toolrail_shared_set_own_copies($user_id, $name);
+    return $copies ? $copies[0] : null;
+}
+
+/**
+ * Every published copy of one set name by one author, oldest first. There
+ * is normally one. Two parallel first shares can make two, and the share
+ * route then keeps the oldest and deletes the rest.
+ *
+ * @param int    $user_id The author.
+ * @param string $name    The normalized set name.
+ * @return WP_Post[]
+ */
+function toolrail_shared_set_own_copies($user_id, $name) {
     // Every published set of the author, oldest first, matched by the
     // STORED name and not by the slug. The slug can differ from this
     // author's hash in two cases, and a search by slug then missed the row,
@@ -779,13 +794,14 @@ function toolrail_shared_set_find_own($user_id, $name) {
         'update_post_meta_cache' => false,
         'update_post_term_cache' => false,
     ]);
+    $copies = [];
     foreach ($posts as $post) {
         $set = toolrail_shared_set_unpack($post->post_content);
         if (null !== $set && $set['name'] === $name) {
-            return $post;
+            $copies[] = $post;
         }
     }
-    return null;
+    return $copies;
 }
 
 /**
@@ -871,6 +887,14 @@ function toolrail_rest_share_set($request) {
     $item = $post ? toolrail_shared_set_response($post) : null;
     if (null === $item) {
         return new WP_Error('toolrail_set_not_saved', __('The set could not be shared. Try again.', 'editrail'), ['status' => 500]);
+    }
+    // Two parallel first shares of one name can leave two copies. Keep the
+    // one just written and delete the others, so other users never see two
+    // sets with one name and one of them stale (PR #123 review).
+    foreach (toolrail_shared_set_own_copies($user_id, $result['name']) as $copy) {
+        if ((int) $copy->ID !== (int) $id && current_user_can('delete_post', $copy->ID)) {
+            wp_delete_post($copy->ID, true);
+        }
     }
     $response = rest_ensure_response($item);
     $response->set_status($existing ? 200 : 201);
