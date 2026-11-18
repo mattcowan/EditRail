@@ -6,6 +6,12 @@
  * file must be registered, each dependency before the script that needs
  * it, and `toolrail-editor-rail` must come last and depend on all the
  * others, because providers depend on that handle alone.
+ *
+ * These tests read what tests/phpunit/bootstrap.php's stubs of
+ * wp_register_script() and wp_register_style() record. The stubs exist
+ * only when WordPress is not loaded. Under the real WordPress test
+ * library the record stays empty and every test here fails on a missing
+ * key: read the registrations from wp_scripts() there instead.
  */
 class Test_Rail extends WP_UnitTestCase {
 
