@@ -43,6 +43,9 @@ class Test_Uninstall extends WP_UnitTestCase {
             'toolrail'       => [
                 'toolrail-quick-slots' => '["core/paragraph","core/cover"]',
                 'toolrail-position'    => 'right',
+                // The Toolbars button's hide choice (#95), the second key
+                // that more than one toolbar adds to the scope.
+                'toolrail-toolbars-button-hidden' => '1',
                 // The extra toolbars (#95): one key for all of them, in
                 // the same scope, so the same strip removes them.
                 'toolrail-toolbars'    => '{"version":1,"toolbars":[{"id":"t1","name":"Animation","dock":"right","x":24,"y":24,"slots":["core/cover"],"wide":false,"hidden":false}]}',
@@ -74,6 +77,7 @@ class Test_Uninstall extends WP_UnitTestCase {
         // The fixture holds the extra toolbars' key (#95): the scope that
         // goes holds every toolbar's preferences.
         $this->assertArrayHasKey('toolrail-toolbars', $this->row_with_toolrail()['toolrail']);
+        $this->assertArrayHasKey('toolrail-toolbars-button-hidden', $this->row_with_toolrail()['toolrail']);
         $out = toolrail_uninstall_strip_preferences($this->row_with_toolrail(), self::NOW);
 
         $this->assertIsArray($out);

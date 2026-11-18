@@ -805,6 +805,12 @@
    * The stored value of TOOLBARS_KEY as an object, or null when it is not
    * there, cannot be parsed, or is not a version this code knows.
    *
+   * A value from a LATER version of the plugin therefore shows no extra
+   * toolbars here, and the first change that saves the list (an added
+   * toolbar) replaces it with a version 1 list. A downgrade can lose the
+   * extra toolbars that way. That is accepted: the first toolbar and its
+   * keys are never touched.
+   *
    * @return {Object|null} {version: 1, toolbars: Array}, or null.
    */
   function readToolbarStore() {
