@@ -9,8 +9,13 @@
  * on the value that was read, so a concurrent editor write is never
  * overwritten with a stale copy.
  *
+ * It also deletes every shared set (#98, `editrail_set` posts) of every
+ * status, forced past the trash, on every site of a network, switching to
+ * each network site and back, and touches no other post.
+ *
  * The fake usermeta store holds a LIST of row values per key, the way the
- * real table can (see bootstrap.php).
+ * real table can, and the fake posts store has one table per site (see
+ * bootstrap.php).
  */
 class Test_Uninstall extends WP_UnitTestCase {
 
@@ -33,6 +38,24 @@ class Test_Uninstall extends WP_UnitTestCase {
         $GLOBALS['toolrail_test_last_user_query'] = null;
         $GLOBALS['toolrail_test_last_site_query'] = null;
         $GLOBALS['toolrail_test_before_update']   = null;
+        $GLOBALS['toolrail_test_posts']           = [];
+        $GLOBALS['toolrail_test_blog_id']         = 1;
+        $GLOBALS['toolrail_test_blog_stack']      = [];
+        $GLOBALS['toolrail_test_switches']        = [];
+        $GLOBALS['toolrail_test_deleted_posts']   = [];
+        $GLOBALS['toolrail_test_queries']         = [];
+        $GLOBALS['wpdb']->posts                   = 'wp_posts';
+    }
+
+    /** A fake posts table with shared sets in every status, and a post of another type. */
+    private function posts_table() {
+        return [
+            10 => ['post_type' => 'editrail_set', 'post_status' => 'publish'],
+            11 => ['post_type' => 'editrail_set', 'post_status' => 'trash'],
+            12 => ['post_type' => 'editrail_set', 'post_status' => 'draft'],
+            13 => ['post_type' => 'post', 'post_status' => 'publish'],
+            14 => ['post_type' => 'wp_block', 'post_status' => 'publish'],
+        ];
     }
 
     /** A row shaped like a real one on the test site: core scopes plus ours. */
@@ -284,6 +307,84 @@ class Test_Uninstall extends WP_UnitTestCase {
 
     public function test_uninstall_with_nothing_to_do_returns_zero() {
         $this->assertSame(0, toolrail_uninstall());
+    }
+
+    // --- shared sets (#98) --------------------------------------------
+
+    public function test_uninstall_names_the_same_post_type_as_the_plugin() {
+        // The root uninstall.php loads only includes/uninstall.php, so the
+        // type is written out there; a rename on one side only would leave
+        // every shared set behind.
+        $src = file_get_contents(TOOLRAIL_PLUGIN_DIR . 'includes/uninstall.php');
+        $this->assertStringContainsString("'" . TOOLRAIL_SHARED_SET_TYPE . "'", $src);
+    }
+
+    public function test_delete_shared_sets_here_removes_every_status_and_nothing_else() {
+        $GLOBALS['toolrail_test_posts'] = ['wp_posts' => $this->posts_table()];
+
+        $count = toolrail_uninstall_delete_shared_sets_here();
+
+        $this->assertSame(3, $count);
+        // Trash and draft rows go too, and each delete is forced: never
+        // to the trash, so meta and revisions go with the post.
+        $this->assertSame(
+            [['wp_posts', 10, true], ['wp_posts', 11, true], ['wp_posts', 12, true]],
+            $GLOBALS['toolrail_test_deleted_posts']
+        );
+        $this->assertSame([13, 14], array_keys($GLOBALS['toolrail_test_posts']['wp_posts']));
+        $this->assertSame(["SELECT ID FROM wp_posts WHERE post_type = 'editrail_set'"], $GLOBALS['toolrail_test_queries']);
+    }
+
+    public function test_delete_shared_sets_single_site_switches_nothing() {
+        $GLOBALS['toolrail_test_posts'] = ['wp_posts' => $this->posts_table()];
+
+        $this->assertSame(3, toolrail_uninstall_delete_shared_sets());
+        $this->assertSame([], $GLOBALS['toolrail_test_switches']);
+        $this->assertNull($GLOBALS['toolrail_test_last_site_query']);
+    }
+
+    public function test_delete_shared_sets_visits_every_network_site_and_comes_back() {
+        $GLOBALS['toolrail_test_multisite'] = true;
+        $GLOBALS['toolrail_test_site_ids']  = [1, 2];
+        $GLOBALS['toolrail_test_posts']     = [
+            'wp_posts'   => $this->posts_table(),
+            'wp_2_posts' => [
+                20 => ['post_type' => 'editrail_set', 'post_status' => 'publish'],
+                21 => ['post_type' => 'page', 'post_status' => 'publish'],
+            ],
+            // A site that is not in the network listing is not visited.
+            'wp_3_posts' => [
+                30 => ['post_type' => 'editrail_set', 'post_status' => 'publish'],
+            ],
+        ];
+
+        $total = toolrail_uninstall_delete_shared_sets();
+
+        $this->assertSame(4, $total);
+        $this->assertSame([1, 2], $GLOBALS['toolrail_test_switches']);
+        // Back on the site uninstall started on, with no switch left open.
+        $this->assertSame(1, $GLOBALS['toolrail_test_blog_id']);
+        $this->assertSame([], $GLOBALS['toolrail_test_blog_stack']);
+        $this->assertSame('wp_posts', $GLOBALS['wpdb']->posts);
+        $this->assertSame([13, 14], array_keys($GLOBALS['toolrail_test_posts']['wp_posts']));
+        $this->assertSame([21], array_keys($GLOBALS['toolrail_test_posts']['wp_2_posts']));
+        $this->assertSame([30], array_keys($GLOBALS['toolrail_test_posts']['wp_3_posts']));
+        // The same "all sites" query the preferences pass makes.
+        $this->assertSame(0, $GLOBALS['toolrail_test_last_site_query']['number']);
+    }
+
+    public function test_uninstall_removes_the_shared_sets_and_the_preferences() {
+        $GLOBALS['toolrail_test_posts']     = ['wp_posts' => $this->posts_table()];
+        $GLOBALS['toolrail_test_user_meta'] = [
+            1 => ['wp_persisted_preferences' => [$this->row_with_toolrail()]],
+        ];
+
+        $total = toolrail_uninstall();
+
+        // The return value still counts preference rows only.
+        $this->assertSame(1, $total);
+        $this->assertArrayNotHasKey('toolrail', $this->rows(1)[0]);
+        $this->assertSame([13, 14], array_keys($GLOBALS['toolrail_test_posts']['wp_posts']));
     }
 
     public function test_root_uninstall_file_is_a_guarded_runner() {

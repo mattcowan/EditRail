@@ -2732,9 +2732,24 @@ var DASHICON_NAMES = [
     if (!Object.prototype.hasOwnProperty.call(map, name) || !Array.isArray(map[name])) {
       return false;
     }
+    applySet(map[name], loadConfigMeta()[name]);
+    return true;
+  }
+
+  /**
+   * Put one set on the rail: what loadConfig() does for a saved set, and
+   * what a shared set's load does with its copy (#98), so the two can
+   * never differ.
+   *
+   * @param {Array}       blocks The set's slots, in rail order.
+   * @param {Object|null} labels The set's label snapshot (normalizeSetMeta
+   *                             output), or null/undefined for none.
+   * @return {void}
+   */
+  function applySet(blocks, labels) {
     // saveSlots normalizes: a set stored by an older build, hand-edited,
     // or imported from a file can carry duplicates and non-strings.
-    saveSlots(map[name]);
+    saveSlots(blocks);
     var pinned = loadSlots();
     var pinMeta = loadPinMeta();
     var changed = [];
@@ -2753,7 +2768,6 @@ var DASHICON_NAMES = [
     // data merges per namespace, so a namespace the snapshot never saw
     // (an extension installed since the set was saved) is kept rather
     // than dropped. Slots the snapshot does not name keep what they have.
-    var labels = loadConfigMeta()[name];
     if (labels) {
       Object.keys(labels).forEach(function (slot) {
         if (pinned.indexOf(slot) === -1) {
@@ -2787,7 +2801,6 @@ var DASHICON_NAMES = [
     }
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
     rerender();
-    return true;
   }
 
   /**
@@ -2836,14 +2849,38 @@ var DASHICON_NAMES = [
   }
 
   /**
+   * The Saved sets menu item that matches the rail now: the user's own set
+   * from currentConfigName() first, then the first listed shared set (#98)
+   * with the same slots. One item at most, as the menu promises.
+   *
+   * @return {string} The item's id, or '' when nothing matches.
+   */
+  function currentSetMenuId() {
+    var own = currentConfigName();
+    if (own) {
+      return SETS_TOOL_ID + ':' + own;
+    }
+    var current = JSON.stringify(loadSlots());
+    var listed = listedSharedSets();
+    for (var i = 0; i < listed.length; i++) {
+      if (JSON.stringify(listed[i].blocks) === current) {
+        return SETS_TOOL_ID + '-shared-' + listed[i].id;
+      }
+    }
+    return '';
+  }
+
+  /**
    * Whether the rail shows the Saved sets button: the author has at
-   * least one saved set and has not hidden the button in Toolbar
-   * settings. With no set the menu would have nothing to switch to.
+   * least one saved set, or another user shares one (#98), and has not
+   * hidden the button in Toolbar settings. With no set the menu would
+   * have nothing to switch to.
    *
    * @return {boolean}
    */
   function isSetsButtonShown() {
-    return readKey(SETS_BUTTON_HIDDEN_KEY) !== '1' && Object.keys(loadConfigs()).length > 0;
+    return readKey(SETS_BUTTON_HIDDEN_KEY) !== '1'
+      && (Object.keys(loadConfigs()).length > 0 || listedSharedSets().length > 0);
   }
 
   /**
@@ -2926,6 +2963,17 @@ var DASHICON_NAMES = [
         name
       ));
     }
+    focusSetsButton();
+  }
+
+  /**
+   * Focus the rebuilt Saved sets button after a load from its menu, or
+   * Toolbar settings when the rebuilt rail has none (see
+   * loadConfigFromMenu).
+   *
+   * @return {void}
+   */
+  function focusSetsButton() {
     var btn = document.querySelector('#toolrail-rail ' + toolSelector(SETS_TOOL_ID)) || gearButton();
     if (btn) {
       btn.focus();
@@ -2937,7 +2985,8 @@ var DASHICON_NAMES = [
    * GETTER, read from storage on every access: the flyout reads them when
    * it opens, so a set saved, deleted or imported since the rail was
    * built shows without a rebuild, and the checked item follows the
-   * current pins.
+   * current pins. The author's own sets come first, then the sets other
+   * users share (#98), each named with who shared it.
    *
    * @param {HTMLElement} wrapper The rail region (for the settings dialog).
    * @return {Object} The tool descriptor.
@@ -2952,18 +3001,40 @@ var DASHICON_NAMES = [
     Object.defineProperty(tool, 'children', {
       enumerable: true,
       get: function () {
-        var current = currentConfigName();
+        var current = currentSetMenuId();
         var items = Object.keys(loadConfigs()).map(function (name) {
+          var id = SETS_TOOL_ID + ':' + name;
           return {
-            id: SETS_TOOL_ID + ':' + name,
-            label: name,
+            id: id,
+            // Text, never a mark alone: the author shares this set.
+            label: ownSharedCopy(name)
+              ? sprintf(
+                /* translators: %s: set name. */
+                __('%s (shared)', 'editrail'),
+                name
+              )
+              : name,
             radio: true,
-            checked: name === current,
+            checked: id === current,
             supports: { canvas: false },
             onActivate: function () {
               loadConfigFromMenu(name);
             }
           };
+        });
+        listedSharedSets().forEach(function (item) {
+          // '-shared-' not ':', so no set name can produce this id.
+          var sharedId = SETS_TOOL_ID + '-shared-' + item.id;
+          items.push({
+            id: sharedId,
+            label: sharedSetMenuLabel(item),
+            radio: true,
+            checked: sharedId === current,
+            supports: { canvas: false },
+            onActivate: function () {
+              loadSharedSetFromMenu(item.id);
+            }
+          });
         });
         items.push({
           // '-' not ':', so no set name can produce this id.
@@ -2979,6 +3050,656 @@ var DASHICON_NAMES = [
       }
     });
     return tool;
+  }
+
+  // -------------------------------------------------------------------
+  // Shared sets (#98). An author can share one of their saved sets with
+  // the other users of this site; every user who can edit posts sees the
+  // shared sets in Toolbar settings and in the Saved sets menu, marked as
+  // shared and named with who shared them, and can load or export them.
+  //
+  // The server keeps each shared set as a COPY in the set file format,
+  // one per author and set name (includes/shared-sets.php, which also
+  // decides who may share, read and stop sharing). A load applies that
+  // copy exactly as Load applies the user's own set (applySet), with the
+  // same message, and links nothing: the user's pins do not follow later
+  // changes. The author's own set and its shared copy are also separate:
+  // a change reaches other users only when the author shares the set
+  // again, which replaces the copy in place.
+  //
+  // Nothing here waits on the network. The list arrives once after boot
+  // and again each time Toolbar settings opens. Until it arrives, and
+  // whenever a request fails (no capability, offline, a server error),
+  // the rail and the dialog are exactly what they are without the
+  // feature. Set names and display names come from OTHER users, so they
+  // reach the DOM only through textContent and attribute values, never
+  // as markup.
+  // -------------------------------------------------------------------
+
+  var SHARED_SETS_PATH = '/editrail/v1/sets';
+  // The last list the server sent, normalized (normalizeSharedSet),
+  // oldest share first. A failed request keeps it.
+  var sharedSets = [];
+  // Whether the server says this user may share (publish_posts). False
+  // until the list arrives, so no Share button shows before then.
+  var canShareSets = false;
+  // The list request in flight, so a second caller joins it.
+  var sharedSetsRequest = null;
+  // A share or stop-sharing request is in flight. One at a time: a second
+  // press while the first is out does nothing.
+  var sharedSetBusy = false;
+
+  /**
+   * Whether wp.apiFetch is there. The rail declares it as a dependency,
+   * but a context without it must still boot.
+   *
+   * @return {boolean}
+   */
+  function canFetchSharedSets() {
+    return !!(wp.apiFetch && typeof wp.apiFetch === 'function');
+  }
+
+  /**
+   * Whether a string is a slot a set may hold: a block name or a pattern
+   * slot. The one grammar for a set file (importConfigPayload) and a
+   * shared set; includes/shared-sets.php applies the same one.
+   *
+   * @param {*} name Candidate slot.
+   * @return {boolean}
+   */
+  function isSetSlotName(name) {
+    return typeof name === 'string' && (BLOCK_NAME_PATTERN.test(name) || PATTERN_SLOT_PATTERN.test(name));
+  }
+
+  /**
+   * One list entry from the server, checked again here: the server
+   * validates, but this is what the rail renders and loads. `set` is the
+   * set file's JSON as text.
+   *
+   * @param {*} raw One entry of the response's `sets`.
+   * @return {Object|null} {id, name, blocks, labels, author, mine,
+   *                       canDelete}, or null when it is not a set.
+   */
+  function normalizeSharedSet(raw) {
+    if (!raw || typeof raw !== 'object' || typeof raw.set !== 'string') {
+      return null;
+    }
+    var id = typeof raw.id === 'number' && raw.id > 0 && Math.floor(raw.id) === raw.id ? raw.id : 0;
+    var parsed;
+    try {
+      parsed = JSON.parse(raw.set);
+    } catch (e) {
+      return null;
+    }
+    if (!id || !parsed || typeof parsed !== 'object' || !Array.isArray(parsed.blocks)
+      || typeof parsed.name !== 'string' || parsed.name.trim() === '') {
+      return null;
+    }
+    var blocks = normalizeSlots(parsed.blocks.filter(isSetSlotName));
+    return {
+      id: id,
+      name: parsed.name,
+      blocks: blocks,
+      labels: normalizeSetMeta(parsed.meta, blocks),
+      author: typeof raw.author === 'string' ? raw.author : '',
+      mine: raw.mine === true,
+      canDelete: raw.can_delete === true
+    };
+  }
+
+  /**
+   * A comparable form of a list, so a refresh that brings nothing new
+   * rebuilds nothing.
+   *
+   * @param {Array} list Normalized entries.
+   * @return {string}
+   */
+  function sharedSetsSignature(list) {
+    return JSON.stringify(list.map(function (item) {
+      return [item.id, item.name, item.blocks, item.labels, item.author, item.mine, item.canDelete];
+    }));
+  }
+
+  /**
+   * Take a list response: keep it, and when it changed what the user can
+   * see, add or remove the Saved sets button and redraw an open dialog.
+   *
+   * @param {*} body The response body: {can_share, sets}.
+   * @return {void}
+   */
+  function receiveSharedSets(body) {
+    var list = body && Array.isArray(body.sets)
+      ? body.sets.map(normalizeSharedSet).filter(Boolean)
+      : [];
+    var share = !!(body && body.can_share === true);
+    var changed = share !== canShareSets || sharedSetsSignature(list) !== sharedSetsSignature(sharedSets);
+    sharedSets = list;
+    canShareSets = share;
+    if (changed) {
+      reconcileSetsButton();
+      // Redraw an open dialog, but not from under the author: the redraw
+      // can hand focus back only to a control that has an id, and the row
+      // buttons (Load, Export, Unpin, the arrows) have none, so focus would
+      // jump to the search field. This list arrives on its own, a moment
+      // after the dialog opens; an author who is already on a row button
+      // keeps it, and the dialog shows the new list at its next redraw
+      // (any action in it) or when it opens again. A stale row still acts
+      // on its own copy, and a set that is gone answers "no longer shared".
+      var focused = document.activeElement;
+      var dialog = settingsOpen ? settingsNode() : null;
+      if (dialog && !(focused && dialog.contains(focused) && !focused.id)) {
+        refreshSettings();
+      }
+    }
+  }
+
+  /**
+   * Ask the server for the list. Never throws and never rejects: a failed
+   * request keeps the last list, and the rail goes on as it is.
+   *
+   * @return {Promise|null} Settles when the list is in, or null when
+   *                        apiFetch is not there.
+   */
+  function refreshSharedSets() {
+    if (!canFetchSharedSets()) {
+      return null;
+    }
+    if (sharedSetsRequest) {
+      return sharedSetsRequest;
+    }
+    try {
+      sharedSetsRequest = wp.apiFetch({ path: SHARED_SETS_PATH }).then(function (body) {
+        sharedSetsRequest = null;
+        receiveSharedSets(body);
+      }, function () {
+        sharedSetsRequest = null;
+      });
+    } catch (e) {
+      sharedSetsRequest = null;
+    }
+    return sharedSetsRequest;
+  }
+
+  /**
+   * The current user's own shared copy of one of their sets, or null.
+   *
+   * @param {string} name Set name.
+   * @return {Object|null}
+   */
+  function ownSharedCopy(name) {
+    for (var i = 0; i < sharedSets.length; i++) {
+      if (sharedSets[i].mine && sharedSets[i].name === name) {
+        return sharedSets[i];
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The shared sets listed under "Shared sets" and in the menu: every one
+   * except the user's own copies of sets they still have, which their own
+   * set's row and menu item stand for. A copy whose own set the author has
+   * deleted is still listed, so it can be loaded or stopped.
+   *
+   * @return {Array} Normalized entries.
+   */
+  function listedSharedSets() {
+    var own = loadConfigs();
+    return sharedSets.filter(function (item) {
+      return !(item.mine && Object.prototype.hasOwnProperty.call(own, item.name));
+    });
+  }
+
+  /**
+   * One shared set by its ID, from the last list.
+   *
+   * @param {number} id Post ID.
+   * @return {Object|null}
+   */
+  function findSharedSet(id) {
+    for (var i = 0; i < sharedSets.length; i++) {
+      if (sharedSets[i].id === id) {
+        return sharedSets[i];
+      }
+    }
+    return null;
+  }
+
+  /**
+   * "Shared by <name>", the visible mark on a shared set.
+   *
+   * @param {Object} item A normalized entry.
+   * @return {string}
+   */
+  function sharedByText(item) {
+    if (item.mine) {
+      return __('Shared by you', 'editrail');
+    }
+    return item.author
+      ? sprintf(
+        /* translators: %s: display name of the user who shared the set. */
+        __('Shared by %s', 'editrail'),
+        item.author
+      )
+      : __('Shared by another user', 'editrail');
+  }
+
+  /**
+   * A shared set's menu item text: the name and who shared it, so a
+   * shared set and one of the user's own sets with the same name are two
+   * different items to a screen reader too.
+   *
+   * @param {Object} item A normalized entry.
+   * @return {string}
+   */
+  function sharedSetMenuLabel(item) {
+    if (item.mine) {
+      return sprintf(
+        /* translators: %s: set name. */
+        __('%s (shared by you)', 'editrail'),
+        item.name
+      );
+    }
+    return item.author
+      ? sprintf(
+        /* translators: 1: set name, 2: display name of the user who shared it. */
+        __('%1$s (shared by %2$s)', 'editrail'),
+        item.name,
+        item.author
+      )
+      : sprintf(
+        /* translators: %s: set name. */
+        __('%s (shared by another user)', 'editrail'),
+        item.name
+      );
+  }
+
+  /**
+   * "shared by <name>", lower case, for inside the accessible names of a
+   * shared set's buttons, after the set name.
+   *
+   * @param {Object} item A normalized entry.
+   * @return {string}
+   */
+  function sharedByPhrase(item) {
+    if (item.mine) {
+      return __('shared by you', 'editrail');
+    }
+    return item.author
+      ? sprintf(
+        /* translators: %s: display name of the user who shared the set. */
+        __('shared by %s', 'editrail'),
+        item.author
+      )
+      : __('shared by another user', 'editrail');
+  }
+
+  /**
+   * Load a shared set from the Saved sets menu: the same as
+   * loadConfigFromMenu() for one of the user's own sets.
+   *
+   * @param {number} id Post ID.
+   * @return {void}
+   */
+  function loadSharedSetFromMenu(id) {
+    var item = findSharedSet(id);
+    if (item) {
+      applySet(item.blocks, item.labels);
+      speak(configLoadedMessage(item.name));
+    } else {
+      speak(__('That set is no longer shared.', 'editrail'));
+    }
+    focusSetsButton();
+  }
+
+  /**
+   * The set file payload of one of the user's own sets, as the server
+   * receives it on a share: the same object exportConfig() writes.
+   *
+   * @param {string} name Set name.
+   * @return {Object|null} Null when the set does not exist.
+   */
+  function ownSetPayload(name) {
+    var map = loadConfigs();
+    if (!Object.prototype.hasOwnProperty.call(map, name) || !Array.isArray(map[name])) {
+      return null;
+    }
+    return setFilePayload(name, map[name], loadConfigMeta()[name]);
+  }
+
+  /**
+   * Whether the author's own set differs from its shared copy, compared
+   * the way the server stores a set (valid slots, repeats collapsed,
+   * labels of the set's own slots), so "Share again" shows only when it
+   * would send something new.
+   *
+   * @param {string} name Set name.
+   * @param {Object} copy The shared copy (a normalized entry).
+   * @return {boolean}
+   */
+  function sharedCopyIsOlder(name, copy) {
+    var payload = ownSetPayload(name);
+    if (!payload) {
+      return false;
+    }
+    var blocks = normalizeSlots(payload.blocks.filter(isSetSlotName));
+    return JSON.stringify(blocks) !== JSON.stringify(copy.blocks)
+      || JSON.stringify(normalizeSetMeta(payload.meta, blocks)) !== JSON.stringify(copy.labels);
+  }
+
+  /**
+   * The text of a failed request, for the author: the server's own
+   * sentence when it sent one, else a general one.
+   *
+   * @param {*} err What apiFetch rejected with.
+   * @return {string}
+   */
+  function sharedSetErrorText(err) {
+    return err && typeof err.message === 'string' && err.message
+      ? err.message
+      : __('The server did not answer.', 'editrail');
+  }
+
+  /**
+   * Report the outcome of a share or stop-sharing request. The request is
+   * async, so the dialog can be closed by the time it settles; the same
+   * rule as reportImport(): an open dialog shows the message in its
+   * status line and speaks it, otherwise it is only spoken.
+   *
+   * @param {string}          message        Outcome text.
+   * @param {string|string[]} focusSelectors Where focus goes in the dialog.
+   * @return {void}
+   */
+  function reportSharedSet(message, focusSelectors) {
+    if (!settingsOpen || !settingsNode()) {
+      speak(message);
+      return;
+    }
+    settingsStatus = message;
+    refreshSettings(focusSelectors);
+  }
+
+  /**
+   * Put one entry from a share response into the list, replacing an entry
+   * with the same ID (a share again keeps its ID).
+   *
+   * @param {Object} item A normalized entry.
+   * @return {void}
+   */
+  function storeSharedSet(item) {
+    var next = sharedSets.filter(function (existing) {
+      return existing.id !== item.id;
+    });
+    next.push(item);
+    next.sort(function (a, b) {
+      return a.id - b.id;
+    });
+    sharedSets = next;
+  }
+
+  /**
+   * A selector prefix for one of the user's own set rows in the dialog,
+   * for a focus target after a rebuild. attrValue() escapes quotes and
+   * backslashes; a name from a set file can also hold a control
+   * character, which a CSS string must escape as a code point or the
+   * selector does not parse.
+   *
+   * @param {string} name Set name.
+   * @return {string} The selector prefix, with a trailing space.
+   */
+  function setRowSelector(name) {
+    // eslint-disable-next-line no-control-regex -- matching control characters is the point: each one is escaped.
+    var value = attrValue(name).replace(/[\u0000-\u001f\u007f]/g, function (c) {
+      return '\\' + c.charCodeAt(0).toString(16) + ' ';
+    });
+    return '.toolrail-settings-setrow[data-config="' + value + '"] ';
+  }
+
+  /**
+   * Send a share or stop-sharing request and mark it in flight. An
+   * apiFetch that throws instead of rejecting must not leave the flag set,
+   * or every later press would do nothing.
+   *
+   * @param {Object} options apiFetch options.
+   * @return {Promise|null} The request, or null when it could not start.
+   */
+  function sendSharedSetRequest(options) {
+    var request;
+    try {
+      request = wp.apiFetch(options);
+    } catch (e) {
+      return null;
+    }
+    if (!request || typeof request.then !== 'function') {
+      return null;
+    }
+    sharedSetBusy = true;
+    return request;
+  }
+
+  /**
+   * Share one of the user's own sets, or share it again. Focus stays in
+   * the set's row: on Stop sharing, which every shared row has.
+   *
+   * @param {string} name Set name.
+   * @return {void}
+   */
+  function shareConfig(name) {
+    var payload = ownSetPayload(name);
+    if (sharedSetBusy || !payload || !canFetchSharedSets()) {
+      return;
+    }
+    var again = !!ownSharedCopy(name);
+    var row = setRowSelector(name);
+    var request = sendSharedSetRequest({
+      path: SHARED_SETS_PATH,
+      method: 'POST',
+      data: { set: JSON.stringify(payload) }
+    });
+    if (!request) {
+      return;
+    }
+    request.then(function (body) {
+      sharedSetBusy = false;
+      var item = normalizeSharedSet(body);
+      if (item) {
+        storeSharedSet(item);
+        reconcileSetsButton();
+      }
+      reportSharedSet(again
+        ? sprintf(
+          /* translators: %s: set name. */
+          __('Shared the set "%s" again. Other users on this site now get this version.', 'editrail'),
+          name
+        )
+        : sprintf(
+          /* translators: %s: set name. */
+          __('Shared the set "%s". Other users on this site can now load it.', 'editrail'),
+          name
+        ), [row + '.toolrail-settings-unshare', row + '.toolrail-settings-share']);
+    }, function (err) {
+      sharedSetBusy = false;
+      reportSharedSet(sprintf(
+        /* translators: 1: set name, 2: the reason, a full sentence. */
+        __('The set "%1$s" was not shared. %2$s', 'editrail'),
+        name,
+        sharedSetErrorText(err)
+      ), [row + '.toolrail-settings-share', row + '.toolrail-settings-load']);
+    });
+  }
+
+  /**
+   * Stop sharing a set: the server deletes its shared copy. The user's own
+   * set, if they have one, stays.
+   *
+   * @param {Object}          item           The shared copy (normalized).
+   * @param {string|string[]} focusSelectors Where focus goes after the
+   *                                         dialog redraws.
+   * @return {void}
+   */
+  function unshareSet(item, focusSelectors) {
+    if (sharedSetBusy || !canFetchSharedSets()) {
+      return;
+    }
+    var forget = function () {
+      sharedSets = sharedSets.filter(function (existing) {
+        return existing.id !== item.id;
+      });
+      reconcileSetsButton();
+    };
+    var request = sendSharedSetRequest({
+      path: SHARED_SETS_PATH + '/' + item.id,
+      method: 'DELETE'
+    });
+    if (!request) {
+      return;
+    }
+    request.then(function () {
+      sharedSetBusy = false;
+      forget();
+      reportSharedSet(sprintf(
+        /* translators: %s: set name. */
+        __('Stopped sharing the set "%s".', 'editrail'),
+        item.name
+      ), focusSelectors);
+    }, function (err) {
+      sharedSetBusy = false;
+      // Gone already (another user or tab stopped it): say so, and drop it.
+      if (err && err.code === 'rest_post_invalid_id') {
+        forget();
+        reportSharedSet(sprintf(
+          /* translators: %s: set name. */
+          __('The set "%s" is no longer shared.', 'editrail'),
+          item.name
+        ), focusSelectors);
+        return;
+      }
+      reportSharedSet(sprintf(
+        /* translators: 1: set name, 2: the reason, a full sentence. */
+        __('The set "%1$s" is still shared. %2$s', 'editrail'),
+        item.name,
+        sharedSetErrorText(err)
+      ), focusSelectors);
+    });
+  }
+
+  /**
+   * The share controls for one of the user's own set rows in Toolbar
+   * settings: "Share" when the set is not shared and the user may share;
+   * "Share again" when the shared copy is older than the set; "Stop
+   * sharing" when the set is shared and the user may delete the copy.
+   * A user who can do none of these gets no control, so the row is what
+   * it was before #98.
+   *
+   * @param {string}      name Set name.
+   * @param {Object|null} copy The user's shared copy, or null.
+   * @return {Array<HTMLElement>} Buttons, in row order.
+   */
+  function ownSetShareControls(name, copy) {
+    var out = [];
+    var row = setRowSelector(name);
+    if (!copy && canShareSets) {
+      var share = settingsButton(__('Share', 'editrail'), function () {
+        shareConfig(name);
+      }, 'toolrail-settings-share');
+      share.setAttribute('aria-label', sprintf(
+        /* translators: %s: set name. */
+        __('Share the set %s with other users on this site', 'editrail'),
+        name
+      ));
+      out.push(share);
+    }
+    if (copy && canShareSets && sharedCopyIsOlder(name, copy)) {
+      var again = settingsButton(__('Share again', 'editrail'), function () {
+        shareConfig(name);
+      }, 'toolrail-settings-share');
+      again.setAttribute('aria-label', sprintf(
+        /* translators: %s: set name. */
+        __('Share again: replace the shared copy of the set %s with the set as it is now', 'editrail'),
+        name
+      ));
+      out.push(again);
+    }
+    if (copy && copy.canDelete) {
+      var stop = settingsButton(__('Stop sharing', 'editrail'), function () {
+        unshareSet(copy, [row + '.toolrail-settings-share', row + '.toolrail-settings-load']);
+      }, 'toolrail-settings-unshare');
+      stop.setAttribute('aria-label', sprintf(
+        /* translators: %s: set name. */
+        __('Stop sharing the set %s', 'editrail'),
+        name
+      ));
+      out.push(stop);
+    }
+    return out;
+  }
+
+  /**
+   * One row of the "Shared sets" list in Toolbar settings: the name, who
+   * shared it, Load, Export, and Stop sharing when the user may delete it.
+   * Every accessible name carries "shared by …", so this row and one of
+   * the user's own sets with the same name never sound the same.
+   *
+   * @param {Object} item      A normalized entry.
+   * @param {Array}  neighbors The IDs of the rows after and before this
+   *                           one, in that order: focus goes to the first
+   *                           that remains after a stop.
+   * @return {HTMLElement} The list item.
+   */
+  function buildSharedSetRow(item, neighbors) {
+    var li = settingsRow('li', 'toolrail-settings-sharedrow');
+    li.dataset.sharedId = String(item.id);
+    var label = settingsRow('span', 'toolrail-settings-pinnedname');
+    label.textContent = item.name;
+    li.appendChild(label);
+    var tag = settingsRow('span', 'toolrail-settings-tag toolrail-settings-sharedby');
+    tag.textContent = sharedByText(item);
+    li.appendChild(tag);
+
+    var by = sharedByPhrase(item);
+    var load = settingsButton(__('Load', 'editrail'), function () {
+      applySet(item.blocks, item.labels);
+      settingsStatus = configLoadedMessage(item.name);
+      refreshSettings('#toolrail-settings-search');
+    }, 'toolrail-settings-sharedload');
+    load.setAttribute('aria-label', sprintf(
+      /* translators: 1: set name, 2: "shared by <name>". */
+      __('Load the set %1$s, %2$s', 'editrail'),
+      item.name,
+      by
+    ));
+    li.appendChild(load);
+
+    var exp = settingsButton(__('Export', 'editrail'), function () {
+      downloadSetFile(setFilePayload(item.name, item.blocks, item.labels));
+    }, 'toolrail-settings-sharedexport');
+    exp.setAttribute('aria-label', sprintf(
+      /* translators: 1: set name, 2: "shared by <name>". */
+      __('Export the set %1$s, %2$s, as a file', 'editrail'),
+      item.name,
+      by
+    ));
+    li.appendChild(exp);
+
+    if (item.canDelete) {
+      var stop = settingsButton(__('Stop sharing', 'editrail'), function () {
+        // The row goes: focus to the next row's Load, else the one
+        // before, else the set name field above the lists.
+        var targets = neighbors.map(function (id) {
+          return '.toolrail-settings-sharedrow[data-shared-id="' + id + '"] .toolrail-settings-sharedload';
+        });
+        targets.push('#toolrail-settings-setname');
+        unshareSet(item, targets);
+      }, 'toolrail-settings-unshare');
+      stop.setAttribute('aria-label', sprintf(
+        /* translators: 1: set name, 2: "shared by <name>". */
+        __('Stop sharing the set %1$s, %2$s', 'editrail'),
+        item.name,
+        by
+      ));
+      li.appendChild(stop);
+    }
+    return li;
   }
 
   // -------------------------------------------------------------------
@@ -4671,7 +5392,9 @@ var DASHICON_NAMES = [
   // -------------------------------------------------------------------
   // Toolbar settings dialog — choose which blocks show as quick slots,
   // reorder them, and save/load named sets. All of it is a per-user
-  // account preference, never site-wide settings or post data.
+  // account preference, never site-wide settings or post data. The one
+  // exception is a shared set (#98): the plugin's own record on the site,
+  // never an authored post (see the "Shared sets" block).
   // -------------------------------------------------------------------
 
   var settingsOpen = false;
@@ -5480,17 +6203,31 @@ var DASHICON_NAMES = [
     if (!Object.prototype.hasOwnProperty.call(map, name)) {
       return false;
     }
+    downloadSetFile(setFilePayload(name, map[name], loadConfigMeta()[name]));
+    return true;
+  }
+
+  /**
+   * The set file object for one set. One builder for an export, a shared
+   * set's export and a share (#98), so a shared set exports to the same
+   * file as the author's own.
+   *
+   * @param {string}      name   Set name.
+   * @param {Array}       blocks The set's slots.
+   * @param {Object|null} labels The set's label snapshot, or null.
+   * @return {Object} The payload.
+   */
+  function setFilePayload(name, blocks, labels) {
     var payload = {
       format: 'toolrail-set',
       version: 1,
       name: name,
-      blocks: map[name]
+      blocks: blocks
     };
     // The set's label snapshot (saveConfig / importConfigPayload) rides
     // along, keyed by slot name, so a set moved to another site keeps
     // its labels. The key is absent when the set has none, so a plain
     // set file is byte-for-byte what it was before 1.0.1.
-    var labels = loadConfigMeta()[name];
     if (labels) {
       var meta = {};
       Object.keys(labels).forEach(function (slot) {
@@ -5498,6 +6235,17 @@ var DASHICON_NAMES = [
       });
       payload.meta = meta;
     }
+    return payload;
+  }
+
+  /**
+   * Start the download of one set file.
+   *
+   * @param {Object} payload A setFilePayload() result.
+   * @return {void}
+   */
+  function downloadSetFile(payload) {
+    var name = payload.name;
     var slug = name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'set';
     var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     var url = URL.createObjectURL(blob);
@@ -5508,7 +6256,6 @@ var DASHICON_NAMES = [
     a.click();
     a.remove();
     window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-    return true;
   }
 
   /**
@@ -5522,9 +6269,7 @@ var DASHICON_NAMES = [
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.blocks)) {
       return { ok: false, error: __('Not an EditRail set file — expected JSON with a "blocks" array.', 'editrail') };
     }
-    var valid = parsed.blocks.filter(function (n) {
-      return typeof n === 'string' && (BLOCK_NAME_PATTERN.test(n) || PATTERN_SLOT_PATTERN.test(n));
-    });
+    var valid = parsed.blocks.filter(isSetSlotName);
     var dropped = parsed.blocks.length - valid.length;
     // A set file is hand-editable and hand-writable, so it can repeat a
     // block name. Two slots sharing one `pin:<name>` tool id break the
@@ -6408,6 +7153,20 @@ var DASHICON_NAMES = [
         var label = settingsRow('span', 'toolrail-settings-pinnedname');
         label.textContent = cfg;
         li.appendChild(label);
+        // The user's own shared copy of this set (#98), if any. Text,
+        // never a mark alone: "Shared" beside the name.
+        var copy = ownSharedCopy(cfg);
+        if (copy) {
+          var sharedTag = settingsRow('span', 'toolrail-settings-tag');
+          sharedTag.textContent = __('Shared', 'editrail');
+          li.appendChild(sharedTag);
+        }
+        var shareControls = ownSetShareControls(cfg, copy);
+        if (shareControls.length) {
+          // The extra buttons do not fit on one line in the dialog's
+          // width; this row may wrap.
+          li.classList.add('toolrail-settings-wraprow');
+        }
         var load = settingsButton(__('Load', 'editrail'), function () {
           loadConfig(cfg);
           settingsStatus = configLoadedMessage(cfg);
@@ -6420,6 +7179,9 @@ var DASHICON_NAMES = [
         }, 'toolrail-settings-export');
         exp.setAttribute('aria-label', sprintf(__('Export the set %s as a file', 'editrail'), cfg));
         li.appendChild(exp);
+        shareControls.forEach(function (btn) {
+          li.appendChild(btn);
+        });
         var del = settingsButton(__('Delete', 'editrail'), function () {
           deleteConfig(cfg);
           settingsStatus = sprintf(
@@ -6427,6 +7189,11 @@ var DASHICON_NAMES = [
             __('Deleted the set "%s".', 'editrail'),
             cfg
           );
+          if (copy) {
+            // A delete removes the author's own set only; the shared copy
+            // is the site's, and now shows under "Shared sets" (#98).
+            settingsStatus += ' ' + __('Its shared copy stays shared until you stop sharing it.', 'editrail');
+          }
           refreshSettings('#toolrail-settings-setname');
         }, 'toolrail-settings-delset');
         del.setAttribute('aria-label', sprintf(__('Delete the set %s', 'editrail'), cfg));
@@ -6435,6 +7202,30 @@ var DASHICON_NAMES = [
         setList.appendChild(li);
       });
       node.appendChild(setList);
+    }
+
+    // --- Shared sets (#98): what other users share, and the user's own
+    // copies whose set they have deleted. Absent when there is none, so
+    // a site with no shared set shows the dialog it showed before.
+    var listed = listedSharedSets();
+    if (listed.length) {
+      var sharedHead = settingsRow('h4', 'toolrail-settings-label');
+      sharedHead.id = 'toolrail-settings-shared-head';
+      sharedHead.textContent = __('Shared sets', 'editrail');
+      node.appendChild(sharedHead);
+      var sharedList = settingsRow('ul', 'toolrail-settings-sets');
+      sharedList.setAttribute('aria-labelledby', 'toolrail-settings-shared-head');
+      listed.forEach(function (item, i) {
+        var neighbors = [];
+        if (listed[i + 1]) {
+          neighbors.push(listed[i + 1].id);
+        }
+        if (listed[i - 1]) {
+          neighbors.push(listed[i - 1].id);
+        }
+        sharedList.appendChild(buildSharedSetRow(item, neighbors));
+      });
+      node.appendChild(sharedList);
     }
 
     // --- Import ---
@@ -6505,7 +7296,11 @@ var DASHICON_NAMES = [
       rerender();
     });
     var setsButtonText = settingsRow('span', '');
-    setsButtonText.textContent = __('Show a Saved sets button on the toolbar when you have a saved set', 'editrail');
+    // A shared set shows the button too (#98). The longer text only when
+    // there is one, so the dialog is unchanged on a site with none.
+    setsButtonText.textContent = listed.length
+      ? __('Show a Saved sets button on the toolbar when you have a saved set or another user shares one', 'editrail')
+      : __('Show a Saved sets button on the toolbar when you have a saved set', 'editrail');
     setsButtonRow.appendChild(setsButtonToggle);
     setsButtonRow.appendChild(setsButtonText);
     node.appendChild(setsButtonRow);
@@ -6610,6 +7405,10 @@ var DASHICON_NAMES = [
     document.addEventListener('keydown', onSettingsKeydown, true);
     document.addEventListener('focusin', onSettingsFocusin, true);
     window.addEventListener('toolrail:tools-updated', onToolsUpdatedWhileOpen);
+    // Shared sets may have changed since the list last came (#98). Not
+    // awaited: the dialog is complete without it, and it redraws only
+    // when the list did change.
+    refreshSharedSets();
 
     if (focusSelector) {
       var initial = focusableIn(node, focusSelector);
@@ -6836,7 +7635,9 @@ var DASHICON_NAMES = [
         body: [
           __('Save the current pinned arrangement as a named set in Toolbar settings, and load a set to switch arrangements.', 'editrail'),
           __('When you have a saved set, the Saved sets button on the toolbar opens a list of your sets. Choose a set to load it. A check mark shows the set that matches the toolbar now. You can hide the button in Toolbar settings.', 'editrail'),
-          __('Export a set as a small JSON file and import it on another site. Blocks the site does not have stay in the set and appear when their plugin or theme is active.', 'editrail')
+          __('Export a set as a small JSON file and import it on another site. Blocks the site does not have stay in the set and appear when their plugin or theme is active.', 'editrail'),
+          // #98. Says "if you can share", because a Contributor cannot.
+          __('Share a set with the other users of this site with Share beside the set in Toolbar settings, if your role can publish posts. Sets that other users share show under "Shared sets" and in the Saved sets list, with the name of the user who shared them. A load changes only your own toolbar.', 'editrail')
         ]
       },
       {
@@ -12592,6 +13393,9 @@ var DASHICON_NAMES = [
     registerPinMenuItem();
     start();
     watchPatternCatalog();
+    // The shared sets (#98), once per page. Not awaited: the rail is up
+    // without them, and a failed request leaves it as it is.
+    refreshSharedSets();
   }
 
   if (window._wpLoadBlockEditor && typeof window._wpLoadBlockEditor.then === 'function') {

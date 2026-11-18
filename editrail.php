@@ -29,3 +29,4 @@ if (!defined('TOOLRAIL_PLUGIN_URL')) {
 
 require_once TOOLRAIL_PLUGIN_DIR . 'includes/providers.php';
 require_once TOOLRAIL_PLUGIN_DIR . 'includes/rail.php';
+require_once TOOLRAIL_PLUGIN_DIR . 'includes/shared-sets.php';
