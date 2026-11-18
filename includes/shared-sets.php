@@ -889,12 +889,21 @@ function toolrail_rest_share_set($request) {
         return new WP_Error('toolrail_set_not_saved', __('The set could not be shared. Try again.', 'editrail'), ['status' => 500]);
     }
     // Two parallel first shares of one name can leave two copies. Keep the
-    // one just written and delete the others, so other users never see two
-    // sets with one name and one of them stale (PR #123 review).
-    foreach (toolrail_shared_set_own_copies($user_id, $result['name']) as $copy) {
-        if ((int) $copy->ID !== (int) $id && current_user_can('delete_post', $copy->ID)) {
+    // OLDEST and delete the others, so other users never see two sets with
+    // one name and one of them stale (PR #123 review). Every request keeps
+    // the same row: when each kept "the row I wrote", two parallel first
+    // shares deleted each other's row and left none, while both answered
+    // 201. A request whose own row was deleted answers with the kept row.
+    $copies = toolrail_shared_set_own_copies($user_id, $result['name']);
+    $keep   = $copies ? $copies[0] : null;
+    foreach ($copies as $copy) {
+        if ($keep && (int) $copy->ID !== (int) $keep->ID && current_user_can('delete_post', $copy->ID)) {
             wp_delete_post($copy->ID, true);
         }
+    }
+    if ($keep && (int) $keep->ID !== (int) $id) {
+        $kept = toolrail_shared_set_post($keep->ID);
+        $item = $kept ? toolrail_shared_set_response($kept) : $item;
     }
     $response = rest_ensure_response($item);
     $response->set_status($existing ? 200 : 201);
