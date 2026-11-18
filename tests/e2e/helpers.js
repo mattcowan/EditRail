@@ -47,6 +47,10 @@ const AUTH = path.join(__dirname, '.auth', 'admin.json');
  * the newest object last. So a save is pending or in flight exactly while
  * the account's `_modified` differs from the local copy's, and once they
  * match, the account's `toolrail` scope is the one the page last saved.
+ * This relies on the server storing `_modified` as the page sent it. If a
+ * later WordPress rewrites that stamp on save, every test that saves fails
+ * here with the "did not hold the page's last preference save" error: the
+ * check to change is the stamp comparison in waitForAccountSaves().
  *
  * Only a document that saved has something to wait for. An init script
  * notes each local copy's stamp when a document starts; a copy with the
@@ -184,10 +188,19 @@ async function waitForAccountSaves(contexts, timeoutMs) {
     for (const context of contexts) {
       const pages = context.pages().filter((p) => !p.isClosed());
       let saved = null;
+      let answered = false;
       for (const page of pages) {
         try {
-          saved = { page, copies: await page.evaluate(localPrefsSavedHere, names) };
-          break;
+          const copies = await page.evaluate(localPrefsSavedHere, names);
+          answered = true;
+          // A page with no storage (about:blank, an opaque origin) answers
+          // with no copies. It must not stand for the editor page beside
+          // it, so only a page that holds a changed copy ends the search
+          // (PR #122 review).
+          if (copies.length) {
+            saved = { page, copies };
+            break;
+          }
         } catch (e) {
           // Closed or between documents: try the context's next page, then
           // the next pass.
@@ -195,26 +208,31 @@ async function waitForAccountSaves(contexts, timeoutMs) {
       }
       if (!saved) {
         // Open pages, and none answered: most likely one is between two
-        // documents. Ask again for a short while.
-        unanswered = unanswered || pages.length > 0;
-        continue;
-      }
-      if (!saved.copies.length) {
+        // documents. Ask again for a short while. Pages that answered with
+        // no changed copy have nothing to wait for.
+        unanswered = unanswered || (pages.length > 0 && !answered);
         continue;
       }
       let prefs = null;
+      let copiesNow = null;
       try {
         if (!apis.has(context)) {
           apis.set(context, await apiForPage(saved.page));
         }
         prefs = await readPrefs(apis.get(context));
         restReads += 1;
+        // Read the local copies again: a store change during the account
+        // read wrote a newer copy, and the account answer is then older
+        // than the page's last save (PR #122 review).
+        copiesNow = await saved.page.evaluate(localPrefsSavedHere, names);
       } catch (e) {
         // The page closed under us, or one read failed; the next pass
         // decides.
       }
+      const stampsNow = copiesNow ? JSON.stringify(copiesNow.map((c) => [c.key, c.stamp])) : null;
+      const movedOn = stampsNow !== JSON.stringify(saved.copies.map((c) => [c.key, c.stamp]));
       saved.copies.forEach((copy) => {
-        if (!prefs || prefs._modified !== copy.stamp || !sameScopeJSON(prefs.toolrail, copy.toolrail)) {
+        if (!prefs || movedOn || prefs._modified !== copy.stamp || !sameScopeJSON(prefs.toolrail, copy.toolrail)) {
           pending.push({ key: copy.key, local: copy.stamp, account: prefs ? prefs._modified : 'unread' });
         }
       });
@@ -247,11 +265,14 @@ const test = base.test.extend({
 
     await use(context);
 
-    // A test that timed out or was stopped may have a page that does not
-    // answer; it is already reported.
-    if (testInfo.status === 'timedOut' || testInfo.status === 'interrupted') {
+    // A run that was stopped does not wait.
+    if (testInfo.status === 'interrupted') {
       return;
     }
+    // A test that timed out waits too, as a failed test does: the save it
+    // left pending can change the next test's start state, and that test's
+    // failure then looks unrelated (PR #122 review). A page that does not
+    // answer costs UNANSWERED_MS at most.
     const passed = testInfo.status === 'passed';
     const opened = browser ? browser.contexts().filter((c) => c !== context && !before.has(c)) : [];
     const result = await waitForAccountSaves([context, ...opened], passed ? SAVE_WAIT_MS : SAVE_WAIT_AFTER_FAILURE_MS);
@@ -414,7 +435,13 @@ async function openNewPost(page, opts) {
   // "#toolrail-rail is not visible" (#113 review, 2026-11-16).
   await page.waitForFunction(() => !!(window.toolrail && window.toolrail.prefs && window.toolrail.prefs.isReady()), null, { timeout: 8000 })
     .catch(() => {});
-  await waitForAccountSaves([page.context()], SAVE_WAIT_MS);
+  const boot = await waitForAccountSaves([page.context()], SAVE_WAIT_MS);
+  // A boot save that has not landed could reach the account after the
+  // reset and replace it, and a page on BASELINE does not save again to put
+  // that right. So setup stops here (PR #122 review).
+  if (boot.pending.length) {
+    throw new Error(`openNewPost: after ${boot.waitedMs} ms the account still did not hold the first load's preference save, so the reset would not be safe: ${JSON.stringify(boot.pending)}.`);
+  }
 
   const hadState = await resetRailPrefs(page, opts);
   if (hadState) {

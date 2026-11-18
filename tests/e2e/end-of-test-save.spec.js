@@ -39,6 +39,7 @@ test.describe('end-of-test save wait (#113)', () => {
     const late = page.request;
     let applied = Promise.resolve();
     let appliedAt = 0;
+    let applyError = null;
     await page.route(isPrefsWrite, async (route) => {
       const req = route.request();
       if (req.method() === 'GET') {
@@ -56,7 +57,15 @@ test.describe('end-of-test save wait (#113)', () => {
       applied = applied
         .then(() => new Promise((r) => setTimeout(r, 3000)))
         .then(() => late.fetch(call.url, { method: call.method, headers: call.headers, data: call.data }))
-        .then(() => { appliedAt = Date.now(); });
+        .then((response) => {
+          // A refused write must fail HERE, with its status, not later as a
+          // missing key (PR #122 review).
+          if (!response.ok()) {
+            throw new Error(`the late save was refused: HTTP ${response.status()}`);
+          }
+          appliedAt = Date.now();
+        })
+        .catch((error) => { applyError = error; });
       await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
     });
 
@@ -65,6 +74,7 @@ test.describe('end-of-test save wait (#113)', () => {
       const result = await waitForAccountSaves([page.context()], 20000);
       const returnedAt = Date.now();
 
+      expect(applyError, 'the late save reached the server').toBeNull();
       expect(result.pending).toEqual([]);
       // It returned only after the late save was on the server.
       expect(appliedAt).toBeGreaterThan(0);
