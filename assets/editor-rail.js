@@ -1025,6 +1025,7 @@
     if (drag && drag.toolbar === tb) {
       finishDrag();
     }
+    releaseToolDragOf(tb);
     disposeIconRoots(tb);
     if (tb.scrollObserver) {
       tb.scrollObserver.disconnect();
@@ -5815,8 +5816,9 @@ var DASHICON_NAMES = [
    * Place a floating surface (a flyout, or the settings dialog) beside the
    * rail, opening AWAY from the docked edge: to the right of a left rail,
    * to the left of a right rail, DOWN from a top rail, UP from a bottom
-   * one. The surface must already be in the DOM — the overflow clamp
-   * measures it.
+   * one. A flyout with no room on that side in the window opens on the
+   * other side of its toolbar instead. The surface must already be in
+   * the DOM — the overflow clamp measures it.
    *
    * @param {Object}      tb      The toolbar the surface belongs to; its
    *                              dock gives the direction.
@@ -5870,24 +5872,62 @@ var DASHICON_NAMES = [
       }
     }
 
+    var maxRight = window.innerWidth - 8;
+    var maxBottom = window.innerHeight - 8;
+    var dock = tb.position.dock;
+    // Whether a box runs off the window on the dock's own axis.
+    var offAxis = function (box) {
+      return dock === 'right' ? box.left < 8
+        : dock === 'top' ? box.bottom > maxBottom
+          : dock === 'bottom' ? box.top < 8
+            : box.right > maxRight;
+    };
+
+    // A flyout on the innermost of a stack of toolbars can open beyond
+    // the window: four wide toolbars on the left take 800px, and focus
+    // went into a menu off screen. It flips to the other side of its own
+    // toolbar, still next to its button, over the toolbars nearer the
+    // edge (PR #126 review, CodeRabbit). When that side does not fit
+    // either, it goes back and the pull-back below applies.
+    rect = node.getBoundingClientRect();
+    if (!pastStack && offAxis(rect)) {
+      var flipGap = 'calc(100% + 4px)';
+      var side = dock === 'right' ? ['right', 'left']
+        : dock === 'top' ? ['top', 'bottom']
+          : dock === 'bottom' ? ['bottom', 'top']
+            : ['left', 'right'];
+      node.style[side[0]] = '';
+      node.style[side[1]] = flipGap;
+      var flipped = node.getBoundingClientRect();
+      var flipOff = dock === 'right' ? flipped.right > maxRight
+        : dock === 'top' ? flipped.top < 8
+          : dock === 'bottom' ? flipped.bottom > maxBottom
+            : flipped.left < 8;
+      if (flipOff) {
+        node.style[side[1]] = '';
+        node.style[side[0]] = gap;
+      }
+    }
+
     // A dialog that opens past a stack of toolbars can start beyond the
     // window: four wide toolbars on the left take 800px. The dialog is the
     // way to undo that layout, so it is pulled back into the window on
     // the dock's own axis too, over part of the stack when it must
-    // (PR #126 review, CodeRabbit). Flyouts are not moved: they open next
-    // to their own toolbar.
-    if (pastStack) {
-      rect = node.getBoundingClientRect();
-      var maxRight = window.innerWidth - 8;
-      var maxBottom = window.innerHeight - 8;
-      var dock = tb.position.dock;
-      if (dock === 'right' && rect.left < 8) {
+    // (PR #126 review, CodeRabbit). A flyout that fits on neither side of
+    // its toolbar gets the same pull-back.
+    rect = node.getBoundingClientRect();
+    if (offAxis(rect)) {
+      if (dock === 'right') {
+        node.style.left = '';
         node.style.right = Math.round(wrapperRect.right - 8 - rect.width) + 'px';
-      } else if (dock === 'top' && rect.bottom > maxBottom) {
+      } else if (dock === 'top') {
+        node.style.bottom = '';
         node.style.top = Math.round(maxBottom - rect.height - wrapperRect.top) + 'px';
-      } else if (dock === 'bottom' && rect.top < 8) {
+      } else if (dock === 'bottom') {
+        node.style.top = '';
         node.style.bottom = Math.round(wrapperRect.bottom - 8 - rect.height) + 'px';
-      } else if (dock !== 'right' && dock !== 'top' && dock !== 'bottom' && rect.right > maxRight) {
+      } else {
+        node.style.right = '';
         node.style.left = Math.round(Math.max(8, maxRight - rect.width) - wrapperRect.left) + 'px';
       }
     }
@@ -12481,7 +12521,21 @@ var DASHICON_NAMES = [
       box.top = r.top - (tb ? edgeOffset(tb, edge, true) : 0);
       box.height = RAIL_BAND;
     } else {
-      box.top = r.bottom - RAIL_BAND + (tb ? edgeOffset(tb, edge, true) : 0);
+      // The publish footer overlays the bottom of __body, which core keeps
+      // clear with a padding-bottom there. The first bar on the bottom
+      // edge takes the same room as a margin below itself (the
+      // stylesheet's .has-footer rule), so it lands above the footer, not
+      // at __body's edge. A bar already on the bottom edge holds that
+      // margin outside __body, so it is not counted twice (PR #126
+      // review, CodeRabbit).
+      var footerRoom = 0;
+      var bottomTaken = toolbars.some(function (other) {
+        return other.position.dock === 'bottom' && !!document.getElementById(other.regionId);
+      });
+      if (!bottomTaken) {
+        footerRoom = parseFloat(window.getComputedStyle(body).paddingBottom) || 0;
+      }
+      box.top = r.bottom - RAIL_BAND - footerRoom + (tb ? edgeOffset(tb, edge, true) : 0);
       box.height = RAIL_BAND;
     }
     el.style.left = box.left + 'px';
@@ -13377,6 +13431,25 @@ var DASHICON_NAMES = [
   // The toolbar whose tool is mid-drag, or null.
   var railDragToolbar = null;
 
+  /**
+   * Clear the tool-drag guard when the drag started on this toolbar. For
+   * a path that takes the toolbar's buttons out of the document without
+   * rerender(): a hide, a delete, a stored change that rebuilds it, a
+   * move to a new dock. The removed source node gets the drag's dragend,
+   * but a node out of the document does not pass it on to the document's
+   * listeners, so the guard stayed set and the next drag from the
+   * inserter was refused (PR #126 review, Claude).
+   *
+   * @param {Object} tb The toolbar whose buttons go.
+   * @return {void}
+   */
+  function releaseToolDragOf(tb) {
+    if (railDragToolbar === tb) {
+      railDragActive = false;
+      railDragToolbar = null;
+    }
+  }
+
   document.addEventListener('dragend', function () {
     railDragActive = false;
     railDragToolbar = null;
@@ -13857,7 +13930,25 @@ var DASHICON_NAMES = [
             if (toolbars.indexOf(target) === -1) {
               target = mainToolbar;
             }
-            pinBlock(target, single.name);
+            // The toolbar it falls back to can have the pin already, and
+            // a stored change can add it while the dialog is open: then
+            // nothing was pinned, and the message says so (PR #126
+            // review, CodeRabbit).
+            if (!pinBlock(target, single.name)) {
+              speak(target === mainToolbar
+                ? sprintf(
+                  /* translators: %s: block title. */
+                  __('%s is already pinned on the main toolbar.', 'editrail'),
+                  singleTitle
+                )
+                : sprintf(
+                  /* translators: 1: block title, 2: the toolbar's name. */
+                  __('%1$s is already pinned on the %2$s toolbar.', 'editrail'),
+                  singleTitle, target.name
+                ));
+              closeAddDialog(ids[0]);
+              return;
+            }
             speak(target === mainToolbar
               ? sprintf(
                 /* translators: %s: block title. */
@@ -14146,6 +14237,10 @@ var DASHICON_NAMES = [
       closeSettings(false);
       closeHelp(false);
     }
+    // A new region means new buttons: a tool drag from the old ones has
+    // lost its source node (setDock, or the editor's re-render removed
+    // the region).
+    releaseToolDragOf(tb);
 
     placeToolbarRegions(tb, buildWrapper(tb));
     applyFloatPosition(tb);

@@ -750,8 +750,11 @@ test.describe('second-toolbar twins of the single-toolbar tests (#95)', () => {
     // Load the defaults into the extra toolbar; the first toolbar keeps
     // its pins, all of them, in order.
     const mainPins = () => page.evaluate(() => Array.from(document.querySelectorAll('#toolrail-rail [data-tool^="pin:"]')).map((x) => x.dataset.tool));
+    // A pin that is not in the set: a load that also wrote the first
+    // toolbar would take it away (PR #126 review, CodeRabbit).
+    expect(await page.evaluate(() => window.toolrail.pinBlock('core/verse', 'main'))).toBe(true);
     const mainBefore = await mainPins();
-    expect(mainBefore.length).toBeGreaterThan(0);
+    expect(mainBefore).toContain('pin:core/verse');
     await page.locator('.toolrail-settings-setrow[data-config="defaults"] .toolrail-settings-load').click();
     await expect.poll(() => liveText(page)).toContain('Loaded "defaults" into the Animation toolbar.');
     const extra = await page.evaluate(() => Array.from(document.querySelectorAll('#toolrail-rail-t1 [data-tool^="pin:"]')).map((x) => x.dataset.tool));
@@ -953,18 +956,29 @@ test.describe('PR #126 review fixes (#95)', () => {
     await openNewPost(page);
     await seedByDispatch(page, [record('t1', 'Palette', { dock: 'float', x: 100, y: 60 })]);
     await expect(page.locator('#toolrail-region-t1')).toBeVisible();
+    // Both events, in the order they fire, each with the box it saw.
     const seen = await page.evaluate(() => new Promise((resolve) => {
       const body = document.querySelector('.interface-interface-skeleton__body').getBoundingClientRect();
-      window.addEventListener('toolrail:toolbars-changed', (e) => {
+      const out = [];
+      const measure = () => {
         const r = document.getElementById('toolrail-region-t1').getBoundingClientRect();
-        resolve({ change: e.detail.change, left: Math.round(r.left - body.left) });
+        return { left: Math.round(r.left - body.left), top: Math.round(r.top - body.top) };
+      };
+      window.addEventListener('toolrail:position-changed', () => {
+        out.push(Object.assign({ event: 'position-changed' }, measure()));
+      }, { once: true });
+      window.addEventListener('toolrail:toolbars-changed', (e) => {
+        out.push(Object.assign({ event: 'toolbars-changed', change: e.detail.change }, measure()));
       }, { once: true });
       window.wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-toolbars', JSON.stringify({ version: 1, toolbars: [
         { id: 't1', name: 'Palette', dock: 'float', x: 300, y: 200, slots: ['core/quote'], wide: false, hidden: false },
       ] }));
-      setTimeout(() => resolve(null), 2000);
+      setTimeout(() => resolve(out), 1000);
     }));
-    expect(seen).toEqual({ change: 'synced', left: 300 });
+    expect(seen).toEqual([
+      { event: 'position-changed', left: 300, top: 200 },
+      { event: 'toolbars-changed', change: 'synced', left: 300, top: 200 },
+    ]);
   });
 
   test('a stored change closes an open Toolbars menu, and focus stays on its button', async ({ page }) => {
@@ -1062,6 +1076,179 @@ test.describe('PR #126 review fixes (#95)', () => {
       return { before, after: overAt(), types: Array.from(dt.types) };
     });
     expect(accepted).toEqual({ before: false, after: false, types: ['wp-blocks'] });
+  });
+
+  // The source button goes, and its dragend never reaches the document.
+  // The guard then refused the next drag from the inserter (PR #126
+  // review, Claude).
+  const sourceGone = {
+    'a stored change hides it': (page) => seedByDispatch(page, [record('t1', 'One', { hidden: true })]),
+    'a stored change deletes it': (page) => seedByDispatch(page, []),
+    'it moves to a new dock': (page) => page.evaluate(() => window.toolrail.setDock('right', 't1')),
+  };
+  for (const [how, removeSource] of Object.entries(sourceGone)) {
+    test(`a tool drag whose toolbar goes away mid-drag does not block the next drag (${how})`, async ({ page }) => {
+      await openNewPost(page);
+      await seedByDispatch(page, [record('t1', 'One', { slots: ['core/quote'] })]);
+      await expect(page.locator('#toolrail-region-t1')).toBeVisible();
+      // The rail's answer to a dragover on the first toolbar.
+      const accepts = () => page.evaluate(() => {
+        const dt = new DataTransfer();
+        dt.setData('wp-blocks', JSON.stringify({ type: 'inserter', blocks: [{ name: 'core/verse', attributes: {}, innerBlocks: [] }] }));
+        const region = document.getElementById('toolrail-region');
+        region.classList.remove('is-drop-target');
+        region.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }));
+        const on = region.classList.contains('is-drop-target');
+        region.classList.remove('is-drop-target');
+        return on;
+      });
+      await page.evaluate(() => {
+        const source = document.querySelector('#toolrail-rail-t1 [data-tool="pin:core/quote"]');
+        source.dispatchEvent(new DragEvent('dragstart', { dataTransfer: new DataTransfer(), bubbles: true, cancelable: true }));
+      });
+      // Control: while the tool drag is live, the rail refuses it.
+      expect(await accepts()).toBe(false);
+      await removeSource(page);
+      await expect(page.locator('#toolrail-rail-t1 [data-tool="pin:core/quote"]')).toHaveCount(how === 'it moves to a new dock' ? 1 : 0);
+      // A later drag from the inserter is accepted.
+      expect(await accepts()).toBe(true);
+    });
+  }
+
+  test('a flyout on the innermost of four wide toolbars flips into the window', async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 800 });
+    await openNewPost(page);
+    await page.evaluate(() => {
+      window.toolrail.registerTool({ id: 'core/quote', label: 'Provider quote', insertBlock: 'core/quote' });
+      window.toolrail.registerTool({ id: 'spec:under-quote', label: 'Under quote', parent: 'core/quote', insertBlock: 'core/quote' });
+    });
+    await seedByDispatch(page, [
+      record('t1', 'A', { wide: true }), record('t2', 'B', { wide: true }), record('t3', 'C', { wide: true }),
+    ]);
+    await expect(page.locator('#toolrail-region-t3')).toHaveAttribute('data-wide', 'true');
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('#toolrail-settings-wide').check();
+    await expect(page.locator('#toolrail-region')).toHaveAttribute('data-wide', 'true');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.toolrail-settings')).toHaveCount(0);
+
+    const pin = page.locator('#toolrail-rail-t3 [data-tool="pin:core/quote"]');
+    await expect(pin).toHaveAttribute('aria-haspopup', 'true');
+    await pin.focus();
+    await page.keyboard.press('ArrowRight');
+    const item = page.locator('#toolrail-region-t3 .toolrail-flyout [data-tool="spec:under-quote"]');
+    await expect(item).toBeFocused();
+    const r = await page.evaluate(() => {
+      const f = document.querySelector('#toolrail-region-t3 .toolrail-flyout').getBoundingClientRect();
+      const b = document.querySelector('#toolrail-rail-t3 [data-tool="pin:core/quote"]').getBoundingClientRect();
+      return { left: f.left, right: f.right, top: f.top, buttonLeft: b.left, buttonTop: b.top, width: window.innerWidth };
+    });
+    // Focus in a menu past the window scrolled the editor sideways: the
+    // whole stack moved off the left edge (seen: the first toolbar at
+    // -280px).
+    expect((await boxes(page, ['toolrail-region']))['toolrail-region'].left).toBeGreaterThanOrEqual(0);
+    // In the window, and still next to its own button: on its left side,
+    // level with it.
+    expect(r.left).toBeGreaterThanOrEqual(0);
+    expect(r.right).toBeLessThanOrEqual(r.width);
+    expect(r.right).toBeLessThanOrEqual(r.buttonLeft);
+    expect(r.top).toBeCloseTo(r.buttonTop, 0);
+  });
+
+  test('a flyout that fits keeps opening away from its edge', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await openNewPost(page);
+    await page.evaluate(() => {
+      window.toolrail.registerTool({ id: 'core/quote', label: 'Provider quote', insertBlock: 'core/quote' });
+      window.toolrail.registerTool({ id: 'spec:under-quote', label: 'Under quote', parent: 'core/quote', insertBlock: 'core/quote' });
+    });
+    await seedByDispatch(page, [record('t1', 'A')]);
+    const pin = page.locator('#toolrail-rail-t1 [data-tool="pin:core/quote"]');
+    await expect(pin).toHaveAttribute('aria-haspopup', 'true');
+    await pin.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(page.locator('#toolrail-region-t1 .toolrail-flyout [data-tool="spec:under-quote"]')).toBeFocused();
+    const r = await page.evaluate(() => {
+      const f = document.querySelector('#toolrail-region-t1 .toolrail-flyout').getBoundingClientRect();
+      const region = document.getElementById('toolrail-region-t1').getBoundingClientRect();
+      return { left: f.left, regionRight: region.right };
+    });
+    // To the right of its own toolbar, 4px clear (the border can add one).
+    expect(r.left).toBeGreaterThanOrEqual(r.regionRight + 3);
+    expect(r.left).toBeLessThanOrEqual(r.regionRight + 6);
+  });
+
+  test('the first bottom snap preview sits where the toolbar lands, above the publish footer', async ({ page }) => {
+    await openNewPost(page);
+    await seedByDispatch(page, [record('t1', 'Palette', { dock: 'float', x: 300, y: 300 })]);
+    await expect(page.locator('#toolrail-region-t1')).toBeVisible();
+    // Without the footer the test proves nothing.
+    await expect(page.locator('.interface-interface-skeleton.has-footer')).toHaveCount(1);
+    const preview = await page.evaluate(() => {
+      const grip = document.querySelector('#toolrail-region-t1 .toolrail-grip');
+      const g = grip.getBoundingClientRect();
+      const body = document.querySelector('.interface-interface-skeleton__body').getBoundingClientRect();
+      const fire = (el, type, x, y) => el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }));
+      fire(grip, 'mousedown', g.left + 4, g.top + 4);
+      fire(document, 'mousemove', 400, Math.round(body.bottom) - 10);
+      const p = document.getElementById('toolrail-snap-preview').getBoundingClientRect();
+      fire(document, 'mouseup', 400, Math.round(body.bottom) - 10);
+      return { top: p.top, bottom: p.bottom };
+    });
+    await expect(page.locator('#toolrail-region-t1')).toHaveAttribute('data-dock', 'bottom');
+    const landed = await page.evaluate(() => document.getElementById('toolrail-region-t1').getBoundingClientRect().bottom);
+    expect(Math.abs(landed - preview.bottom)).toBeLessThanOrEqual(1);
+
+    // A second bar on the bottom edge: the first one holds the footer's
+    // room already, so it is not counted again.
+    await seedByDispatch(page, [
+      record('t1', 'Palette', { dock: 'bottom' }),
+      record('t2', 'Other', { dock: 'float', x: 300, y: 200 }),
+    ]);
+    await expect(page.locator('#toolrail-region-t2')).toBeVisible();
+    const second = await page.evaluate(() => {
+      const grip = document.querySelector('#toolrail-region-t2 .toolrail-grip');
+      const g = grip.getBoundingClientRect();
+      const body = document.querySelector('.interface-interface-skeleton__body').getBoundingClientRect();
+      const fire = (el, type, x, y) => el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }));
+      fire(grip, 'mousedown', g.left + 4, g.top + 4);
+      fire(document, 'mousemove', 400, Math.round(body.bottom) - 10);
+      const p = document.getElementById('toolrail-snap-preview').getBoundingClientRect();
+      fire(document, 'mouseup', 400, Math.round(body.bottom) - 10);
+      return { bottom: p.bottom };
+    });
+    await expect(page.locator('#toolrail-region-t2')).toHaveAttribute('data-dock', 'bottom');
+    const landedSecond = await page.evaluate(() => document.getElementById('toolrail-region-t2').getBoundingClientRect().bottom);
+    expect(Math.abs(landedSecond - second.bottom)).toBeLessThanOrEqual(1);
+  });
+
+  test('the canvas-drop dialog says so when the toolbar it falls back to has the pin already', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => window.toolrail.pinBlock('core/quote', 'main'));
+    await seedByDispatch(page, [record('t1', 'Animation', { slots: [] })]);
+    await expect(page.locator('#toolrail-region-t1')).toBeVisible();
+    const quoteId = await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      const q = createBlock('core/quote', {}, [createBlock('core/paragraph', { content: 'Q' })]);
+      window.wp.data.dispatch('core/block-editor').resetBlocks([q]);
+      return q.clientId;
+    });
+    await page.evaluate((id) => {
+      const dt = new DataTransfer();
+      dt.setData('wp-blocks', JSON.stringify({ type: 'block', srcClientIds: [id], srcRootClientId: '' }));
+      const region = document.getElementById('toolrail-region-t1');
+      region.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }));
+      region.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    }, quoteId);
+    const dialog = page.locator('.toolrail-adddialog');
+    await expect(dialog.locator('.toolrail-adddialog-pintype')).toBeVisible();
+    // A stored change deletes the toolbar the block was dropped on.
+    await seedByDispatch(page, []);
+    await expect(page.locator('#toolrail-region-t1')).toHaveCount(0);
+    await dialog.locator('.toolrail-adddialog-pintype').click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => liveText(page)).toBe('Quote is already pinned on the main toolbar.');
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/quote"]')).toHaveCount(1);
   });
 });
 

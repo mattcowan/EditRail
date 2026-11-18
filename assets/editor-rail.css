@@ -697,7 +697,8 @@ body.toolrail-dragging * {
 }
 
 /* Flyout menu. Its offsets are set inline by placeSurface(), which opens
-   it away from whichever edge the rail is docked to. */
+   it away from whichever edge the rail is docked to, or toward that edge
+   when the window has no room on the far side. */
 .toolrail-flyout {
     position: absolute;
     min-width: 180px;
