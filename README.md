@@ -11,7 +11,7 @@ The block editor's inserter is a menu: open it, find the block, and it lands whe
 Two things set it apart from other toolbar plugins:
 
 - **Arm, then click.** A tool stays selected until the next click in the canvas, or until Ctrl+Enter inserts its block. Shift-click or Ctrl+Shift+Enter keeps it selected for more inserts.
-- **Only core blocks come out.** The toolbar inserts the same blocks the inserter does. Deactivate the plugin and nothing about the content changes. Delete the plugin and it removes its own preferences from each user account.
+- **Only core blocks come out.** The toolbar inserts the same blocks the inserter does. Deactivate the plugin and nothing about the content changes. Delete the plugin and it removes its own preferences from each user account, and the sets that users shared.
 
 ## Requirements
 
@@ -59,6 +59,7 @@ Open a post in the editor. The toolbar is on the left edge. `readme.txt` describ
 - Give a pinned tool your own name, description or icon with Edit beside it in Toolbar settings.
 - Save pinned arrangements as named sets. Export a set as a JSON file and import it on a different site.
 - Switch between saved sets from the Saved sets button on the toolbar. It appears when you have a saved set.
+- Share a saved set with the other users of the site: Share beside the set in Toolbar settings. Users who can edit posts see it in Toolbar settings and in the Saved sets menu, with the name of the user who shared it, and can load or export it.
 - Move the toolbar to any edge, or float it. Change its colors. Show tool names beside the icons.
 - Add up to three more toolbars in Toolbar settings. Each toolbar has its own name, pinned tools, position and tool names. Two toolbars can dock on the same edge, side by side. Show or hide each one from the Toolbars button on the main toolbar, or in Toolbar settings. After you add, show or move a toolbar, or turn on its tool names, the toolbar says so if the content area is narrower than 600 pixels (`MIN_CANVAS_WIDTH`, core's small breakpoint) and two or more toolbars are shown. It refuses nothing. With only the main toolbar shown, it gives no notice.
 - Optional, off by default: turn on "Let me make the settings sidebar wider" in Toolbar settings. Then type a width in Toolbar settings, use its Narrower and Wider buttons (50px a step), or drag the inner edge of the editor's settings sidebar. The width goes up to 640px or half the window, whichever is less. The edge is also a keyboard separator: the Left and Right arrow keys change the width. A double-click, or a button in Toolbar settings, resets it to 280px.
@@ -74,13 +75,15 @@ Every action has a keyboard path, and screen readers hear every state change. Dr
 
 **A tool arms.** The active tool is a mode, not an action. The next click in the canvas resolves where the block goes, inserts it with the editor's own insert action, and returns the toolbar to Select. The saved post is what the inserter would have written. Ctrl+Enter is the keyboard form of the click. It puts the block after the selected block, which is where the inserter puts it. Like the inserter, it replaces a selected empty paragraph.
 
-**Preferences are per user, per site.** The position and pins of each toolbar, saved sets, colors, toggles and the settings sidebar width go through the `core/preferences` store under the `toolrail` scope. WordPress persists that store to the user's account and preloads it into every editor page, so a setup follows the author across browsers and devices. The plugin writes no options and no post data. A localStorage fallback covers a browser whose storage fails mid-session.
+**Preferences are per user, per site.** The position and pins of each toolbar, saved sets, colors, toggles and the settings sidebar width go through the `core/preferences` store under the `toolrail` scope. WordPress persists that store to the user's account and preloads it into every editor page, so a setup follows the author across browsers and devices. The plugin writes no options, and it writes nothing into authored posts. A localStorage fallback covers a browser whose storage fails mid-session.
 
-**Delete removes the preferences.** `uninstall.php` strips the `toolrail` scope from every user's preferences on every site of a network. Each write is conditional on the value that was read, so a save from an open editor tab at the same moment survives. Deactivation keeps the preferences. The docblock of `includes/uninstall.php` gives the details.
+**A shared set is a copy in the plugin's own private post type.** When an author shares a saved set, the plugin keeps a copy of it as a post of the type `editrail_set`: the set name and the set file contents, and the author of the post is the user who shared it. The type has no admin screens, no front-end URLs, and no default REST routes. The plugin's own routes are `GET` and `POST` on `/editrail/v1/sets` (list, share) and `GET` and `DELETE` on `/editrail/v1/sets/<id>` (one set, stop sharing). They answer only logged-in users who can edit posts. WordPress's post capabilities decide who can do what. A user with `edit_posts` (Contributor and up) can see and load shared sets. A user with `publish_posts` (Author and up) can share. The author can stop sharing their own set, and a user with `delete_others_posts` (Editor and up) can stop sharing any set. Nobody can change a set that another user shared. A share of a set name that the author already shares replaces that copy. A later change to the author's own set does not change the copy until the author shares the set again. A load copies the set into one toolbar of the user, the same as Load for the user's own set: in Toolbar settings the toolbar chosen under "Toolbar", and from the Saved sets button the main toolbar. The server checks each set against the set file rules and size limits when it saves the set and again when it reads it. `includes/shared-sets.php` gives the details.
+
+**Delete removes the preferences and the shared sets.** `uninstall.php` deletes the `editrail_set` posts and strips the `toolrail` scope from every user's preferences, on every site of a network. Each preference write is conditional on the value that was read, so a save from an open editor tab at the same moment survives. Deactivation keeps the preferences and the shared sets: while the plugin is inactive, nothing shows the shared sets, and they come back when you activate it again. The docblock of `includes/uninstall.php` gives the details.
 
 **The sidebar width is an opt-in stylesheet override.** It is off until the author turns it on in Toolbar settings; while it is off there is no handle and no override. The handle sits in the sidebar region of the editor's skeleton, next to the canvas. A width other than core's 280px sets one custom property and one body class, and the stylesheet overrides the sidebar's width from there. At 280px, and below the 782px breakpoint where core shows the sidebar full screen, nothing is overridden. The canvas and a docked toolbar are in the same flex row, so they take the space that is left.
 
-**The plugin emits nothing for the front end.** It registers one script and one stylesheet, for the post editor only. It has no REST routes, no shortcodes, no blocks of its own, and no output on the public site.
+**The plugin emits nothing for the front end.** It registers one script and one stylesheet, for the post editor only. It has no shortcodes, no blocks of its own, and no output on the public site. Its only REST routes are the shared-set routes, and they refuse a visitor who is not logged in.
 
 ## Extending
 
@@ -167,6 +170,8 @@ A set file is JSON with this shape:
 
 A set file can also carry the author's own name, description and icon for its blocks, in an optional `meta` object keyed by slot id: `"meta": { "core/quote": { "title": "Testimonial", "icon": "“" } }`. The import keeps these with the set and ignores entries for blocks the set does not list. Loading the set applies them to its pins. Saving a set records the labels its pins have at that time.
 
+A shared set uses the same format. The server stores the set file of the shared set, and a shared set exports to the same file as the author's own set.
+
 ### Extensions that use this contract
 
 Separate plugins by the same author use this contract and nothing else: rulers and guides, shapes, and shape dividers among them. `docs/integrations/typography-stylist.md` is a worked handoff for a third-party block plugin.
@@ -207,11 +212,11 @@ CI runs both lint commands on each pull request and each push to `main`. A findi
 
 `docs/releasing.md` describes the CI workflows and the release procedure.
 
-The e2e suite writes pins, positions and sets to the account it logs in with. It resets them to the defaults at the start of each test and at the end of the run. It also turns off the editor's welcome guide for that account. Do not point it at an account whose toolbar setup you want to keep.
+The e2e suite writes pins, positions and sets to the account it logs in with. It resets them to the defaults at the start of each test and at the end of the run. It also turns off the editor's welcome guide for that account. Do not point it at an account whose toolbar setup you want to keep. `tests/e2e/shared-sets.spec.js` also creates one user for each role, with a random password, and deletes these users, their shared sets and their patterns at the end, also when a test fails.
 
 ## Data and privacy
 
-The plugin stores per-user editor preferences and nothing else. They live in the `wp_persisted_preferences` user meta row that WordPress owns, under one `toolrail` key, next to the editor's own preferences. The plugin sends nothing to any external service. It has no telemetry. Deleting the plugin removes its key from every user's row.
+The plugin stores two things. Per-user editor preferences live in the `wp_persisted_preferences` user meta row that WordPress owns, under one `toolrail` key, next to the editor's own preferences. Another user never sees them. Shared sets are posts of the plugin's private `editrail_set` type, one for each set that a user shares. Each holds the set name and the set file contents, and nothing else of the user who shared it. Logged-in users who can edit posts on that site see the shared sets and the display name of the user who shared each one. The plugin sends nothing to any external service. It has no telemetry. Deleting the plugin removes its key from every user's row and deletes the shared sets.
 
 ## License
 
