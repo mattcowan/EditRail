@@ -87,6 +87,13 @@ const SAVE_WAIT_MS = 20000;
  */
 const SAVE_WAIT_AFTER_FAILURE_MS = 8000;
 
+/**
+ * How long openNewPost() waits for the first load's save before the reset.
+ * Shorter than SAVE_WAIT_MS because it runs inside the test's own 30 s: a
+ * first-load save normally lands in about 2.5 s (core's debounce).
+ */
+const BOOT_SAVE_WAIT_MS = 8000;
+
 /** How long to ask again when an open page does not answer (it is between documents). */
 const UNANSWERED_MS = 2000;
 
@@ -277,7 +284,7 @@ const test = base.test.extend({
     const opened = browser ? browser.contexts().filter((c) => c !== context && !before.has(c)) : [];
     const result = await waitForAccountSaves([context, ...opened], passed ? SAVE_WAIT_MS : SAVE_WAIT_AFTER_FAILURE_MS);
     if (passed && result.pending.length) {
-      throw new Error(`The test ended, but after ${result.waitedMs} ms the account still did not hold the page's last preference save (#113): ${JSON.stringify(result.pending)}. A save that never lands is an error; a slow server needs a longer SAVE_WAIT_MS in tests/e2e/helpers.js.`);
+      throw new Error(`The test ended, but after ${result.waitedMs} ms the account still did not hold the page's last preference save (#113): ${JSON.stringify(result.pending)}. A save that never lands, or a page that stopped answering, is an error; a slow server needs a longer SAVE_WAIT_MS in tests/e2e/helpers.js.`);
     }
   },
 });
@@ -435,12 +442,15 @@ async function openNewPost(page, opts) {
   // "#toolrail-rail is not visible" (#113 review, 2026-11-16).
   await page.waitForFunction(() => !!(window.toolrail && window.toolrail.prefs && window.toolrail.prefs.isReady()), null, { timeout: 8000 })
     .catch(() => {});
-  const boot = await waitForAccountSaves([page.context()], SAVE_WAIT_MS);
+  // BOOT_SAVE_WAIT_MS, not SAVE_WAIT_MS: this wait, the reset and the 20 s
+  // visibility check below all run inside the test's 30 s, so a long wait
+  // here would end a slow setup as a plain test timeout (PR #122 review).
+  const boot = await waitForAccountSaves([page.context()], BOOT_SAVE_WAIT_MS);
   // A boot save that has not landed could reach the account after the
   // reset and replace it, and a page on BASELINE does not save again to put
   // that right. So setup stops here (PR #122 review).
   if (boot.pending.length) {
-    throw new Error(`openNewPost: after ${boot.waitedMs} ms the account still did not hold the first load's preference save, so the reset would not be safe: ${JSON.stringify(boot.pending)}.`);
+    throw new Error(`openNewPost: after ${boot.waitedMs} ms the account still did not hold the first load's preference save, or the page stopped answering, so the reset would not be safe: ${JSON.stringify(boot.pending)}.`);
   }
 
   const hadState = await resetRailPrefs(page, opts);
