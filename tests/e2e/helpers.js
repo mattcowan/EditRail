@@ -189,8 +189,9 @@ async function waitForAccountSaves(contexts, timeoutMs) {
   const deadline = started + timeoutMs;
   // Each probe gets at most the time that is left. page.evaluate() and a
   // request have no timeout of their own, and this runs in a fixture's
-  // teardown, which the test timeout does not cut off: a hung page held
-  // the wait past its deadline (PR #122 review).
+  // teardown, which the test timeout does not cut off (@playwright/test
+  // 1.64.1: a teardown ran to 39.7 s and passed under a 30 s test timeout):
+  // a hung page held the wait past its deadline (PR #122 review).
   const bounded = (promise) => {
     let timer;
     const limit = new Promise((resolve, reject) => {
