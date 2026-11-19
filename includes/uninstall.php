@@ -11,7 +11,8 @@
  *    deletes them; see its docblock.
  *
  * 2. The per-user editor preferences (pinned tools and their custom names,
- *    descriptions and icons, toolbar position, saved sets, appearance, the
+ *    descriptions and icons, toolbar position, the extra toolbars with
+ *    their names, pins and positions (#95), saved sets, appearance, the
  *    help and inserter toggles) that `core/preferences` persists under the
  *    `toolrail` scope of core's OWN user-meta row,
  *    `{blog prefix}persisted_preferences` (wp-includes/script-loader.php

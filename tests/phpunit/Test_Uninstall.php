@@ -64,8 +64,14 @@ class Test_Uninstall extends WP_UnitTestCase {
             'core'           => ['editorMode' => 'visual', 'welcomeGuide' => false],
             'core/edit-post' => ['welcomeGuide' => false],
             'toolrail'       => [
-                'toolrail-quick-slots' => '["core/paragraph","core/cover"]',
-                'toolrail-position'    => 'right',
+                'toolrail-quick-slots'            => '["core/paragraph","core/cover"]',
+                'toolrail-position'               => 'right',
+                // The Toolbars button's hide choice (#95), the second key
+                // that more than one toolbar adds to the scope.
+                'toolrail-toolbars-button-hidden' => '1',
+                // The extra toolbars (#95): one key for all of them, in
+                // the same scope, so the same strip removes them.
+                'toolrail-toolbars'               => '{"version":1,"toolbars":[{"id":"t1","name":"Animation","dock":"right","x":24,"y":24,"slots":["core/cover"],"wide":false,"hidden":false}]}',
             ],
             '_modified'      => '2026-08-30T10:00:00.000Z',
         ];
@@ -91,6 +97,10 @@ class Test_Uninstall extends WP_UnitTestCase {
     }
 
     public function test_strip_removes_only_the_toolrail_scope_and_bumps_modified() {
+        // The fixture holds the extra toolbars' key (#95): the scope that
+        // goes holds every toolbar's preferences.
+        $this->assertArrayHasKey('toolrail-toolbars', $this->row_with_toolrail()['toolrail']);
+        $this->assertArrayHasKey('toolrail-toolbars-button-hidden', $this->row_with_toolrail()['toolrail']);
         $out = toolrail_uninstall_strip_preferences($this->row_with_toolrail(), self::NOW);
 
         $this->assertIsArray($out);
