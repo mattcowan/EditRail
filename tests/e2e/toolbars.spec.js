@@ -17,6 +17,7 @@ const {
   waitForSavedPref,
   getPref,
   liveText,
+  blockNames,
 } = require('./helpers');
 const { setRailScope, BASELINE } = require('./prefs-account');
 
@@ -1355,5 +1356,26 @@ test.describe('show and hide a toolbar (#95)', () => {
     expect(await getPref(page, 'toolrail-toolbars-button-hidden')).toBe('1');
     await page.locator('#toolrail-settings-toolbarsbutton').check();
     await expect(button).toBeVisible();
+  });
+});
+
+test.describe('an armed click in an iframe-less editor (PR #126 review)', () => {
+  test('a click on another tool arms that tool and inserts nothing', async ({ page }) => {
+    await openNewPost(page);
+    // The Code editor has no canvas iframe, so the canvas click handler is
+    // bound to the top document, where the toolbars are. The editor mode
+    // is a persisted preference, so it is restored whatever happens.
+    const setMode = (mode) => page.evaluate((m) => window.wp.data.dispatch('core/edit-post').switchEditorMode(m), mode);
+    try {
+      await setMode('text');
+      await expect(page.locator('iframe[name="editor-canvas"]')).toHaveCount(0, { timeout: 10000 });
+      const before = await blockNames(page);
+      await page.locator('#toolrail-rail [data-tool="pin:core/group"]').click();
+      await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').click();
+      await expect(page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]')).toHaveAttribute('aria-pressed', 'true');
+      expect(await blockNames(page)).toEqual(before);
+    } finally {
+      await setMode('visual');
+    }
   });
 });

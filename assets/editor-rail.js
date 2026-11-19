@@ -4870,9 +4870,11 @@ var DASHICON_NAMES = [
 
     var by = sharedByPhrase(item);
     var load = settingsButton(__('Load', 'editrail'), function () {
-      // Into the chosen toolbar (#95).
-      applySet(item.blocks, item.labels, tb);
-      settingsStatus = configLoadedMessage(item.name, tb);
+      // Into the chosen toolbar (#95), or the first one when a stored
+      // change deleted it while the dialog was open (PR #126 review).
+      var into = toolbars.indexOf(tb) === -1 ? mainToolbar : tb;
+      applySet(item.blocks, item.labels, into);
+      settingsStatus = configLoadedMessage(item.name, into);
       refreshSettings('#toolrail-settings-search');
     }, 'toolrail-settings-sharedload');
     // With several toolbars the name says which one Load fills, as an own
@@ -5874,6 +5876,15 @@ var DASHICON_NAMES = [
    */
   function handleCanvasClick(e) {
     if (activeTool === 'select') {
+      return;
+    }
+    // A non-iframed editor (the Code editor, or a block of an older API
+    // version) binds this to the top document, so it also sees clicks on
+    // the toolbars, the header and the sidebars. Only the canvas inserts:
+    // a click on another tool must reach that tool (PR #126 review).
+    var t = e.target;
+    if (t && t.ownerDocument === document
+      && !(t.closest && t.closest('.editor-styles-wrapper'))) {
       return;
     }
     var tool = findTool(activeTool);
@@ -8940,9 +8951,12 @@ var DASHICON_NAMES = [
           li.classList.add('toolrail-settings-wraprow');
         }
         var load = settingsButton(__('Load', 'editrail'), function () {
-          // Into the chosen toolbar (#95).
-          loadConfig(cfg, tb);
-          settingsStatus = configLoadedMessage(cfg, tb);
+          // Into the chosen toolbar (#95). A stored change can delete it
+          // while the dialog is open: then the first toolbar, and the
+          // message says which, as the block-menu pin does (PR #126 review).
+          var into = toolbars.indexOf(tb) === -1 ? mainToolbar : tb;
+          loadConfig(cfg, into);
+          settingsStatus = configLoadedMessage(cfg, into);
           refreshSettings('#toolrail-settings-search');
         }, 'toolrail-settings-load');
         load.setAttribute('aria-label', several
