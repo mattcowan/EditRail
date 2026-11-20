@@ -8,8 +8,9 @@
  *
  * Runs on post-new.php and NEVER saves a post; helpers.js has the rule.
  */
-const { test, expect } = require('@playwright/test');
 const {
+  test,
+  expect,
   AUTH,
   openNewPost,
   canvas,
