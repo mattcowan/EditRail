@@ -6,15 +6,18 @@
  *
  * Runs on post-new.php and NEVER saves a post; helpers.js has the rule.
  */
-const { test, expect } = require('@playwright/test');
 const {
+  test,
+  expect,
   AUTH,
   openNewPost,
   canvas,
   clickBelowContent,
   getPref,
   blockNames,
+  waitForSavedPref,
 } = require('./helpers');
+const { BASELINE } = require('./prefs-account');
 
 test.use({ storageState: AUTH });
 
@@ -114,6 +117,20 @@ test.describe('quick slots', () => {
  * originals could not see the stray-block bug at all.
  */
 test.describe('regressions', () => {
+  test('a fresh install seeds the four default pins and both stamps into the account', async ({ page }) => {
+    // A boot on the empty account of a fresh install. Tests start from
+    // BASELINE, the state this boot writes, so that their boots save
+    // nothing (#113). Until then every test ran this seed; this test keeps
+    // it covered, through the server. (end-of-test-save.spec.js uses an
+    // empty start too, for the save it makes, not to check the seed.)
+    await openNewPost(page, { emptyAccount: true });
+
+    await expect(page.locator('#toolrail-rail [data-tool^="pin:"]')).toHaveCount(4);
+    for (const key of Object.keys(BASELINE)) {
+      await waitForSavedPref(page, key, (v) => v === BASELINE[key]);
+    }
+  });
+
   test('a pre-migration author keeps Group, Text, Heading and Image on upgrade', async ({ page }) => {
     await openNewPost(page);
 

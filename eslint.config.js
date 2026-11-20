@@ -20,6 +20,9 @@
  * The NVDA suite (tests/e2e-sr/) does not run in CI, so lint is the only
  * check its code gets there.
  *
+ * A third block makes each e2e spec take `test` from tests/e2e/helpers.js,
+ * whose `test` waits for the account's preference saves (#113).
+ *
  * This file does not ship (.distignore).
  */
 const js = require('@eslint/js');
@@ -105,6 +108,20 @@ module.exports = [
       'no-eval': 'error',
       'no-implied-eval': 'error',
       'no-new-func': 'error',
+    },
+  },
+  {
+    // An e2e spec takes `test` and `expect` from ./helpers (#113). That
+    // `test` ends each test only once the account holds the page's last
+    // preference save. A spec that took `test` from @playwright/test would
+    // skip that wait, and a save it left pending could change the next
+    // test's start state. This rule makes a new spec file use it too.
+    files: ['tests/e2e/**/*.spec.js'],
+    rules: {
+      'no-restricted-syntax': ['error', {
+        selector: "CallExpression[callee.name='require'][arguments.0.value='@playwright/test']",
+        message: "Take test and expect from './helpers', not from '@playwright/test': its test waits for the account to save the page's preferences before a test ends (#113).",
+      }],
     },
   },
 ];
