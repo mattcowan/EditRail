@@ -5,9 +5,8 @@
  *
  * Runs on post-new.php and NEVER saves a post; helpers.js has the rule.
  */
-const { test, expect } = require('@playwright/test');
 const path = require('path');
-const { AUTH, openNewPost, getPref } = require('./helpers');
+const { test, expect, AUTH, openNewPost, getPref } = require('./helpers');
 
 test.use({ storageState: AUTH });
 

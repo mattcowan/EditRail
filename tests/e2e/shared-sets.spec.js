@@ -14,10 +14,9 @@
  *
  * Runs on post-new.php and NEVER saves a post; helpers.js has the rule.
  */
-const { test, expect } = require('@playwright/test');
 const crypto = require('crypto');
 const fs = require('fs');
-const { AUTH, openNewPost, liveText, waitForPatternCatalog } = require('./helpers');
+const { test, expect, AUTH, openNewPost, liveText, waitForPatternCatalog } = require('./helpers');
 const { openApi, turnOffWelcomeGuide } = require('./prefs-account');
 const { assertSafeBaseUrl } = require('../../scripts/lib/safe-base-url');
 
