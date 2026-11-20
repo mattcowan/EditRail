@@ -34,6 +34,30 @@
  * top rail opens its flyouts downward, a bottom rail upward. See the
  * "Rail position" block below for where each dock hangs.
  *
+ * MORE THAN ONE TOOLBAR (#95): the author can add up to three toolbars
+ * to the first one, each with its own name, pins, position and wide mode,
+ * and show or hide each. The first toolbar keeps #toolrail-region,
+ * #toolrail-rail, the name "Tools", Select, the Section overview, the
+ * provider tools, Help, Saved sets and Toolbar settings. An extra
+ * toolbar is #toolrail-region-<id> / #toolrail-rail-<id>, its pins only.
+ *   window.toolrail.getToolbars() → [{id, name, dock, x, y, hidden}],
+ *     the first toolbar first, id 'main'.
+ *   getDock(id) / getPosition(id) / setDock(dock, id), pinBlock(slot,
+ *   id) / unpinBlock(slot, id) / isPinned(slot, id) / moveSlot(slot,
+ *   delta, id), saveConfig(name, id) / loadConfig(name, id): the id is
+ *   OPTIONAL and last. Without it each call means what it meant with one
+ *   toolbar (the first toolbar), except that isPinned() and a pinBlock()
+ *   refusal count a pin on any SHOWN toolbar, unpinBlock() unpins from
+ *   every shown toolbar and moveSlot() acts on the first shown toolbar
+ *   with the pin. A hidden toolbar's pins do not count and are kept.
+ *   An unknown id: false, or null for a getter.
+ *   'toolrail:position-changed' keeps its {dock, x, y}, always the FIRST
+ *   toolbar's, and also fires when an extra toolbar is added, removed,
+ *   moved, shown or hidden (each moves the canvas). Then
+ *   'toolrail:toolbars-changed' fires with {toolbar: id, change}, change
+ *   one of 'added', 'removed', 'renamed', 'position', 'shown', 'hidden',
+ *   'synced' (the stored list changed from outside; toolbar is '').
+ *
  * REGISTRATION API (the provider contract):
  *   window.toolrail.registerTool({
  *     id,                        // required, unique
@@ -196,6 +220,27 @@
   // The Saved sets button's data-tool id (#93). Rail chrome, not a
   // registered tool, so allToolIds() reserves it.
   var SETS_TOOL_ID = 'saved-sets';
+  // The extra toolbars (#95): one JSON value, {version, toolbars: [...]}.
+  // The first toolbar is NOT in it. It keeps the keys it always had
+  // (POSITION_KEY, SLOTS_KEY, WIDE_KEY), so an account from an older
+  // version shows the same toolbar in the same place with no migration.
+  var TOOLBARS_KEY = 'toolrail-toolbars';
+  var TOOLBARS_BUTTON_HIDDEN_KEY = 'toolrail-toolbars-button-hidden';
+  // The Toolbars button's data-tool id. Rail chrome, like SETS_TOOL_ID.
+  var TOOLBAR_LIST_TOOL_ID = 'toolbar-list';
+  // The one button of an extra toolbar that has no pinned tool yet.
+  var ADD_TOOLS_TOOL_ID = 'toolbar-add-tools';
+  // The first toolbar plus three. Each docked toolbar takes its width
+  // from the canvas, so the number has to stop somewhere.
+  var MAX_TOOLBARS = 4;
+  // The narrowest content area (the editor's canvas region) the rail
+  // stays quiet about (owner decision 2026-11-16: say so, refuse
+  // nothing). 600px is core's own small breakpoint ($break-small), the
+  // width under which core lays the editor out for a phone; a canvas
+  // narrower than that is a phone layout on a desktop. Measured on the
+  // test site, WordPress 7.1.3 at 1280 x 800 with the settings sidebar
+  // open: one toolbar leaves 947px, four wide toolbars on one edge 200px.
+  var MIN_CANVAS_WIDTH = 600;
   var PREFS_SCOPE = 'toolrail';
   var SHAPE_FILL = '#b9b9b9';
 
@@ -560,21 +605,811 @@
     return pos;
   }
 
-  // Defaults until boot() re-loads from storage — reads must wait for the
-  // editor to attach the preferences persistence layer, and nothing
-  // consumes `position` before mount anyway.
-  var position = { dock: DEFAULT_DOCK, x: 24, y: 24 };
-
   /**
-   * Persist the current dock and floating offsets.
+   * The state of ONE toolbar, at its start values (#95). A function that
+   * reads or changes this state takes the toolbar as its first argument,
+   * so the code that builds, places and moves a toolbar names no
+   * particular one. The first toolbar is mainToolbar, below; the author
+   * can add up to three more (`toolbars`).
+   *
+   * A value that belongs to one toolbar goes here, with its start value.
+   * Two kinds do not, on purpose:
+   *
+   *  - The toolbar's NODES. They are looked up by id on every use
+   *    (regionId, railId): the editor's re-render can remove the region
+   *    at any time, and "not in the document" is how mount() learns that
+   *    it must build a new one. A kept reference would outlive the node.
+   *  - The roving tab stop. It has no variable: it is the one
+   *    .toolrail-tool with tabIndex 0 inside the toolbar's rail node, and
+   *    buildRail binds the two listeners that move it to that node.
+   *
+   * The FIRST toolbar's pins and wide mode are not here either: they stay
+   * in the keys they always had (SLOTS_KEY, WIDE_KEY) and are read from
+   * storage on every use, so loadSlots() and isWide() ask the store for
+   * the first toolbar and this object for the others.
+   *
+   * State that is ONE FOR THE PAGE stays outside. Where that choice was
+   * not obvious, the reason is beside the variable: the armed tool
+   * (activeTool), the open flyout (openFlyout), a toolbar drag in flight
+   * (drag), a tool drag in flight (railDragActive) and the pressed-state
+   * signature (lastPaintedSignature). The flyout and the drag each record
+   * the toolbar they belong to. The rest is shared by its nature: the
+   * tool registry (`registered`) is what providers register, not what one
+   * toolbar shows; the settings, help and add-to-toolbar dialogs are one
+   * surface each, opened from the main toolbar's buttons and hung in its
+   * region; the Section overview is a mode of the canvas; and the
+   * appearance and the saved sets are stored preferences with no variable
+   * here.
+   *
+   * @param {string} id       The toolbar's name in code.
+   * @param {string} regionId The id of its region node.
+   * @param {string} railId   The id of its role="toolbar" node.
+   * @return {Object} A fresh toolbar state.
    */
-  function savePosition() {
-    writeKey(POSITION_KEY, JSON.stringify(position));
+  function newToolbar(id, regionId, railId) {
+    return {
+      // The toolbar's name in code: 'main' for the first toolbar, and the
+      // stored id of an extra toolbar (TOOLBARS_KEY), which is also the
+      // tail of its two node ids and its region's data-toolbar value.
+      id: id,
+      // An extra toolbar's own values, as stored in its record: the name
+      // the author gave it (its accessible name), its pinned slots, its
+      // wide mode, and whether the author has hidden it. The first
+      // toolbar does not use these: it has no name of its own, it cannot
+      // be hidden, and its pins and wide mode are in their own keys.
+      name: '',
+      slots: [],
+      wide: false,
+      hidden: false,
+      // The ids of the toolbar's two nodes: the positioned region that
+      // hangs in the editor's skeleton, and the role="toolbar" rail
+      // inside it.
+      regionId: regionId,
+      railId: railId,
+      // The dock and the floating offsets. Defaults until boot() re-loads
+      // from storage — reads must wait for the editor to attach the
+      // preferences persistence layer, and nothing consumes `position`
+      // before mount anyway.
+      position: { dock: DEFAULT_DOCK, x: 24, y: 24 },
+      // An extra toolbar's floating offsets as STORED in its record.
+      // `position` holds the painted offsets, which applyFloatPosition()
+      // clamps into the window; only a move of this toolbar
+      // (savePosition) or a stored change (syncToolbars) changes these,
+      // so a save for a different toolbar never stores a clamp. The first
+      // toolbar does not use them: only its own moves write its key.
+      stored: { x: 24, y: 24 },
+      // Every React root created for a pinned-block icon, so the previous
+      // generation can be unmounted. A discarded root keeps its fiber tree
+      // alive, and the rail rebuilds on every slot change (the ↑/↓ buttons
+      // in the settings dialog rebuild it per click) — so these accumulate
+      // fast unless they are disposed. buildRail() is the ONLY producer
+      // and always creates a complete new set, which makes it the correct
+      // disposal point. Per toolbar, because that set is one rail's: a
+      // shared list would let one toolbar's rebuild unmount the icons of
+      // a different toolbar.
+      iconRoots: [],
+      // The tools section's ResizeObserver, disposed on the same rule as
+      // the icon roots: buildRail is the only producer, so it disconnects
+      // the previous generation before creating the next.
+      scrollObserver: null
+    };
   }
 
-  /** Top and bottom docks lay the rail out as a horizontal bar. */
-  function isVertical() {
-    return position.dock !== 'top' && position.dock !== 'bottom';
+  // The first toolbar. Its two ids are public: extension plugins read the
+  // --toolrail-* tokens off #toolrail-region, and the browser tests name
+  // #toolrail-rail. It holds Select, the Section overview, the provider
+  // tools, Help and Toolbar settings, so it is never hidden or deleted.
+  var mainToolbar = newToolbar('main', 'toolrail-region', 'toolrail-rail');
+
+  // Every toolbar, the first one first. The order is the Tab order and
+  // the order on a shared edge (see placeToolbarRegions).
+  var toolbars = [mainToolbar];
+
+  // The stored extra toolbars as syncToolbars() last applied them (the
+  // JSON of the validated records), so a preference change that is not
+  // about toolbars costs one read and one compare.
+  var toolbarsSynced = '[]';
+
+  var TOOLBAR_ID_PATTERN = /^[a-z0-9]{1,12}$/;
+  var TOOLBAR_NAME_MAX = 40;
+
+  /**
+   * Persist a toolbar's dock and floating offsets.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {void}
+   */
+  function savePosition(tb) {
+    if (tb === mainToolbar) {
+      writeKey(POSITION_KEY, JSON.stringify(tb.position));
+    } else {
+      // This toolbar moved: its painted offsets become its stored ones.
+      tb.stored = { x: tb.position.x, y: tb.position.y };
+      saveToolbars();
+    }
+  }
+
+  /**
+   * @param {string} id A toolbar id ('main' or a stored id).
+   * @return {Object|null} The toolbar, or null.
+   */
+  function toolbarById(id) {
+    for (var i = 0; i < toolbars.length; i++) {
+      if (toolbars[i].id === id) {
+        return toolbars[i];
+      }
+    }
+    return null;
+  }
+
+  /**
+   * What the author calls a toolbar: its own name, or "Main toolbar" for
+   * the first one. For lists, headings and messages. The first toolbar's
+   * ACCESSIBLE name stays "Tools" (buildRail).
+   *
+   * @param {Object} tb The toolbar.
+   * @return {string} The name.
+   */
+  function toolbarLabel(tb) {
+    return tb === mainToolbar ? __('Main toolbar', 'editrail') : tb.name;
+  }
+
+  /**
+   * A toolbar name as it is stored: a string, with runs of white space
+   * as one space, trimmed, and not longer than TOOLBAR_NAME_MAX.
+   *
+   * @param {*} value A candidate name.
+   * @return {string} The clean name; '' when there is none.
+   */
+  function cleanToolbarName(value) {
+    if (typeof value !== 'string') {
+      return '';
+    }
+    return value.replace(/\s+/g, ' ').trim().slice(0, TOOLBAR_NAME_MAX).trim();
+  }
+
+  /**
+   * Whether a name is in use. A toolbar's name is its accessible name, so
+   * two toolbars must not have the same one. The compare ignores case. The
+   * first toolbar's two names, "Tools" and "Main toolbar", are taken too.
+   *
+   * @param {string}   name  A clean name.
+   * @param {string[]} taken The names of the other extra toolbars.
+   * @return {boolean}
+   */
+  function toolbarNameTaken(name, taken) {
+    var wanted = name.toLowerCase();
+    return [__('Tools', 'editrail'), __('Main toolbar', 'editrail')].concat(taken).some(function (other) {
+      return other.toLowerCase() === wanted;
+    });
+  }
+
+  /**
+   * A name that no other toolbar has: the name itself, or the name with
+   * the first free number after it ("Animation 2").
+   *
+   * @param {string}   name  A clean name.
+   * @param {string[]} taken The names of the other extra toolbars.
+   * @return {string} The free name.
+   */
+  function uniqueToolbarName(name, taken) {
+    var candidate = name;
+    for (var n = 2; toolbarNameTaken(candidate, taken); n++) {
+      candidate = name.slice(0, TOOLBAR_NAME_MAX - String(n).length - 1).trim() + ' ' + n;
+    }
+    return candidate;
+  }
+
+  /**
+   * The name a new toolbar gets: "Toolbar 2" for the second toolbar, and
+   * the next free number after that.
+   *
+   * @param {string[]} taken The names of the other extra toolbars.
+   * @return {string} The name.
+   */
+  function defaultToolbarName(taken) {
+    for (var n = taken.length + 2; ; n++) {
+      var name = sprintf(
+        /* translators: %d: the toolbar's number, 2 or more. */
+        __('Toolbar %d', 'editrail'),
+        n
+      );
+      if (!toolbarNameTaken(name, taken)) {
+        return name;
+      }
+    }
+  }
+
+  /**
+   * The stored value of TOOLBARS_KEY as an object, or null when it is not
+   * there, cannot be parsed, or is not a version this code knows.
+   *
+   * A value from a LATER version of the plugin therefore shows no extra
+   * toolbars here, and the first change that saves the list (an added
+   * toolbar) replaces it with a version 1 list. A downgrade can lose the
+   * extra toolbars that way. That is accepted: the first toolbar and its
+   * keys are never touched.
+   *
+   * @return {Object|null} {version: 1, toolbars: Array}, or null.
+   */
+  function readToolbarStore() {
+    try {
+      var raw = readKey(TOOLBARS_KEY);
+      var parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === 'object' && parsed.version === 1 && Array.isArray(parsed.toolbars)) {
+        return parsed;
+      }
+    } catch (e) {
+      /* Unparseable or unavailable storage: no extra toolbars. */
+    }
+    return null;
+  }
+
+  /**
+   * Which stored records the reader uses, and which it leaves out. Used:
+   * an object with a valid id ('main' is not one) that no record before
+   * it has, while there is room (MAX_TOOLBARS - 1). Left out: everything
+   * else, in stored order: a bad or repeated id, a non-object, a record
+   * past the maximum. One rule for the reader and the writer, so the
+   * writer can keep exactly what the reader did not show.
+   *
+   * @param {Array} list The stored `toolbars` array.
+   * @return {{accepted: Object[], leftOut: Array}} The two lists.
+   */
+  function splitToolbarRecords(list) {
+    // A prototype-less map: an id such as 'constructor' passes the id
+    // pattern and must not read as already seen (review 2026-11-16,
+    // finding 6).
+    var ids = Object.create(null);
+    var accepted = [];
+    var leftOut = [];
+    list.forEach(function (rec) {
+      var usable = accepted.length < MAX_TOOLBARS - 1 && !!rec && typeof rec === 'object'
+        && typeof rec.id === 'string' && TOOLBAR_ID_PATTERN.test(rec.id)
+        && rec.id !== mainToolbar.id && !ids[rec.id];
+      if (usable) {
+        ids[rec.id] = true;
+        accepted.push(rec);
+      } else {
+        leftOut.push(rec);
+      }
+    });
+    return { accepted: accepted, leftOut: leftOut };
+  }
+
+  /**
+   * The stored extra toolbars, each field validated before it is trusted,
+   * in stored order. A record with a bad or repeated id is not shown.
+   * Every other bad field gets its default: an unknown dock becomes the
+   * left dock, a missing name becomes "Toolbar N", and a name another
+   * toolbar has gets a number. Records past the maximum are left out,
+   * not deleted: nothing is written here, and saveToolbars() writes the
+   * left-out records back as they were.
+   *
+   * @return {Object[]} {id, name, dock, x, y, slots, wide, hidden} each.
+   */
+  function loadToolbarRecords() {
+    var store = readToolbarStore();
+    var out = [];
+    var names = [];
+    splitToolbarRecords(store ? store.toolbars : []).accepted.forEach(function (rec) {
+      var name = cleanToolbarName(rec.name);
+      name = name ? uniqueToolbarName(name, names) : defaultToolbarName(names);
+      names.push(name);
+      out.push({
+        id: rec.id,
+        name: name,
+        dock: DOCKS.indexOf(rec.dock) !== -1 ? rec.dock : DEFAULT_DOCK,
+        x: typeof rec.x === 'number' && isFinite(rec.x) ? rec.x : 24,
+        y: typeof rec.y === 'number' && isFinite(rec.y) ? rec.y : 24,
+        slots: normalizeSlots(rec.slots),
+        wide: rec.wide === true,
+        hidden: rec.hidden === true
+      });
+    });
+    return out;
+  }
+
+  /**
+   * Write every extra toolbar back from its object. The ONE writer of
+   * TOOLBARS_KEY: a caller changes the toolbar object first and then calls
+   * this, so the stored list and the objects cannot disagree. A field of
+   * a stored record that this code does not know is kept.
+   *
+   * The records the reader left out (splitToolbarRecords) are written back
+   * unchanged, after the toolbars this page shows. Without that, the first
+   * change deleted records past the maximum, with their pins (review
+   * 2026-11-16, finding 3). A repeated id is left out the same way: it
+   * stays, as stored, after the toolbar that has that id, and the reader
+   * keeps not showing it. A record the reader DID show and that is no
+   * longer in `toolbars` was deleted by the author, and goes.
+   *
+   * @return {void}
+   */
+  function saveToolbars() {
+    var store = readToolbarStore();
+    var split = splitToolbarRecords(store ? store.toolbars : []);
+    var stored = Object.create(null);
+    split.accepted.forEach(function (rec) {
+      stored[rec.id] = rec;
+    });
+    var list = toolbars.filter(function (tb) {
+      return tb !== mainToolbar;
+    }).map(function (tb) {
+      var rec = {};
+      Object.keys(stored[tb.id] || {}).forEach(function (key) {
+        if (key !== '__proto__') {
+          rec[key] = stored[tb.id][key];
+        }
+      });
+      rec.id = tb.id;
+      rec.name = tb.name;
+      rec.dock = tb.position.dock;
+      // The STORED offsets, not the painted ones: applyFloatPosition()
+      // clamps tb.position into a narrow window, and a save made for a
+      // different toolbar wrote that clamp as this toolbar's place
+      // (PR #126 review, CodeRabbit). savePosition() updates them when
+      // the author moves this toolbar.
+      rec.x = tb.stored.x;
+      rec.y = tb.stored.y;
+      rec.slots = tb.slots.slice();
+      rec.wide = tb.wide;
+      rec.hidden = tb.hidden;
+      return rec;
+    });
+    // A left-out record with the id of a toolbar the author just deleted
+    // (shown before, not in `toolbars` now) is a duplicate of it. Kept, it
+    // would be the next record the reader accepts for that id, and the
+    // deleted toolbar would come back with its pins (PR #126 review,
+    // CodeRabbit). It goes with the toolbar. Other left-out records stay.
+    var known = Object.create(null);
+    toolbars.forEach(function (tb) {
+      known[tb.id] = true;
+    });
+    var leftOut = split.leftOut.filter(function (rec) {
+      var id = rec && typeof rec === 'object' ? rec.id : null;
+      return !(typeof id === 'string' && stored[id] && !known[id]);
+    });
+    writeKey(TOOLBARS_KEY, JSON.stringify({ version: 1, toolbars: list.concat(leftOut) }));
+    // This page's own change is already in the objects, so the next
+    // syncToolbars() has nothing to do for it. The signature is built
+    // from the objects, not read back: when a delete makes room for a
+    // left-out record, the store now shows one more toolbar than this
+    // page, and the next sync must find that difference and add it.
+    toolbarsSynced = JSON.stringify(toolbars.slice(1).map(function (tb) {
+      return {
+        id: tb.id,
+        name: tb.name,
+        dock: tb.position.dock,
+        x: tb.stored.x,
+        y: tb.stored.y,
+        slots: tb.slots,
+        wide: tb.wide,
+        hidden: tb.hidden
+      };
+    }));
+  }
+
+  /**
+   * Tell extensions that a toolbar was added, removed, renamed, moved,
+   * shown or hidden.
+   *
+   * Every change but a rename can move the canvas, so it also fires
+   * toolrail:position-changed, first. That event's payload is ALWAYS the
+   * first toolbar's position: a listener that reads it as "where the
+   * toolbar is" gets what getDock() says, and a listener that reads it as
+   * "the layout moved, measure again" measures again. The new event says
+   * which toolbar changed (#95).
+   *
+   * @param {string} id     The toolbar's id; '' when the stored list
+   *                        changed from outside this page.
+   * @param {string} change 'added', 'removed', 'renamed', 'position',
+   *                        'shown', 'hidden' or 'synced'.
+   * @return {void}
+   */
+  function announceToolbarsChange(id, change) {
+    if (change !== 'renamed') {
+      var first = mainToolbar.position;
+      window.dispatchEvent(new CustomEvent('toolrail:position-changed', {
+        detail: { dock: first.dock, x: first.x, y: first.y }
+      }));
+    }
+    window.dispatchEvent(new CustomEvent('toolrail:toolbars-changed', {
+      detail: { toolbar: id, change: change }
+    }));
+  }
+
+  /**
+   * Take a toolbar's region out of the document for good, and release
+   * what its last build holds. setDock removes a region too, but builds
+   * it again at once, and that build does the release. A hidden or
+   * deleted toolbar gets no next build.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {void}
+   */
+  function removeToolbarRegion(tb) {
+    if (openFlyout && openFlyout.toolbar === tb) {
+      closeFlyout(false);
+    }
+    if (drag && drag.toolbar === tb) {
+      finishDrag();
+    }
+    releaseToolDragOf(tb);
+    disposeIconRoots(tb);
+    if (tb.scrollObserver) {
+      tb.scrollObserver.disconnect();
+      tb.scrollObserver = null;
+    }
+    var region = document.getElementById(tb.regionId);
+    if (region) {
+      region.remove();
+    }
+  }
+
+  /**
+   * Return the rail to Select when the armed tool has no button left on
+   * any shown toolbar, and say so. A toolbar that the author hides or
+   * deletes can take the armed tool with it; without this the canvas
+   * keeps the armed cursor and no button shows as pressed.
+   *
+   * A caller that announces its own change passes `quiet` and puts
+   * disarmedMessage() into its one message: two speak() calls in one
+   * task leave only the second in the live region, so the disarm was
+   * never heard (review 2026-11-16, finding 2).
+   *
+   * @param {boolean} quiet Do not speak; the caller does.
+   * @return {boolean} True when it disarmed.
+   */
+  function disarmIfToolGone(quiet) {
+    if (activeTool !== 'select' && !findTool(activeTool)) {
+      setActiveTool('select');
+      if (!quiet) {
+        speak(disarmedMessage());
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /** @return {string} The sentence for a disarm the author did not ask for. */
+  function disarmedMessage() {
+    return __('Tool disarmed. Select is active.', 'editrail');
+  }
+
+  /**
+   * One message from a change's own message and the sentences it adds
+   * (a disarm, a narrow canvas), for one speak() call.
+   *
+   * @param {string[]} parts Sentences; empty ones are left out.
+   * @return {string} The message.
+   */
+  function joinMessages(parts) {
+    return parts.filter(function (part) {
+      return !!part;
+    }).join(' ');
+  }
+
+  /**
+   * Make the toolbar objects and their regions agree with the stored
+   * list. The one path for every change that did not start in this page's
+   * own code: the first read at boot, core's late attach of the saved
+   * preferences, and a write from a different tab that a later attach
+   * brings in. This page's own changes update the object before they
+   * write, so they find nothing to do here.
+   *
+   * A changed toolbar's region is built again whole. Its position alone
+   * is applied in place.
+   *
+   * @return {boolean} True when a toolbar was added, removed or rebuilt.
+   */
+  function syncToolbars() {
+    var records = loadToolbarRecords();
+    var signature = JSON.stringify(records);
+    if (signature === toolbarsSynced) {
+      return false;
+    }
+    toolbarsSynced = signature;
+
+    var changed = false;
+    // Offsets alone changed: no rebuild, but the layout moved, so
+    // listeners still hear of it (PR #126 review, CodeRabbit).
+    var moved = false;
+    var next = [mainToolbar];
+    records.forEach(function (rec) {
+      var tb = toolbarById(rec.id);
+      // A drag owns the position until it ends, and saves it then.
+      var dragging = !!drag && drag.toolbar === tb;
+      if (!tb) {
+        tb = newToolbar(rec.id, 'toolrail-region-' + rec.id, 'toolrail-rail-' + rec.id);
+        changed = true;
+      } else if (tb.name !== rec.name || tb.wide !== rec.wide || tb.hidden !== rec.hidden
+        || JSON.stringify(tb.slots) !== JSON.stringify(rec.slots)
+        || (!dragging && tb.position.dock !== rec.dock)) {
+        removeToolbarRegion(tb);
+        changed = true;
+        // removeToolbarRegion() ends a drag of this toolbar. A drag that
+        // ended no longer owns the position, so the stored one applies
+        // (PR #126 review, CodeRabbit).
+        dragging = !!drag && drag.toolbar === tb;
+      } else if (!dragging && (tb.stored.x !== rec.x || tb.stored.y !== rec.y)) {
+        moved = true;
+      }
+      tb.name = rec.name;
+      tb.slots = rec.slots;
+      tb.wide = rec.wide;
+      tb.hidden = rec.hidden;
+      tb.stored = { x: rec.x, y: rec.y };
+      if (!dragging) {
+        tb.position.dock = rec.dock;
+        tb.position.x = rec.x;
+        tb.position.y = rec.y;
+      }
+      next.push(tb);
+    });
+    toolbars.forEach(function (tb) {
+      if (next.indexOf(tb) === -1) {
+        removeToolbarRegion(tb);
+        changed = true;
+      }
+    });
+    var reordered = next.some(function (tb, i) {
+      return toolbars[i] !== tb;
+    });
+    toolbars = next;
+
+    if (changed || reordered) {
+      // The chosen toolbar in Toolbar settings can be one that is gone.
+      if (!toolbarById(settingsToolbarId)) {
+        settingsToolbarId = mainToolbar.id;
+      }
+      // An open Toolbars menu shows the old list: a checked item would
+      // now do the opposite of what it says. Close it, and keep the
+      // focus on its button when the focus was in it (PR #126 review,
+      // CodeRabbit).
+      if (openFlyout && openFlyout.parentBtn.dataset.tool === TOOLBAR_LIST_TOOL_ID) {
+        closeFlyout(openFlyout.node.contains(document.activeElement));
+      }
+      mountToolbars();
+      syncLayers();
+      // A provider tool under a pin of a changed toolbar can move to or
+      // from the first toolbar's top level.
+      rerenderMainForParents(null);
+      // The first toolbar shows the Toolbars button only while an extra
+      // toolbar exists.
+      reconcileToolbarsButton();
+      disarmIfToolGone();
+    }
+    // Paint every floating toolbar BEFORE the events below, so a
+    // listener that measures the layout sees the new boxes (PR #126
+    // review, CodeRabbit). A toolbar whose offsets alone changed keeps
+    // its region.
+    toolbars.forEach(applyFloatPosition);
+    if (changed || reordered || moved) {
+      announceToolbarsChange('', 'synced');
+    }
+    if (changed || reordered) {
+      if (settingsOpen) {
+        refreshSettings();
+      }
+      placeOpenDialogs();
+    }
+    return changed || reordered;
+  }
+
+  /**
+   * Add a toolbar: empty, with the next free name, beside the first
+   * toolbar on the same edge (a floating one a little down and right of
+   * it, so the two do not start one on the other). Refused at
+   * MAX_TOOLBARS.
+   *
+   * @return {Object|null} The new toolbar, or null when the maximum is
+   *                       reached.
+   */
+  function addToolbar() {
+    if (toolbars.length >= MAX_TOOLBARS) {
+      return null;
+    }
+    // Skip the ids of stored records too: a left-out record that
+    // saveToolbars() keeps must not be shadowed by a new toolbar that
+    // takes its id.
+    var store = readToolbarStore();
+    var used = Object.create(null);
+    (store ? store.toolbars : []).forEach(function (rec) {
+      if (rec && typeof rec === 'object' && typeof rec.id === 'string') {
+        used[rec.id] = true;
+      }
+    });
+    var n = 1;
+    while (toolbarById('t' + n) || used['t' + n]) {
+      n++;
+    }
+    var id = 't' + n;
+    var tb = newToolbar(id, 'toolrail-region-' + id, 'toolrail-rail-' + id);
+    tb.name = defaultToolbarName(toolbars.slice(1).map(function (other) {
+      return other.name;
+    }));
+    tb.position.dock = mainToolbar.position.dock;
+    tb.position.x = mainToolbar.position.x + 24 * toolbars.length;
+    tb.position.y = mainToolbar.position.y + 24 * toolbars.length;
+    tb.stored = { x: tb.position.x, y: tb.position.y };
+    toolbars.push(tb);
+    saveToolbars();
+    mount(tb);
+    syncLayers();
+    reconcileToolbarsButton();
+    // A dialog open past the first toolbar's edge now has one more
+    // toolbar to clear.
+    placeOpenDialogs();
+    announceToolbarsChange(tb.id, 'added');
+    return tb;
+  }
+
+  /**
+   * Give an extra toolbar a new name. The name is its accessible name,
+   * so an empty name and a name another toolbar has are refused.
+   *
+   * @param {Object} tb    An extra toolbar.
+   * @param {string} value The name the author typed.
+   * @return {string} 'renamed', 'same', 'empty' or 'taken'.
+   */
+  function renameToolbar(tb, value) {
+    var name = cleanToolbarName(value);
+    if (!name) {
+      return 'empty';
+    }
+    if (name === tb.name) {
+      return 'same';
+    }
+    var others = toolbars.filter(function (other) {
+      return other !== mainToolbar && other !== tb;
+    }).map(function (other) {
+      return other.name;
+    });
+    if (toolbarNameTaken(name, others)) {
+      return 'taken';
+    }
+    tb.name = name;
+    saveToolbars();
+    // The name is on the region and, built in, on the rail: its accessible
+    // name and an empty toolbar's "Add tools to <name>" button, which kept
+    // the old name until a rebuild (review 2026-11-16, finding 4). The
+    // rebuild moves focus only when focus was in that rail, and a rename
+    // comes from the dialog.
+    var region = document.getElementById(tb.regionId);
+    if (region) {
+      region.setAttribute('aria-label', regionLabel(tb));
+    }
+    rerender(tb);
+    announceToolbarsChange(tb.id, 'renamed');
+    return 'renamed';
+  }
+
+  /**
+   * Delete an extra toolbar. Its pins go with it; a pin's own name,
+   * description and icon are cleared only when no other toolbar shows
+   * that pin.
+   *
+   * The armed tool is put back to Select when it went with the toolbar,
+   * without a word: the caller says it in its own message.
+   *
+   * @param {Object} tb An extra toolbar.
+   * @return {Object|boolean} {disarmed} when it was deleted; else false.
+   */
+  function deleteToolbar(tb) {
+    var index = toolbars.indexOf(tb);
+    if (tb === mainToolbar || index === -1) {
+      return false;
+    }
+    var slots = tb.slots.slice();
+    toolbars.splice(index, 1);
+    saveToolbars();
+    removeToolbarRegion(tb);
+    slots.forEach(function (name) {
+      if (!isPinnedAnywhere(name) && clearPinMeta(name)) {
+        announcePinMetaChange(name);
+      }
+    });
+    if (settingsToolbarId === tb.id) {
+      settingsToolbarId = mainToolbar.id;
+    }
+    rerenderMainForParents(tb);
+    mountToolbars();
+    syncLayers();
+    reconcileToolbarsButton();
+    var disarmed = disarmIfToolGone(true);
+    placeOpenDialogs();
+    window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
+    announceToolbarsChange(tb.id, 'removed');
+    return { disarmed: disarmed };
+  }
+
+  /**
+   * Show or hide an extra toolbar. A hidden toolbar has no region in the
+   * document, so it has no Tab stop and no landmark, and the canvas gets
+   * its room back. Its record keeps everything else. A disarm is silent;
+   * the caller says it in its own message.
+   *
+   * @param {Object}  tb     An extra toolbar.
+   * @param {boolean} hidden Whether to hide it.
+   * @return {Object|boolean} {disarmed} when the state changed; else false.
+   */
+  function setToolbarHidden(tb, hidden) {
+    if (tb === mainToolbar || tb.hidden === !!hidden) {
+      return false;
+    }
+    tb.hidden = !!hidden;
+    saveToolbars();
+    var disarmed = false;
+    if (tb.hidden) {
+      removeToolbarRegion(tb);
+      disarmed = disarmIfToolGone(true);
+    } else {
+      mount(tb);
+    }
+    syncLayers();
+    placeOpenDialogs();
+    announceToolbarsChange(tb.id, tb.hidden ? 'hidden' : 'shown');
+    return { disarmed: disarmed };
+  }
+
+  /**
+   * The sentence to add to an author's change when it left the canvas
+   * narrower than MIN_CANVAS_WIDTH, or ''. Nothing is refused (owner
+   * decision 2026-11-16): the author hears it and decides. Called only
+   * after a change the author made in the rail's own controls (add, dock
+   * or move, wide on, show), never on page load or a window resize.
+   *
+   * Width only. The top and bottom docks never take tool names, so a
+   * stack of horizontal bars is at most MAX_TOOLBARS × 53px tall.
+   *
+   * @return {string} The sentence, or ''.
+   */
+  function canvasNarrowMessage() {
+    // Only while more than one toolbar is SHOWN: a hidden toolbar takes no
+    // width, and with one toolbar the rail acts as it did before #95 and
+    // "hide or move a toolbar" names nothing the author can do (review
+    // 2026-11-16, round 2).
+    var shown = toolbars.filter(function (tb) {
+      return !tb.hidden;
+    }).length;
+    var content = contentRegion();
+    var width = content ? Math.round(content.getBoundingClientRect().width) : 0;
+    if (shown < 2 || !content || width >= MIN_CANVAS_WIDTH) {
+      return '';
+    }
+    return sprintf(
+      /* translators: 1: the canvas width in pixels, 2: the smallest width that keeps blocks easy to edit. */
+      __('The content area is now %1$d pixels wide, less than %2$d. To give it more room, hide or move a toolbar, or turn off tool names.', 'editrail'),
+      width,
+      MIN_CANVAS_WIDTH
+    );
+  }
+
+  /**
+   * The accessible name of a toolbar's region.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {string} The name.
+   */
+  function regionLabel(tb) {
+    return tb === mainToolbar
+      ? __('Tool rail', 'editrail')
+      : sprintf(
+        /* translators: %s: the toolbar's name. */
+        __('Tool rail: %s', 'editrail'),
+        tb.name
+      );
+  }
+
+  /**
+   * Top and bottom docks lay the rail out as a horizontal bar.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {boolean} True for a left, right or floating toolbar.
+   */
+  function isVertical(tb) {
+    return tb.position.dock !== 'top' && tb.position.dock !== 'bottom';
   }
 
   /**
@@ -598,43 +1433,95 @@
   }
 
   /**
-   * Where the region belongs for the current dock, as a parent plus the
-   * node to insert before (null = append). Returns null when the editor
-   * chrome for that dock is not on the page yet — mount() then retries.
+   * The node a toolbar's region hangs in for its current dock. Returns
+   * null when the editor chrome for that dock is not on the page yet —
+   * mount() then retries.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {HTMLElement|null} The parent, or null.
    */
-  function dockPlacement() {
+  function dockParent(tb) {
     var body = skeletonBody();
     var editor = skeletonEditor();
-    switch (position.dock) {
-      case 'right':
-      case 'float':
-        return body ? { parent: body, before: null } : null;
+    switch (tb.position.dock) {
       case 'top':
-        return editor && body && body.parentNode === editor
-          ? { parent: editor, before: body }
-          : null;
+        return editor && body && body.parentNode === editor ? editor : null;
       case 'bottom':
-        return editor ? { parent: editor, before: null } : null;
+        return editor || null;
       default:
-        return body ? { parent: body, before: body.firstChild } : null;
+        return body || null;
     }
   }
 
   /**
-   * Whether the region already sits where dockPlacement() wants it, so
-   * mount() can skip a needless move on every observer pass.
+   * Put every toolbar's region where its dock hangs, and move only the
+   * regions that are not there, so mount() can run on every observer pass.
    *
-   * @param {HTMLElement} region The rail region.
-   * @param {Object}      place  A dockPlacement() result.
-   * @return {boolean} True when no move is needed.
+   * The places are decided for ALL toolbars in one pass, not one toolbar
+   * at a time (#95). Each of the right, bottom and floating docks wants
+   * its region at the END of its parent. Two toolbars that each asked
+   * "am I the last child?" would move each other on every pass, and each
+   * move is a mutation that starts the next pass. So the order is fixed
+   * here: the first toolbar keeps the place it always had, against the
+   * editor's edge, and each later toolbar on the same edge sits between
+   * the one before it and the canvas. The order in the document is then
+   * the order on screen on every edge:
+   *
+   *   left   → the first children of __body, first toolbar first
+   *   right  → the last children of __body, first toolbar last
+   *   float  → at the end of __body, before the right-docked toolbars
+   *   top    → directly before __body in __editor, first toolbar first
+   *   bottom → the last children of __editor, first toolbar last
+   *
+   * A region that already has its place is not touched: moving a node
+   * drops the focus inside it.
+   *
+   * @param {Object|null}      pendingTb   A toolbar whose region is built
+   *                                       but not in the document yet.
+   * @param {HTMLElement|null} pendingNode That region.
+   * @return {Object[]} The toolbars whose region was inserted or moved.
    */
-  function isPlacedCorrectly(region, place) {
-    if (region.parentNode !== place.parent) {
-      return false;
+  function placeToolbarRegions(pendingTb, pendingNode) {
+    var body = skeletonBody();
+    var editor = skeletonEditor();
+    var groups = { left: [], right: [], top: [], bottom: [], float: [] };
+    var moved = [];
+    toolbars.forEach(function (tb) {
+      var node = tb === pendingTb ? pendingNode : document.getElementById(tb.regionId);
+      if (node && dockParent(tb)) {
+        groups[tb.position.dock].push({ tb: tb, node: node });
+      }
+    });
+
+    // Each entry must sit directly in front of the one after it, and the
+    // last one directly in front of `end` (null = the end of the parent).
+    function settleBefore(parent, entries, end) {
+      var before = end;
+      for (var i = entries.length - 1; i >= 0; i--) {
+        if (entries[i].node.parentNode !== parent || entries[i].node.nextSibling !== before) {
+          parent.insertBefore(entries[i].node, before);
+          moved.push(entries[i].tb);
+        }
+        before = entries[i].node;
+      }
     }
-    // A left dock's `before` resolves to the region itself once it is the
-    // first child — that is the placed state, not a move.
-    return place.before === region || region.nextSibling === place.before;
+
+    // The left dock counts from the START of the parent. A region that
+    // is the first child is in its place; that is not a move.
+    groups.left.forEach(function (entry, i) {
+      if (body.childNodes[i] !== entry.node) {
+        body.insertBefore(entry.node, body.childNodes[i] || null);
+        moved.push(entry.tb);
+      }
+    });
+    if (body) {
+      settleBefore(body, groups.float.concat(groups.right.slice().reverse()), null);
+    }
+    if (editor) {
+      settleBefore(editor, groups.top, body);
+      settleBefore(editor, groups.bottom.slice().reverse(), null);
+    }
+    return moved;
   }
 
   // -------------------------------------------------------------------
@@ -653,37 +1540,33 @@
     gear: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 9a3 3 0 110 6 3 3 0 010-6zm-1.7-6h3.4l.5 2.4c.6.2 1.1.5 1.6.9l2.3-.8 1.7 3-1.8 1.6a6.7 6.7 0 010 1.8l1.8 1.6-1.7 3-2.3-.8c-.5.4-1 .7-1.6.9l-.5 2.4h-3.4l-.5-2.4a6.6 6.6 0 01-1.6-.9l-2.3.8-1.7-3 1.8-1.6a6.7 6.7 0 010-1.8L4.2 8.5l1.7-3 2.3.8c.5-.4 1-.7 1.6-.9L10.3 3z"/></svg>',
     help: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 4a5 5 0 015 5c0 2.3-1.5 3.3-2.7 4.1-.9.7-1.3 1.1-1.3 2.2h-2c0-2 1-2.9 2-3.7 1.1-.8 2-1.4 2-2.6a3 3 0 00-6 0H7a5 5 0 015-5zm-1 13h2v2.5h-2z"/></svg>',
     sets: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 3l9 4.5-9 4.5-9-4.5L12 3zm0 2.2L7.5 7.5 12 9.8l4.5-2.3L12 5.2zM3 12l2.2-1.1L12 14.3l6.8-3.4L21 12l-9 4.5L3 12zm0 4.5l2.2-1.1 6.8 3.4 6.8-3.4 2.2 1.1-9 4.5-9-4.5z"/></svg>',
-    chevron: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8.6 5.4L10 4l8 8-8 8-1.4-1.4L15.2 12z"/></svg>'
+    chevron: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8.6 5.4L10 4l8 8-8 8-1.4-1.4L15.2 12z"/></svg>',
+    toolbars: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M4 4h6v16H4V4zm2 2v12h2V6H6zm8-2h6v16h-6V4zm2 2v12h2V6h-2z"/></svg>',
+    add: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>'
   };
 
-  // Every React root created for a pinned-block icon, so the previous
-  // generation can be unmounted. A discarded root keeps its fiber tree
-  // alive, and the rail rebuilds on every slot change (the ↑/↓ buttons in
-  // the settings dialog rebuild it per click) — so these accumulate fast
-  // unless they are disposed. buildRail() is the ONLY producer and always
-  // creates a complete new set, which makes it the correct disposal point.
-  var iconRoots = [];
-
-  // The tools section's ResizeObserver, disposed on the same rule as the
-  // icon roots: buildRail is the only producer, so it disconnects the
-  // previous generation before creating the next.
-  var railScrollObserver = null;
+  // The pinned-icon React roots and the tools section's ResizeObserver
+  // of one rail generation are the toolbar's own (iconRoots and
+  // scrollObserver in newToolbar).
 
   /**
    * Unmount every React root from the previous rail generation. A
    * discarded root keeps its fiber tree alive, so leaving these behind
    * leaks one tree per rebuild — and the settings dialog rebuilds the rail
    * on each reorder click.
+   *
+   * @param {Object} tb The toolbar whose rail is being replaced.
+   * @return {void}
    */
-  function disposeIconRoots() {
-    iconRoots.forEach(function (root) {
+  function disposeIconRoots(tb) {
+    tb.iconRoots.forEach(function (root) {
       try {
         root.unmount();
       } catch (e) {
         /* Already gone with its container — nothing to release. */
       }
     });
-    iconRoots = [];
+    tb.iconRoots = [];
   }
 
   /**
@@ -692,8 +1575,14 @@
    * component} (inline-SVG block.json icons arrive as the last) — the
    * React shapes render through wp.element so a pinned third-party block
    * shows its real icon instead of a generic glyph.
+   *
+   * @param {Object}      tb   The toolbar the icon is built for; it owns
+   *                           the React root.
+   * @param {HTMLElement} span The icon span.
+   * @param {*}           icon The block type's icon.
+   * @return {void}
    */
-  function renderBlockIcon(span, icon) {
+  function renderBlockIcon(tb, span, icon) {
     var src = icon && typeof icon === 'object' && 'src' in icon ? icon.src : icon;
     if (typeof src === 'string' && src !== '') {
       span.className += ' dashicons dashicons-' + src;
@@ -704,7 +1593,7 @@
         var node = typeof src === 'function' ? wp.element.createElement(src) : src;
         var root = wp.element.createRoot(span);
         root.render(node);
-        iconRoots.push(root);
+        tb.iconRoots.push(root);
         return;
       } catch (e) {
         /* Fall through to the generic glyph. */
@@ -739,8 +1628,16 @@
   // mode changes nothing for assistive tech.
   // -------------------------------------------------------------------
 
-  function isWide() {
-    return readKey(WIDE_KEY) === '1';
+  /**
+   * Whether a toolbar shows tool names. One setting for each toolbar
+   * (owner decision 2026-11-14, #95): the first toolbar's is the WIDE_KEY
+   * preference it always was, an extra toolbar's is in its own record.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {boolean}
+   */
+  function isWide(tb) {
+    return tb === mainToolbar ? readKey(WIDE_KEY) === '1' : tb.wide;
   }
 
   /**
@@ -750,21 +1647,33 @@
    * Toolbar settings — where the "Show tool names" checkbox is the
    * canonical (and keyboard) path to wide mode either way, making the
    * chevron pure quick-access sugar, like the drag grip is for docking.
+   *
+   * ONE setting for all toolbars, where wide mode itself is one for each
+   * (#95): this is a choice about the toolbars' chrome, not about one
+   * toolbar's content, and a checkbox for each toolbar would be three
+   * more controls for a shortcut.
    */
   function isWideToggleShown() {
     return readKey(WIDE_TOGGLE_KEY) === '1';
   }
 
   /**
-   * Turn wide (labeled) mode on or off: persist it, reflect it on the
-   * region, and re-clamp a floating palette, whose width just changed.
+   * Turn wide (labeled) mode on or off for one toolbar: persist it,
+   * reflect it on the region, and re-clamp a floating palette, whose
+   * width just changed.
    *
+   * @param {Object}  tb The toolbar.
    * @param {boolean} on Whether tool names show.
    * @return {void}
    */
-  function setWide(on) {
-    writeKey(WIDE_KEY, on ? '1' : '0');
-    var region = document.getElementById('toolrail-region');
+  function setWide(tb, on) {
+    if (tb === mainToolbar) {
+      writeKey(WIDE_KEY, on ? '1' : '0');
+    } else {
+      tb.wide = !!on;
+      saveToolbars();
+    }
+    var region = document.getElementById(tb.regionId);
     if (region) {
       if (on) {
         region.dataset.wide = 'true';
@@ -781,7 +1690,7 @@
     }
     // The region's width just changed; a floating palette re-clamps so
     // widening it cannot push it off the editor.
-    applyFloatPosition();
+    applyFloatPosition(tb);
   }
 
   // -------------------------------------------------------------------
@@ -1664,14 +2573,22 @@
    * properties. Dark (or an unresolvable custom pair) clears them, which
    * hands every token back to the stylesheet defaults.
    *
-   * @param {HTMLElement} [region] Defaults to the mounted region.
+   * @param {HTMLElement} [region] Defaults to every mounted region: the
+   *                               appearance is one for all toolbars
+   *                               (#95; colors for each toolbar are a
+   *                               different issue).
    * @param {Object}      [tokens] Override token set — used by the color
    *                               inputs to preview a pair live without
    *                               persisting each intermediate value.
    */
   function applyAppearance(region, tokens) {
-    region = region || document.getElementById('toolrail-region');
     if (!region) {
+      toolbars.forEach(function (tb) {
+        var own = document.getElementById(tb.regionId);
+        if (own) {
+          applyAppearance(own, tokens);
+        }
+      });
       return;
     }
     if (tokens === undefined) {
@@ -1849,7 +2766,9 @@
     // tool must not be able to collide with them.
     // A registered 'saved-sets' would also get the Saved sets menu from
     // the rail's ArrowRight handler, which checks this id first.
-    var ids = ['settings', 'help', 'wide-toggle', SETS_TOOL_ID];
+    // The Toolbars button and an empty extra toolbar's "Add tools" button
+    // are chrome with a data-tool id too (#95).
+    var ids = ['settings', 'help', 'wide-toggle', SETS_TOOL_ID, TOOLBAR_LIST_TOOL_ID, ADD_TOOLS_TOOL_ID];
     BUILTIN_TOOLS.forEach(function (t) {
       ids.push(t.id);
       (t.children || []).forEach(function (c) { ids.push(c.id); });
@@ -1917,7 +2836,9 @@
     });
 
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    rerender();
+    // Every toolbar: a tool with a `parent` nests under that pin on each
+    // toolbar that shows it.
+    rerenderToolbars();
     return true;
   }
 
@@ -2062,7 +2983,19 @@
   // may run again from watchPersistenceAttach() if the persistence
   // layer's own attach lands late and wipes this pass.
 
-  function loadSlots() {
+  /**
+   * A toolbar's pinned slots, in rail order. Each toolbar has its own
+   * list, and the same slot can be on more than one toolbar (owner
+   * decision 2026-11-14, #95). The first toolbar's list is the SLOTS_KEY
+   * preference; an extra toolbar's list is in its record.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {string[]} Slot names. A copy.
+   */
+  function loadSlots(tb) {
+    if (tb !== mainToolbar) {
+      return tb.slots.slice();
+    }
     var raw = readKey(SLOTS_KEY);
     if (null === raw) {
       // Post-migration this means the author emptied the rail, which is a
@@ -2084,74 +3017,125 @@
    * hand over a list from a saved set or an imported file without cleaning
    * it first.
    *
-   * @param {Array} slots Slot names, in rail order.
+   * @param {Object} tb    The toolbar.
+   * @param {Array}  slots Slot names, in rail order.
    * @return {void}
    */
-  function saveSlots(slots) {
-    writeKey(SLOTS_KEY, JSON.stringify(normalizeSlots(slots)));
+  function saveSlots(tb, slots) {
+    if (tb === mainToolbar) {
+      writeKey(SLOTS_KEY, JSON.stringify(normalizeSlots(slots)));
+    } else {
+      tb.slots = normalizeSlots(slots);
+      saveToolbars();
+    }
   }
 
   /**
-   * Whether a slot name is currently pinned to the rail.
+   * Whether a slot name is pinned to one toolbar.
+   *
+   * @param {Object} tb        The toolbar.
+   * @param {string} blockName Block type or pattern slot name.
+   * @return {boolean} True when pinned there.
+   */
+  function isPinnedOn(tb, blockName) {
+    return loadSlots(tb).indexOf(blockName) !== -1;
+  }
+
+  /**
+   * Whether a slot name is pinned to a toolbar the author can see: the
+   * first toolbar or a SHOWN extra toolbar. A hidden toolbar's pins do not
+   * count (owner decision 2026-11-16, D4): the block menu then offers
+   * "Pin to toolbar", and a pin made there goes to the first toolbar. The
+   * hidden toolbar keeps its own pin.
    *
    * @param {string} blockName Block type or pattern slot name.
-   * @return {boolean} True when pinned.
+   * @return {boolean} True when pinned on a shown toolbar.
    */
   function isPinned(blockName) {
-    return loadSlots().indexOf(blockName) !== -1;
+    return toolbars.some(function (tb) {
+      return !tb.hidden && isPinnedOn(tb, blockName);
+    });
   }
 
   /**
-   * Pin a slot to the end of the rail, then rebuild. A no-op for an empty
-   * name or one already pinned.
+   * Whether a slot name is pinned to any toolbar, shown or hidden. A
+   * pin's own name, description, icon and extension data belong to the
+   * slot name, so they exist for as long as this is true: hiding a
+   * toolbar must not cost its pins their labels.
    *
+   * @param {string} blockName Block type or pattern slot name.
+   * @return {boolean} True when pinned anywhere.
+   */
+  function isPinnedAnywhere(blockName) {
+    return toolbars.some(function (tb) {
+      return isPinnedOn(tb, blockName);
+    });
+  }
+
+  /**
+   * Pin a slot to the end of a toolbar, then rebuild it. A no-op for an
+   * empty name or one already pinned to that toolbar.
+   *
+   * @param {Object} tb        The toolbar.
    * @param {string} blockName Block type or pattern slot name.
    * @return {boolean} True when the rail changed.
    */
-  function pinBlock(blockName) {
+  function pinBlock(tb, blockName) {
     if (typeof blockName !== 'string' || blockName === '') {
       return false;
     }
-    var slots = loadSlots();
+    var slots = loadSlots(tb);
     if (slots.indexOf(blockName) !== -1) {
       return false;
     }
     slots.push(blockName);
-    saveSlots(slots);
+    saveSlots(tb, slots);
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    rerender();
+    rerender(tb);
+    rerenderMainForParents(tb);
     return true;
   }
 
   /**
-   * Unpin a slot and rebuild. The author's metadata and any extension data
-   * go with it, so a later re-pin starts clean.
+   * Unpin a slot from a toolbar and rebuild it. The author's metadata and
+   * any extension data go with the LAST copy of the pin, so a later
+   * re-pin starts clean.
    *
+   * @param {Object} tb        The toolbar.
    * @param {string} blockName Block type or pattern slot name.
    * @return {boolean} True when the rail changed.
    */
-  function unpinBlock(blockName) {
-    var slots = loadSlots();
+  function unpinBlock(tb, blockName) {
+    var slots = loadSlots(tb);
     var idx = slots.indexOf(blockName);
     if (idx === -1) {
       return false;
     }
     slots.splice(idx, 1);
-    saveSlots(slots);
+    saveSlots(tb, slots);
     // The author's name/description/icon for this pin, and any extension
     // data on it, go with it: a later re-pin is a fresh tool, and the map
-    // only ever describes tools the author has.
-    if (clearPinMeta(blockName)) {
+    // only ever describes tools the author has. A different toolbar that
+    // still shows the pin keeps them.
+    if (!isPinnedAnywhere(blockName) && clearPinMeta(blockName)) {
       announcePinMetaChange(blockName);
     }
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    rerender();
+    rerender(tb);
+    rerenderMainForParents(tb);
     return true;
   }
 
-  /** Move a pinned slot up (-1) or down (+1) in the rail order. */
-  function moveSlot(blockName, delta) {
-    var slots = loadSlots();
+  /**
+   * Move a pinned slot up (-1) or down (+1) in a toolbar's order.
+   *
+   * @param {Object} tb        The toolbar.
+   * @param {string} blockName Block type or pattern slot name.
+   * @param {number} delta     -1 or 1.
+   * @return {boolean} True when the slot moved.
+   */
+  function moveSlot(tb, blockName, delta) {
+    var slots = loadSlots(tb);
     var idx = slots.indexOf(blockName);
     var to = idx + delta;
     if (idx === -1 || to < 0 || to >= slots.length) {
@@ -2159,10 +3143,69 @@
     }
     slots.splice(idx, 1);
     slots.splice(to, 0, blockName);
-    saveSlots(slots);
+    saveSlots(tb, slots);
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    rerender();
+    rerender(tb);
     return true;
+  }
+
+  /**
+   * The public call's toolbar: the first toolbar when the caller names
+   * none, so every call an extension made before #95 means what it meant.
+   *
+   * @param {*} id A toolbar id, or nothing.
+   * @return {Object|null} The toolbar; null for an id that is not there.
+   */
+  function apiToolbar(id) {
+    return id === undefined || id === null ? mainToolbar : toolbarById(String(id));
+  }
+
+  /**
+   * Unpin a slot from every toolbar that shows it, so isPinned() is false
+   * afterwards. The block menu's "Unpin from toolbar" shows exactly when
+   * isPinned() is true, so its action must reach a pin that only an
+   * extra toolbar shows (#95). A HIDDEN toolbar keeps its pin: its pins do
+   * not count for isPinned() (owner decision 2026-11-16, D4).
+   *
+   * @param {string} blockName Block type or pattern slot name.
+   * @return {boolean} True when a toolbar changed.
+   */
+  function unpinEverywhere(blockName) {
+    var changed = false;
+    toolbars.slice().forEach(function (tb) {
+      if (!tb.hidden && unpinBlock(tb, blockName)) {
+        changed = true;
+      }
+    });
+    return changed;
+  }
+
+  /**
+   * Rebuild every shown toolbar's rail. For a change that is not one
+   * toolbar's: the tool registry, the pattern catalog, a pin's own name
+   * or icon (the same pin can be on two toolbars).
+   *
+   * @return {void}
+   */
+  function rerenderToolbars() {
+    toolbars.forEach(rerender);
+  }
+
+  /**
+   * After the pins of an extra toolbar change, rebuild the first toolbar
+   * when a provider tool names a parent. Such a tool sits under its
+   * parent pin wherever that pin is, and at the first toolbar's top level
+   * when no toolbar has the pin (railModel), so the first toolbar's
+   * contents depend on the other toolbars' pins (#95).
+   *
+   * @param {Object|null} tb The toolbar whose pins changed; null when
+   *                         the stored list changed (any toolbar).
+   * @return {void}
+   */
+  function rerenderMainForParents(tb) {
+    if (tb !== mainToolbar && registered.some(function (t) { return !!t.parent; })) {
+      rerender(mainToolbar);
+    }
   }
 
   // -------------------------------------------------------------------
@@ -2461,7 +3504,7 @@ var DASHICON_NAMES = [
    * tag and Reset button key off it). A copy: editing it changes nothing.
    */
   function getPinMeta(blockName) {
-    if (!isPinned(blockName)) {
+    if (!isPinnedAnywhere(blockName)) {
       return null;
     }
     var map = loadPinMeta();
@@ -2485,7 +3528,7 @@ var DASHICON_NAMES = [
    * @return {boolean} Whether the slot is pinned and the change was made.
    */
   function setPinMeta(blockName, meta) {
-    if (!isPinned(blockName)) {
+    if (!isPinnedAnywhere(blockName)) {
       return false;
     }
     var map = loadPinMeta();
@@ -2505,7 +3548,7 @@ var DASHICON_NAMES = [
     persistPinMeta(map);
     announcePinMetaChange(blockName);
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    rerender();
+    rerenderToolbars();
     return true;
   }
 
@@ -2519,7 +3562,7 @@ var DASHICON_NAMES = [
    * @return {*} The stored JSON value, or null.
    */
   function getPinData(blockName, namespace) {
-    if (typeof namespace !== 'string' || !PIN_DATA_NAMESPACE.test(namespace) || !isPinned(blockName)) {
+    if (typeof namespace !== 'string' || !PIN_DATA_NAMESPACE.test(namespace) || !isPinnedAnywhere(blockName)) {
       return null;
     }
     var map = loadPinMeta();
@@ -2551,7 +3594,7 @@ var DASHICON_NAMES = [
    * @return {boolean} Whether the change was accepted and written.
    */
   function setPinData(blockName, namespace, data) {
-    if (!isPinned(blockName) || typeof namespace !== 'string' || !PIN_DATA_NAMESPACE.test(namespace)) {
+    if (!isPinnedAnywhere(blockName) || typeof namespace !== 'string' || !PIN_DATA_NAMESPACE.test(namespace)) {
       return false;
     }
     var map = loadPinMeta();
@@ -2712,15 +3755,19 @@ var DASHICON_NAMES = [
    * of the labels those pins carry right now — so restoring the set later
    * restores what the author saw, not just which blocks were on the rail.
    *
+   * A set is a snapshot of ONE toolbar's pins. It keeps no link to the
+   * toolbar it came from, so it loads into any toolbar (#95).
+   *
    * @param {string} name Set name; trimmed, and refused when empty.
+   * @param {Object} tb   The toolbar whose pins are saved.
    * @return {boolean} True when saved.
    */
-  function saveConfig(name) {
+  function saveConfig(name, tb) {
     if (typeof name !== 'string' || name.trim() === '') {
       return false;
     }
     var map = loadConfigs();
-    var slots = loadSlots();
+    var slots = loadSlots(tb);
     map[name.trim()] = slots;
     persistConfigs(map);
     // The set carries the labels its pins have right now (Pin metadata).
@@ -2735,25 +3782,44 @@ var DASHICON_NAMES = [
    * namespace so a namespace added since the set was saved survives.
    *
    * @param {string} name Set name.
+   * @param {Object} tb   The toolbar the set is loaded into.
    * @return {boolean} True when the set existed and was applied.
    */
-  function loadConfig(name) {
+  function loadConfig(name, tb) {
     var map = loadConfigs();
     if (!Object.prototype.hasOwnProperty.call(map, name) || !Array.isArray(map[name])) {
       return false;
     }
+    applySet(map[name], loadConfigMeta()[name], tb);
+    return true;
+  }
+
+  /**
+   * Put one set on a toolbar: what loadConfig() does for a saved set, and
+   * what a shared set's load does with its copy (#98), so the two can
+   * never differ. A set is a snapshot loaded INTO a toolbar (#95): only
+   * that toolbar's pins change.
+   *
+   * @param {Array}       blocks The set's slots, in rail order.
+   * @param {Object|null} labels The set's label snapshot (normalizeSetMeta
+   *                             output), or null/undefined for none.
+   * @param {Object}      tb     The toolbar the set is loaded into.
+   * @return {void}
+   */
+  function applySet(blocks, labels, tb) {
     // saveSlots normalizes: a set stored by an older build, hand-edited,
     // or imported from a file can carry duplicates and non-strings.
-    saveSlots(map[name]);
-    var pinned = loadSlots();
+    saveSlots(tb, blocks);
+    var pinned = loadSlots(tb);
     var pinMeta = loadPinMeta();
     var changed = [];
     // Loading a set UNPINS every slot it does not name, and an unpinned
     // slot keeps no entry — the same rule unpinBlock applies — or a
     // re-pin months later would come up with stale labels and stale
-    // extension data (PR review 2026-09-05, finding 2).
+    // extension data (PR review 2026-09-05, finding 2). A slot that a
+    // different toolbar still shows is still pinned, and keeps its entry.
     Object.keys(pinMeta).forEach(function (slot) {
-      if (pinned.indexOf(slot) === -1) {
+      if (!isPinnedAnywhere(slot)) {
         delete pinMeta[slot];
         changed.push(slot);
       }
@@ -2763,7 +3829,6 @@ var DASHICON_NAMES = [
     // data merges per namespace, so a namespace the snapshot never saw
     // (an extension installed since the set was saved) is kept rather
     // than dropped. Slots the snapshot does not name keep what they have.
-    var labels = loadConfigMeta()[name];
     if (labels) {
       Object.keys(labels).forEach(function (slot) {
         if (pinned.indexOf(slot) === -1) {
@@ -2796,8 +3861,8 @@ var DASHICON_NAMES = [
       changed.forEach(announcePinMetaChange);
     }
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    rerender();
-    return true;
+    // The set's labels land on its pins wherever they show.
+    rerenderToolbars();
   }
 
   /**
@@ -2834,7 +3899,8 @@ var DASHICON_NAMES = [
    * @return {string} The set name, or '' when no set matches.
    */
   function currentConfigName() {
-    var current = JSON.stringify(loadSlots());
+    // The Saved sets button is on the first toolbar and loads into it.
+    var current = JSON.stringify(loadSlots(mainToolbar));
     var map = loadConfigs();
     var names = Object.keys(map);
     for (var i = 0; i < names.length; i++) {
@@ -2846,14 +3912,39 @@ var DASHICON_NAMES = [
   }
 
   /**
+   * The Saved sets menu item that matches the rail now: the user's own set
+   * from currentConfigName() first, then the first listed shared set (#98)
+   * with the same slots. One item at most, as the menu promises.
+   *
+   * @return {string} The item's id, or '' when nothing matches.
+   */
+  function currentSetMenuId() {
+    var own = currentConfigName();
+    if (own) {
+      return SETS_TOOL_ID + ':' + own;
+    }
+    // The menu is on the first toolbar and loads into it (#95).
+    var current = JSON.stringify(loadSlots(mainToolbar));
+    var listed = listedSharedSets();
+    for (var i = 0; i < listed.length; i++) {
+      if (JSON.stringify(listed[i].blocks) === current) {
+        return SETS_TOOL_ID + '-shared-' + listed[i].id;
+      }
+    }
+    return '';
+  }
+
+  /**
    * Whether the rail shows the Saved sets button: the author has at
-   * least one saved set and has not hidden the button in Toolbar
-   * settings. With no set the menu would have nothing to switch to.
+   * least one saved set, or another user shares one (#98), and has not
+   * hidden the button in Toolbar settings. With no set the menu would
+   * have nothing to switch to.
    *
    * @return {boolean}
    */
   function isSetsButtonShown() {
-    return readKey(SETS_BUTTON_HIDDEN_KEY) !== '1' && Object.keys(loadConfigs()).length > 0;
+    return readKey(SETS_BUTTON_HIDDEN_KEY) !== '1'
+      && (Object.keys(loadConfigs()).length > 0 || listedSharedSets().length > 0);
   }
 
   /**
@@ -2869,7 +3960,7 @@ var DASHICON_NAMES = [
    * @return {boolean} True when the rail was rebuilt.
    */
   function reconcileSetsButton() {
-    var rail = document.getElementById('toolrail-rail');
+    var rail = document.getElementById(mainToolbar.railId);
     if (!rail) {
       return false;
     }
@@ -2877,7 +3968,7 @@ var DASHICON_NAMES = [
     if (rendered === isSetsButtonShown()) {
       return false;
     }
-    rerender();
+    rerender(mainToolbar);
     return true;
   }
 
@@ -2886,10 +3977,34 @@ var DASHICON_NAMES = [
    * and the Saved sets menu so both say the same thing.
    *
    * @param {string} name Set name.
+   * @param {Object} tb   The toolbar the set was loaded into.
    * @return {string} The message.
    */
-  function configLoadedMessage(name) {
-    var missing = missingBlockCount(loadSlots());
+  function configLoadedMessage(name, tb) {
+    var missing = missingBlockCount(loadSlots(tb));
+    // An extra toolbar is named, so the author hears which toolbar the
+    // set went into (#95). The first toolbar's messages are as before.
+    if (tb !== mainToolbar) {
+      return missing > 0
+        ? sprintf(
+          /* translators: 1: set name, 2: the toolbar's name, 3: count of unavailable blocks. */
+          _n(
+            'Loaded "%1$s" into the %2$s toolbar. %3$d pinned block is not available on this site and stays hidden until its plugin or theme is active.',
+            'Loaded "%1$s" into the %2$s toolbar. %3$d pinned blocks are not available on this site and stay hidden until their plugin or theme is active.',
+            missing,
+            'editrail'
+          ),
+          name,
+          tb.name,
+          missing
+        )
+        : sprintf(
+          /* translators: 1: set name, 2: the toolbar's name. */
+          __('Loaded "%1$s" into the %2$s toolbar.', 'editrail'),
+          name,
+          tb.name
+        );
+    }
     if (missing > 0) {
       return sprintf(
         /* translators: 1: set name, 2: count of unavailable blocks. */
@@ -2926,8 +4041,8 @@ var DASHICON_NAMES = [
    * @return {void}
    */
   function loadConfigFromMenu(name) {
-    if (loadConfig(name)) {
-      speak(configLoadedMessage(name));
+    if (loadConfig(name, mainToolbar)) {
+      speak(configLoadedMessage(name, mainToolbar));
     } else {
       // Deleted in another tab since the menu opened.
       speak(sprintf(
@@ -2936,7 +4051,18 @@ var DASHICON_NAMES = [
         name
       ));
     }
-    var btn = document.querySelector('#toolrail-rail ' + toolSelector(SETS_TOOL_ID)) || gearButton();
+    focusSetsButton();
+  }
+
+  /**
+   * Focus the rebuilt Saved sets button after a load from its menu, or
+   * Toolbar settings when the rebuilt rail has none (see
+   * loadConfigFromMenu). The button is on the first toolbar (#95).
+   *
+   * @return {void}
+   */
+  function focusSetsButton() {
+    var btn = document.querySelector('#' + mainToolbar.railId + ' ' + toolSelector(SETS_TOOL_ID)) || gearButton();
     if (btn) {
       btn.focus();
     }
@@ -2947,7 +4073,8 @@ var DASHICON_NAMES = [
    * GETTER, read from storage on every access: the flyout reads them when
    * it opens, so a set saved, deleted or imported since the rail was
    * built shows without a rebuild, and the checked item follows the
-   * current pins.
+   * current pins. The author's own sets come first, then the sets other
+   * users share (#98), each named with who shared it.
    *
    * @param {HTMLElement} wrapper The rail region (for the settings dialog).
    * @return {Object} The tool descriptor.
@@ -2962,18 +4089,40 @@ var DASHICON_NAMES = [
     Object.defineProperty(tool, 'children', {
       enumerable: true,
       get: function () {
-        var current = currentConfigName();
+        var current = currentSetMenuId();
         var items = Object.keys(loadConfigs()).map(function (name) {
+          var id = SETS_TOOL_ID + ':' + name;
           return {
-            id: SETS_TOOL_ID + ':' + name,
-            label: name,
+            id: id,
+            // Text, never a mark alone: the author shares this set.
+            label: ownSharedCopy(name)
+              ? sprintf(
+                /* translators: %s: set name. */
+                __('%s (shared)', 'editrail'),
+                name
+              )
+              : name,
             radio: true,
-            checked: name === current,
+            checked: id === current,
             supports: { canvas: false },
             onActivate: function () {
               loadConfigFromMenu(name);
             }
           };
+        });
+        listedSharedSets().forEach(function (item) {
+          // '-shared-' not ':', so no set name can produce this id.
+          var sharedId = SETS_TOOL_ID + '-shared-' + item.id;
+          items.push({
+            id: sharedId,
+            label: sharedSetMenuLabel(item),
+            radio: true,
+            checked: sharedId === current,
+            supports: { canvas: false },
+            onActivate: function () {
+              loadSharedSetFromMenu(item.id);
+            }
+          });
         });
         items.push({
           // '-' not ':', so no set name can produce this id.
@@ -2989,6 +4138,803 @@ var DASHICON_NAMES = [
       }
     });
     return tool;
+  }
+
+  // The Toolbars button (#95) is the Saved sets button's sibling and is
+  // built the same way: rail chrome in the first toolbar's tail, a
+  // container tool whose children are read on every open.
+
+  /**
+   * Whether the first toolbar shows the Toolbars button: the author has
+   * an extra toolbar and has not hidden the button in Toolbar settings.
+   * With no extra toolbar the menu would have nothing to show or hide.
+   *
+   * @return {boolean}
+   */
+  function isToolbarsButtonShown() {
+    return toolbars.length > 1 && readKey(TOOLBARS_BUTTON_HIDDEN_KEY) !== '1';
+  }
+
+  /**
+   * Rebuild the first toolbar when the Toolbars button it shows no longer
+   * matches isToolbarsButtonShown(): the first extra toolbar adds the
+   * button and a delete of the last one removes it. The same compare of
+   * the rendered rail with the state as reconcileSetsButton().
+   *
+   * @return {boolean} True when the rail was rebuilt.
+   */
+  function reconcileToolbarsButton() {
+    var rail = document.getElementById(mainToolbar.railId);
+    if (!rail) {
+      return false;
+    }
+    var rendered = !!rail.querySelector(toolSelector(TOOLBAR_LIST_TOOL_ID));
+    if (rendered === isToolbarsButtonShown()) {
+      return false;
+    }
+    rerender(mainToolbar);
+    return true;
+  }
+
+  /**
+   * Show or hide a toolbar from the Toolbars menu, say what happened, and
+   * put focus back on the Toolbars button. The flyout closed before this
+   * ran, without a refocus (an action item may move focus itself), so
+   * without this the focus would fall to the page body.
+   *
+   * @param {string} id The toolbar's id.
+   * @return {void}
+   */
+  function toggleToolbarFromMenu(id) {
+    var tb = toolbarById(id);
+    if (tb && tb !== mainToolbar) {
+      var result = setToolbarHidden(tb, !tb.hidden);
+      // ONE speak() with every fact: a second call in the same task
+      // replaces the first (review 2026-11-16, finding 2).
+      speak(joinMessages([
+        toolbarShownMessage(tb),
+        result && result.disarmed ? disarmedMessage() : '',
+        tb.hidden ? '' : canvasNarrowMessage()
+      ]));
+    }
+    var rail = document.getElementById(mainToolbar.railId);
+    var btn = (rail && rail.querySelector(toolSelector(TOOLBAR_LIST_TOOL_ID))) || gearButton();
+    if (btn) {
+      btn.focus();
+    }
+  }
+
+  /**
+   * The outcome text for a show or hide, shared by the Toolbars menu and
+   * the checkbox in Toolbar settings so both say the same thing.
+   *
+   * @param {Object} tb An extra toolbar.
+   * @return {string} The message.
+   */
+  function toolbarShownMessage(tb) {
+    return sprintf(
+      tb.hidden
+        /* translators: %s: the toolbar's name. */
+        ? __('The %s toolbar is hidden.', 'editrail')
+        /* translators: %s: the toolbar's name. */
+        : __('The %s toolbar is shown.', 'editrail'),
+      tb.name
+    );
+  }
+
+  /**
+   * The Toolbars button as a rail tool descriptor. Each extra toolbar is
+   * a child with onActivate and isActive, which the flyout draws as a
+   * menuitemcheckbox: checked means shown. The children are a GETTER, for
+   * the same reason as the Saved sets menu's.
+   *
+   * @return {Object} The tool descriptor.
+   */
+  function toolbarsMenuTool() {
+    var tool = {
+      id: TOOLBAR_LIST_TOOL_ID,
+      label: __('Toolbars', 'editrail'),
+      shortLabel: __('Toolbars', 'editrail'),
+      icon: ICONS.toolbars
+    };
+    Object.defineProperty(tool, 'children', {
+      enumerable: true,
+      get: function () {
+        var items = toolbars.slice(1).map(function (tb) {
+          return {
+            id: TOOLBAR_LIST_TOOL_ID + ':' + tb.id,
+            label: tb.name,
+            supports: { canvas: false },
+            isActive: function () {
+              return !tb.hidden;
+            },
+            onActivate: function () {
+              toggleToolbarFromMenu(tb.id);
+            }
+          };
+        });
+        items.push({
+          // '-' not ':', so no toolbar id can produce this id.
+          id: TOOLBAR_LIST_TOOL_ID + '-settings',
+          label: __('Add or change toolbars…', 'editrail'),
+          separatorBefore: true,
+          supports: { canvas: false },
+          onActivate: function () {
+            // At the toolbar chooser, which leads the toolbar sections.
+            openSettingsFor(settingsToolbar(), '#toolrail-settings-toolbar');
+          }
+        });
+        return items;
+      }
+    });
+    return tool;
+  }
+
+  // -------------------------------------------------------------------
+  // Shared sets (#98). An author can share one of their saved sets with
+  // the other users of this site; every user who can edit posts sees the
+  // shared sets in Toolbar settings and in the Saved sets menu, marked as
+  // shared and named with who shared them, and can load or export them.
+  //
+  // The server keeps each shared set as a COPY in the set file format,
+  // one per author and set name (includes/shared-sets.php, which also
+  // decides who may share, read and stop sharing). A load applies that
+  // copy exactly as Load applies the user's own set (applySet), with the
+  // same message, and links nothing: the user's pins do not follow later
+  // changes. The author's own set and its shared copy are also separate:
+  // a change reaches other users only when the author shares the set
+  // again, which replaces the copy in place.
+  //
+  // Nothing here waits on the network. The list arrives once after boot
+  // and again each time Toolbar settings opens. Until it arrives, and
+  // whenever a request fails (no capability, offline, a server error),
+  // the rail and the dialog are exactly what they are without the
+  // feature. Set names and display names come from OTHER users, so they
+  // reach the DOM only through textContent and attribute values, never
+  // as markup.
+  // -------------------------------------------------------------------
+
+  var SHARED_SETS_PATH = '/editrail/v1/sets';
+  // The last list the server sent, normalized (normalizeSharedSet),
+  // oldest share first. A failed request keeps it.
+  var sharedSets = [];
+  // Whether the server says this user may share (publish_posts). False
+  // until the list arrives, so no Share button shows before then.
+  var canShareSets = false;
+  // The list request in flight, so a second caller joins it.
+  var sharedSetsRequest = null;
+  // A share or stop-sharing request is in flight. One at a time: a second
+  // press while the first is out does nothing.
+  var sharedSetBusy = false;
+
+  /**
+   * Whether wp.apiFetch is there. The rail declares it as a dependency,
+   * but a context without it must still boot.
+   *
+   * @return {boolean}
+   */
+  function canFetchSharedSets() {
+    return !!(wp.apiFetch && typeof wp.apiFetch === 'function');
+  }
+
+  /**
+   * Whether a string is a slot a set may hold: a block name or a pattern
+   * slot. The one grammar for a set file (importConfigPayload) and a
+   * shared set; includes/shared-sets.php applies the same one.
+   *
+   * @param {*} name Candidate slot.
+   * @return {boolean}
+   */
+  function isSetSlotName(name) {
+    return typeof name === 'string' && (BLOCK_NAME_PATTERN.test(name) || PATTERN_SLOT_PATTERN.test(name));
+  }
+
+  /**
+   * One list entry from the server, checked again here: the server
+   * validates, but this is what the rail renders and loads. `set` is the
+   * set file's JSON as text.
+   *
+   * @param {*} raw One entry of the response's `sets`.
+   * @return {Object|null} {id, name, blocks, labels, author, mine,
+   *                       canDelete}, or null when it is not a set.
+   */
+  function normalizeSharedSet(raw) {
+    if (!raw || typeof raw !== 'object' || typeof raw.set !== 'string') {
+      return null;
+    }
+    var id = typeof raw.id === 'number' && raw.id > 0 && Math.floor(raw.id) === raw.id ? raw.id : 0;
+    var parsed;
+    try {
+      parsed = JSON.parse(raw.set);
+    } catch (e) {
+      return null;
+    }
+    if (!id || !parsed || typeof parsed !== 'object' || !Array.isArray(parsed.blocks)
+      || typeof parsed.name !== 'string' || parsed.name.trim() === '') {
+      return null;
+    }
+    var blocks = normalizeSlots(parsed.blocks.filter(isSetSlotName));
+    return {
+      id: id,
+      name: parsed.name,
+      blocks: blocks,
+      labels: normalizeSetMeta(parsed.meta, blocks),
+      author: typeof raw.author === 'string' ? raw.author : '',
+      mine: raw.mine === true,
+      canDelete: raw.can_delete === true
+    };
+  }
+
+  /**
+   * A comparable form of a list, so a refresh that brings nothing new
+   * rebuilds nothing.
+   *
+   * @param {Array} list Normalized entries.
+   * @return {string}
+   */
+  function sharedSetsSignature(list) {
+    return JSON.stringify(list.map(function (item) {
+      return [item.id, item.name, item.blocks, item.labels, item.author, item.mine, item.canDelete];
+    }));
+  }
+
+  /**
+   * Take a list response: keep it, and when it changed what the user can
+   * see, add or remove the Saved sets button and redraw an open dialog.
+   *
+   * @param {*} body The response body: {can_share, sets}.
+   * @return {void}
+   */
+  function receiveSharedSets(body) {
+    var list = body && Array.isArray(body.sets)
+      ? body.sets.map(normalizeSharedSet).filter(Boolean)
+      : [];
+    var share = !!(body && body.can_share === true);
+    var changed = share !== canShareSets || sharedSetsSignature(list) !== sharedSetsSignature(sharedSets);
+    sharedSets = list;
+    canShareSets = share;
+    if (changed) {
+      reconcileSetsButton();
+      // Redraw an open dialog, but not from under the author: the redraw
+      // can hand focus back only to a control that has an id, and the row
+      // buttons (Load, Export, Unpin, the arrows) have none, so focus would
+      // jump to the search field. This list arrives on its own, a moment
+      // after the dialog opens; an author who is already on a row button
+      // keeps it, and the dialog shows the new list at its next redraw
+      // (any action in it) or when it opens again. A stale row still acts
+      // on its own copy, and a set that is gone answers "no longer shared".
+      var focused = document.activeElement;
+      var dialog = settingsOpen ? settingsNode() : null;
+      if (dialog && !(focused && dialog.contains(focused) && !focused.id)) {
+        refreshSettings();
+      }
+    }
+  }
+
+  /**
+   * Ask the server for the list. Never throws and never rejects: a failed
+   * request keeps the last list, and the rail goes on as it is.
+   *
+   * @return {Promise|null} Settles when the list is in, or null when
+   *                        apiFetch is not there.
+   */
+  function refreshSharedSets() {
+    if (!canFetchSharedSets()) {
+      return null;
+    }
+    if (sharedSetsRequest) {
+      return sharedSetsRequest;
+    }
+    try {
+      sharedSetsRequest = wp.apiFetch({ path: SHARED_SETS_PATH }).then(function (body) {
+        sharedSetsRequest = null;
+        receiveSharedSets(body);
+      }, function () {
+        sharedSetsRequest = null;
+      });
+    } catch (e) {
+      sharedSetsRequest = null;
+    }
+    return sharedSetsRequest;
+  }
+
+  /**
+   * The current user's own shared copy of one of their sets, or null.
+   *
+   * @param {string} name Set name.
+   * @return {Object|null}
+   */
+  function ownSharedCopy(name) {
+    for (var i = 0; i < sharedSets.length; i++) {
+      if (sharedSets[i].mine && sharedSets[i].name === name) {
+        return sharedSets[i];
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The shared sets listed under "Shared sets" and in the menu: every one
+   * except the user's own copies of sets they still have, which their own
+   * set's row and menu item stand for. A copy whose own set the author has
+   * deleted is still listed, so it can be loaded or stopped.
+   *
+   * @return {Array} Normalized entries.
+   */
+  function listedSharedSets() {
+    var own = loadConfigs();
+    return sharedSets.filter(function (item) {
+      return !(item.mine && Object.prototype.hasOwnProperty.call(own, item.name));
+    });
+  }
+
+  /**
+   * One shared set by its ID, from the last list.
+   *
+   * @param {number} id Post ID.
+   * @return {Object|null}
+   */
+  function findSharedSet(id) {
+    for (var i = 0; i < sharedSets.length; i++) {
+      if (sharedSets[i].id === id) {
+        return sharedSets[i];
+      }
+    }
+    return null;
+  }
+
+  /**
+   * "Shared by <name>", the visible mark on a shared set.
+   *
+   * @param {Object} item A normalized entry.
+   * @return {string}
+   */
+  function sharedByText(item) {
+    if (item.mine) {
+      return __('Shared by you', 'editrail');
+    }
+    return item.author
+      ? sprintf(
+        /* translators: %s: display name of the user who shared the set. */
+        __('Shared by %s', 'editrail'),
+        item.author
+      )
+      : __('Shared by another user', 'editrail');
+  }
+
+  /**
+   * A shared set's menu item text: the name and who shared it, so a
+   * shared set and one of the user's own sets with the same name are two
+   * different items to a screen reader too.
+   *
+   * @param {Object} item A normalized entry.
+   * @return {string}
+   */
+  function sharedSetMenuLabel(item) {
+    if (item.mine) {
+      return sprintf(
+        /* translators: %s: set name. */
+        __('%s (shared by you)', 'editrail'),
+        item.name
+      );
+    }
+    return item.author
+      ? sprintf(
+        /* translators: 1: set name, 2: display name of the user who shared it. */
+        __('%1$s (shared by %2$s)', 'editrail'),
+        item.name,
+        item.author
+      )
+      : sprintf(
+        /* translators: %s: set name. */
+        __('%s (shared by another user)', 'editrail'),
+        item.name
+      );
+  }
+
+  /**
+   * "shared by <name>", lower case, for inside the accessible names of a
+   * shared set's buttons, after the set name.
+   *
+   * @param {Object} item A normalized entry.
+   * @return {string}
+   */
+  function sharedByPhrase(item) {
+    if (item.mine) {
+      return __('shared by you', 'editrail');
+    }
+    return item.author
+      ? sprintf(
+        /* translators: %s: display name of the user who shared the set. */
+        __('shared by %s', 'editrail'),
+        item.author
+      )
+      : __('shared by another user', 'editrail');
+  }
+
+  /**
+   * Load a shared set from the Saved sets menu: the same as
+   * loadConfigFromMenu() for one of the user's own sets, so it loads into
+   * the first toolbar, which has the menu (#95).
+   *
+   * @param {number} id Post ID.
+   * @return {void}
+   */
+  function loadSharedSetFromMenu(id) {
+    var item = findSharedSet(id);
+    if (item) {
+      applySet(item.blocks, item.labels, mainToolbar);
+      speak(configLoadedMessage(item.name, mainToolbar));
+    } else {
+      speak(__('That set is no longer shared.', 'editrail'));
+    }
+    focusSetsButton();
+  }
+
+  /**
+   * The set file payload of one of the user's own sets, as the server
+   * receives it on a share: the same object exportConfig() writes.
+   *
+   * @param {string} name Set name.
+   * @return {Object|null} Null when the set does not exist.
+   */
+  function ownSetPayload(name) {
+    var map = loadConfigs();
+    if (!Object.prototype.hasOwnProperty.call(map, name) || !Array.isArray(map[name])) {
+      return null;
+    }
+    return setFilePayload(name, map[name], loadConfigMeta()[name]);
+  }
+
+  /**
+   * Whether the author's own set differs from its shared copy, compared
+   * the way the server stores a set (valid slots, repeats collapsed,
+   * labels of the set's own slots), so "Share again" shows only when it
+   * would send something new.
+   *
+   * @param {string} name Set name.
+   * @param {Object} copy The shared copy (a normalized entry).
+   * @return {boolean}
+   */
+  function sharedCopyIsOlder(name, copy) {
+    var payload = ownSetPayload(name);
+    if (!payload) {
+      return false;
+    }
+    var blocks = normalizeSlots(payload.blocks.filter(isSetSlotName));
+    return JSON.stringify(blocks) !== JSON.stringify(copy.blocks)
+      || JSON.stringify(normalizeSetMeta(payload.meta, blocks)) !== JSON.stringify(copy.labels);
+  }
+
+  /**
+   * The text of a failed request, for the author: the server's own
+   * sentence when it sent one, else a general one.
+   *
+   * @param {*} err What apiFetch rejected with.
+   * @return {string}
+   */
+  function sharedSetErrorText(err) {
+    return err && typeof err.message === 'string' && err.message
+      ? err.message
+      : __('The server did not answer.', 'editrail');
+  }
+
+  /**
+   * Report the outcome of a share or stop-sharing request. The request is
+   * async, so the dialog can be closed by the time it settles; the same
+   * rule as reportImport(): an open dialog shows the message in its
+   * status line and speaks it, otherwise it is only spoken.
+   *
+   * @param {string}          message        Outcome text.
+   * @param {string|string[]} focusSelectors Where focus goes in the dialog.
+   * @return {void}
+   */
+  function reportSharedSet(message, focusSelectors) {
+    if (!settingsOpen || !settingsNode()) {
+      speak(message);
+      return;
+    }
+    settingsStatus = message;
+    refreshSettings(focusSelectors);
+  }
+
+  /**
+   * Put one entry from a share response into the list, replacing an entry
+   * with the same ID (a share again keeps its ID).
+   *
+   * @param {Object} item A normalized entry.
+   * @return {void}
+   */
+  function storeSharedSet(item) {
+    var next = sharedSets.filter(function (existing) {
+      return existing.id !== item.id;
+    });
+    next.push(item);
+    next.sort(function (a, b) {
+      return a.id - b.id;
+    });
+    sharedSets = next;
+  }
+
+  /**
+   * A selector prefix for one of the user's own set rows in the dialog,
+   * for a focus target after a rebuild. attrValue() escapes quotes and
+   * backslashes; a name from a set file can also hold a control
+   * character, which a CSS string must escape as a code point or the
+   * selector does not parse.
+   *
+   * @param {string} name Set name.
+   * @return {string} The selector prefix, with a trailing space.
+   */
+  function setRowSelector(name) {
+    // eslint-disable-next-line no-control-regex -- matching control characters is the point: each one is escaped.
+    var value = attrValue(name).replace(/[\u0000-\u001f\u007f]/g, function (c) {
+      return '\\' + c.charCodeAt(0).toString(16) + ' ';
+    });
+    return '.toolrail-settings-setrow[data-config="' + value + '"] ';
+  }
+
+  /**
+   * Send a share or stop-sharing request and mark it in flight. An
+   * apiFetch that throws instead of rejecting must not leave the flag set,
+   * or every later press would do nothing.
+   *
+   * @param {Object} options apiFetch options.
+   * @return {Promise|null} The request, or null when it could not start.
+   */
+  function sendSharedSetRequest(options) {
+    var request;
+    try {
+      request = wp.apiFetch(options);
+    } catch (e) {
+      return null;
+    }
+    if (!request || typeof request.then !== 'function') {
+      return null;
+    }
+    sharedSetBusy = true;
+    return request;
+  }
+
+  /**
+   * Share one of the user's own sets, or share it again. Focus stays in
+   * the set's row: on Stop sharing, which every shared row has.
+   *
+   * @param {string} name Set name.
+   * @return {void}
+   */
+  function shareConfig(name) {
+    var payload = ownSetPayload(name);
+    if (sharedSetBusy || !payload || !canFetchSharedSets()) {
+      return;
+    }
+    var again = !!ownSharedCopy(name);
+    var row = setRowSelector(name);
+    var request = sendSharedSetRequest({
+      path: SHARED_SETS_PATH,
+      method: 'POST',
+      data: { set: JSON.stringify(payload) }
+    });
+    if (!request) {
+      return;
+    }
+    request.then(function (body) {
+      sharedSetBusy = false;
+      var item = normalizeSharedSet(body);
+      if (item) {
+        storeSharedSet(item);
+        reconcileSetsButton();
+      }
+      reportSharedSet(again
+        ? sprintf(
+          /* translators: %s: set name. */
+          __('Shared the set "%s" again. Other users on this site now get this version.', 'editrail'),
+          name
+        )
+        : sprintf(
+          /* translators: %s: set name. */
+          __('Shared the set "%s". Other users on this site can now load it.', 'editrail'),
+          name
+        ), [row + '.toolrail-settings-unshare', row + '.toolrail-settings-share']);
+    }, function (err) {
+      sharedSetBusy = false;
+      reportSharedSet(sprintf(
+        /* translators: 1: set name, 2: the reason, a full sentence. */
+        __('The set "%1$s" was not shared. %2$s', 'editrail'),
+        name,
+        sharedSetErrorText(err)
+      ), [row + '.toolrail-settings-share', row + '.toolrail-settings-load']);
+    });
+  }
+
+  /**
+   * Stop sharing a set: the server deletes its shared copy. The user's own
+   * set, if they have one, stays.
+   *
+   * @param {Object}          item           The shared copy (normalized).
+   * @param {string|string[]} focusSelectors Where focus goes after the
+   *                                         dialog redraws.
+   * @return {void}
+   */
+  function unshareSet(item, focusSelectors) {
+    if (sharedSetBusy || !canFetchSharedSets()) {
+      return;
+    }
+    var forget = function () {
+      sharedSets = sharedSets.filter(function (existing) {
+        return existing.id !== item.id;
+      });
+      reconcileSetsButton();
+    };
+    var request = sendSharedSetRequest({
+      path: SHARED_SETS_PATH + '/' + item.id,
+      method: 'DELETE'
+    });
+    if (!request) {
+      return;
+    }
+    request.then(function () {
+      sharedSetBusy = false;
+      forget();
+      reportSharedSet(sprintf(
+        /* translators: %s: set name. */
+        __('Stopped sharing the set "%s".', 'editrail'),
+        item.name
+      ), focusSelectors);
+    }, function (err) {
+      sharedSetBusy = false;
+      // Gone already (another user or tab stopped it): say so, and drop it.
+      if (err && err.code === 'rest_post_invalid_id') {
+        forget();
+        reportSharedSet(sprintf(
+          /* translators: %s: set name. */
+          __('The set "%s" is no longer shared.', 'editrail'),
+          item.name
+        ), focusSelectors);
+        return;
+      }
+      reportSharedSet(sprintf(
+        /* translators: 1: set name, 2: the reason, a full sentence. */
+        __('The set "%1$s" is still shared. %2$s', 'editrail'),
+        item.name,
+        sharedSetErrorText(err)
+      ), focusSelectors);
+    });
+  }
+
+  /**
+   * The share controls for one of the user's own set rows in Toolbar
+   * settings: "Share" when the set is not shared and the user may share;
+   * "Share again" when the shared copy is older than the set; "Stop
+   * sharing" when the set is shared and the user may delete the copy.
+   * A user who can do none of these gets no control, so the row is what
+   * it was before #98.
+   *
+   * @param {string}      name Set name.
+   * @param {Object|null} copy The user's shared copy, or null.
+   * @return {Array<HTMLElement>} Buttons, in row order.
+   */
+  function ownSetShareControls(name, copy) {
+    var out = [];
+    var row = setRowSelector(name);
+    if (!copy && canShareSets) {
+      var share = settingsButton(__('Share', 'editrail'), function () {
+        shareConfig(name);
+      }, 'toolrail-settings-share');
+      share.setAttribute('aria-label', sprintf(
+        /* translators: %s: set name. */
+        __('Share the set %s with other users on this site', 'editrail'),
+        name
+      ));
+      out.push(share);
+    }
+    if (copy && canShareSets && sharedCopyIsOlder(name, copy)) {
+      var again = settingsButton(__('Share again', 'editrail'), function () {
+        shareConfig(name);
+      }, 'toolrail-settings-share');
+      again.setAttribute('aria-label', sprintf(
+        /* translators: %s: set name. */
+        __('Share again: replace the shared copy of the set %s with the set as it is now', 'editrail'),
+        name
+      ));
+      out.push(again);
+    }
+    if (copy && copy.canDelete) {
+      var stop = settingsButton(__('Stop sharing', 'editrail'), function () {
+        unshareSet(copy, [row + '.toolrail-settings-share', row + '.toolrail-settings-load']);
+      }, 'toolrail-settings-unshare');
+      stop.setAttribute('aria-label', sprintf(
+        /* translators: %s: set name. */
+        __('Stop sharing the set %s', 'editrail'),
+        name
+      ));
+      out.push(stop);
+    }
+    return out;
+  }
+
+  /**
+   * One row of the "Shared sets" list in Toolbar settings: the name, who
+   * shared it, Load, Export, and Stop sharing when the user may delete it.
+   * Every accessible name carries "shared by …", so this row and one of
+   * the user's own sets with the same name never sound the same.
+   *
+   * @param {Object} item      A normalized entry.
+   * @param {Array}  neighbors The IDs of the rows after and before this
+   *                           one, in that order: focus goes to the first
+   *                           that remains after a stop.
+   * @param {Object} tb        The toolbar chosen in the dialog: Load puts
+   *                           the set into it, as an own set's Load does
+   *                           (#95).
+   * @return {HTMLElement} The list item.
+   */
+  function buildSharedSetRow(item, neighbors, tb) {
+    var li = settingsRow('li', 'toolrail-settings-sharedrow');
+    li.dataset.sharedId = String(item.id);
+    var label = settingsRow('span', 'toolrail-settings-pinnedname');
+    label.textContent = item.name;
+    li.appendChild(label);
+    var tag = settingsRow('span', 'toolrail-settings-tag toolrail-settings-sharedby');
+    tag.textContent = sharedByText(item);
+    li.appendChild(tag);
+
+    var by = sharedByPhrase(item);
+    var load = settingsButton(__('Load', 'editrail'), function () {
+      // Into the chosen toolbar (#95), or the first one when a stored
+      // change deleted it while the dialog was open (PR #126 review).
+      var into = toolbars.indexOf(tb) === -1 ? mainToolbar : tb;
+      applySet(item.blocks, item.labels, into);
+      settingsStatus = configLoadedMessage(item.name, into);
+      refreshSettings('#toolrail-settings-search');
+    }, 'toolrail-settings-sharedload');
+    // With several toolbars the name says which one Load fills, as an own
+    // set's Load does.
+    load.setAttribute('aria-label', toolbars.length > 1
+      ? sprintf(
+        /* translators: 1: set name, 2: "shared by <name>", 3: the toolbar's name. */
+        __('Load the set %1$s, %2$s, into %3$s', 'editrail'),
+        item.name,
+        by,
+        toolbarLabel(tb)
+      )
+      : sprintf(
+        /* translators: 1: set name, 2: "shared by <name>". */
+        __('Load the set %1$s, %2$s', 'editrail'),
+        item.name,
+        by
+      ));
+    li.appendChild(load);
+
+    var exp = settingsButton(__('Export', 'editrail'), function () {
+      downloadSetFile(setFilePayload(item.name, item.blocks, item.labels));
+    }, 'toolrail-settings-sharedexport');
+    exp.setAttribute('aria-label', sprintf(
+      /* translators: 1: set name, 2: "shared by <name>". */
+      __('Export the set %1$s, %2$s, as a file', 'editrail'),
+      item.name,
+      by
+    ));
+    li.appendChild(exp);
+
+    if (item.canDelete) {
+      var stop = settingsButton(__('Stop sharing', 'editrail'), function () {
+        // The row goes: focus to the next row's Load, else the one
+        // before, else the set name field above the lists.
+        var targets = neighbors.map(function (id) {
+          return '.toolrail-settings-sharedrow[data-shared-id="' + id + '"] .toolrail-settings-sharedload';
+        });
+        targets.push('#toolrail-settings-setname');
+        unshareSet(item, targets);
+      }, 'toolrail-settings-unshare');
+      stop.setAttribute('aria-label', sprintf(
+        /* translators: 1: set name, 2: "shared by <name>". */
+        __('Stop sharing the set %1$s, %2$s', 'editrail'),
+        item.name,
+        by
+      ));
+      li.appendChild(stop);
+    }
+    return li;
   }
 
   // -------------------------------------------------------------------
@@ -3261,11 +5207,14 @@ var DASHICON_NAMES = [
           // open settings search (its results) can change with the
           // catalog; anything else would be a rebuild for nothing, and
           // a rebuild moves focus when it was in the rail.
-          if (!loadSlots().some(isPatternSlot) && !settingsOpen) {
+          var pinsPattern = toolbars.some(function (tb) {
+            return loadSlots(tb).some(isPatternSlot);
+          });
+          if (!pinsPattern && !settingsOpen) {
             return;
           }
           window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-          rerender();
+          rerenderToolbars();
           if (settingsOpen) {
             refreshSettings('#toolrail-settings-search');
           }
@@ -3282,12 +5231,15 @@ var DASHICON_NAMES = [
    * deactivated) and patterns this site has not got — or has not fetched
    * yet — are SKIPPED, not deleted: reactivating, or the fetch landing,
    * restores them.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {Object[]} Its pinned slots as tool descriptors.
    */
-  function slotTools() {
+  function slotTools(tb) {
     // One parse of the metadata map per rebuild, not one per slot: the
     // rail rebuilds on every slot change and on every settings click.
     var metaMap = loadPinMeta();
-    return loadSlots().map(function (name) {
+    return loadSlots(tb).map(function (name) {
       if (isPatternSlot(name)) {
         var pattern = findPattern(name);
         if (!pattern) {
@@ -3395,9 +5347,19 @@ var DASHICON_NAMES = [
    * their flyouts), pinned slots, then registered top-level tools. Tools
    * whose `parent` names a built-in or registered top-level tool nest there;
    * an unknown parent falls back to top level rather than vanishing.
+   *
+   * That is the FIRST toolbar's model. An extra toolbar's model is its
+   * pinned slots alone: the built-in tools and the top-level provider
+   * tools are on the first toolbar only (owner decision 2026-11-14, #95).
+   * A provider tool whose `parent` is a pinned slot nests under that slot
+   * on each toolbar that shows it.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {Object} {tools, slots}.
    */
-  function railModel() {
-    var topLevel = BUILTIN_TOOLS.filter(function (t) {
+  function railModel(tb) {
+    var first = tb === mainToolbar;
+    var topLevel = (first ? BUILTIN_TOOLS : []).filter(function (t) {
       return !t.shelved;
     }).map(function (t) {
       return {
@@ -3418,9 +5380,12 @@ var DASHICON_NAMES = [
       };
     });
 
-    var slots = slotTools();
+    var slots = slotTools(tb);
 
     registered.forEach(function (t) {
+      if (!first && !(t.parent && slotForParent(slots, t.parent))) {
+        return;
+      }
       if (t.parent) {
         var host = null;
         topLevel.forEach(function (candidate) {
@@ -3435,6 +5400,16 @@ var DASHICON_NAMES = [
         }
         if (host) {
           host.children.push(t);
+          return;
+        }
+        // The parent can be a pin that only an extra toolbar shows. The
+        // tool is in that pin's flyout there, so it is not unknown. That
+        // holds while the toolbar is hidden too: the tool hides with its
+        // parent, and does not move to the first toolbar.
+        var elsewhere = toolbars.some(function (other) {
+          return other !== mainToolbar && !!slotForParent(slotTools(other), t.parent);
+        });
+        if (elsewhere) {
           return;
         }
         warn('tool "' + t.id + '" names unknown parent "' + t.parent + '" — rendering at top level.');
@@ -3458,6 +5433,25 @@ var DASHICON_NAMES = [
   }
 
   /**
+   * One top-level tool or pin of ONE toolbar's model, by id: the entry
+   * that toolbar's button was built from, with that toolbar's flyout.
+   *
+   * @param {Object} tb The toolbar.
+   * @param {string} id Tool id.
+   * @return {Object|null} The model entry, or null.
+   */
+  function modelTool(tb, id) {
+    var model = railModel(tb);
+    var all = model.tools.concat(model.slots);
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].id === id) {
+        return all[i];
+      }
+    }
+    return null;
+  }
+
+  /**
    * One tool by id, searched across top-level tools, pinned slots and
    * every flyout child.
    *
@@ -3466,15 +5460,22 @@ var DASHICON_NAMES = [
    */
   function findTool(id) {
     var found = null;
-    var model = railModel();
-    model.tools.concat(model.slots).forEach(function (t) {
-      if (t.id === id) {
-        found = t;
+    // Every SHOWN toolbar, the first one first. A hidden toolbar has no
+    // buttons, so its tools cannot be armed or found.
+    toolbars.forEach(function (tb) {
+      if (found || tb.hidden) {
+        return;
       }
-      (t.children || []).forEach(function (c) {
-        if (c.id === id) {
-          found = c;
+      var model = railModel(tb);
+      model.tools.concat(model.slots).forEach(function (t) {
+        if (t.id === id) {
+          found = t;
         }
+        (t.children || []).forEach(function (c) {
+          if (c.id === id) {
+            found = c;
+          }
+        });
       });
     });
     return found;
@@ -3484,6 +5485,9 @@ var DASHICON_NAMES = [
   // Armed-tool state + canvas insertion
   // -------------------------------------------------------------------
 
+  // The armed tool. One for the page, not one for each toolbar (see
+  // newToolbar): an armed tool is a mode of the CANVAS — the next canvas
+  // click inserts its block — and the canvas has one mode at a time.
   var activeTool = 'select';
 
   /**
@@ -3884,6 +5888,15 @@ var DASHICON_NAMES = [
     if (activeTool === 'select') {
       return;
     }
+    // A non-iframed editor (the Code editor, or a block of an older API
+    // version) binds this to the top document, so it also sees clicks on
+    // the toolbars, the header and the sidebars. Only the canvas inserts:
+    // a click on another tool must reach that tool (PR #126 review).
+    var t = e.target;
+    if (t && t.ownerDocument === document
+      && !(t.closest && t.closest('.editor-styles-wrapper'))) {
+      return;
+    }
     var tool = findTool(activeTool);
     if (!isArmingTool(tool)) {
       setActiveTool('select');
@@ -4130,8 +6143,7 @@ var DASHICON_NAMES = [
     if (t === document.body || t === document.documentElement) {
       return true;
     }
-    var region = document.getElementById('toolrail-region');
-    if (region && region.contains(t)) {
+    if (t.closest && t.closest('.toolrail-region')) {
       return true;
     }
     // A non-iframed editor keeps the canvas in the top document.
@@ -4263,8 +6275,7 @@ var DASHICON_NAMES = [
    * @return {void}
    */
   function handleCanvasPointerdownClose(e) {
-    var region = document.getElementById('toolrail-region');
-    if (e && e.target && region && region.contains(e.target)) {
+    if (e && e.target && e.target.closest && e.target.closest('.toolrail-region')) {
       return;
     }
     if (openFlyout) {
@@ -6666,6 +8677,12 @@ var DASHICON_NAMES = [
   // arrows move within, Escape returns focus to the parent)
   // -------------------------------------------------------------------
 
+  // The open flyout: {node, parentBtn, toolbar}, or null. One for the
+  // page, not one for each toolbar (see newToolbar): a flyout takes focus
+  // when it opens and closes when focus leaves it, so two cannot be open
+  // together, and its three document listeners are single functions that
+  // read this one record. The record names the toolbar the menu hangs
+  // in.
   var openFlyout = null;
 
   /**
@@ -6688,7 +8705,7 @@ var DASHICON_NAMES = [
     document.removeEventListener('focusin', onFlyoutFocusin, true);
     parentBtn.setAttribute('aria-expanded', 'false');
     openFlyout = null;
-    syncLayer();
+    syncLayers();
     if (refocusParent) {
       parentBtn.focus();
     }
@@ -6772,17 +8789,52 @@ var DASHICON_NAMES = [
   }
 
   /**
+   * How far the other toolbars on a toolbar's edge reach past its own
+   * region toward the canvas, in px. 0 when it has the edge to itself,
+   * and for a floating toolbar.
+   *
+   * @param {Object}  tb          The toolbar.
+   * @param {DOMRect} wrapperRect Its region's rect.
+   * @return {number} The distance, 0 or more.
+   */
+  function stackExtent(tb, wrapperRect) {
+    var dock = tb.position.dock;
+    var extent = 0;
+    if (dock === 'float') {
+      return 0;
+    }
+    toolbars.forEach(function (other) {
+      var region = other !== tb && other.position.dock === dock ? document.getElementById(other.regionId) : null;
+      if (!region) {
+        return;
+      }
+      var r = region.getBoundingClientRect();
+      var reach = dock === 'top' ? r.bottom - wrapperRect.bottom
+        : dock === 'bottom' ? wrapperRect.top - r.top
+          : dock === 'right' ? wrapperRect.left - r.left
+            : r.right - wrapperRect.right;
+      extent = Math.max(extent, Math.round(reach));
+    });
+    return extent;
+  }
+
+  /**
    * Place a floating surface (a flyout, or the settings dialog) beside the
    * rail, opening AWAY from the docked edge: to the right of a left rail,
    * to the left of a right rail, DOWN from a top rail, UP from a bottom
-   * one. The surface must already be in the DOM — the overflow clamp
-   * measures it.
+   * one. A flyout with no room on that side in the window opens on the
+   * other side of its toolbar instead. The surface must already be in
+   * the DOM — the overflow clamp measures it.
    *
+   * @param {Object}      tb      The toolbar the surface belongs to; its
+   *                              dock gives the direction.
    * @param {HTMLElement} node    The surface.
    * @param {HTMLElement} anchor  Button to align with (falls back to the rail).
    * @param {HTMLElement} wrapper The positioned region the surface lives in.
+   * @param {boolean}     pastStack Open past every toolbar on this edge
+   *                              (the dialogs), not only past this one.
    */
-  function placeSurface(node, anchor, wrapper) {
+  function placeSurface(tb, node, anchor, wrapper, pastStack) {
     var wrapperRect = wrapper.getBoundingClientRect();
     var anchorRect = anchor ? anchor.getBoundingClientRect() : wrapperRect;
 
@@ -6791,24 +8843,30 @@ var DASHICON_NAMES = [
     node.style.bottom = '';
     node.style.left = '';
 
-    if (position.dock === 'top') {
-      node.style.top = 'calc(100% + 4px)';
+    // 4px clear of the region. A dialog also clears the other toolbars on
+    // the same edge (pastStack): it stays open while the author changes
+    // them, so it must not cover them. A flyout opens next to its own
+    // toolbar; a menu far from its button is worse than a menu over a
+    // neighbor for a moment.
+    var gap = 'calc(100% + ' + (4 + (pastStack ? stackExtent(tb, wrapperRect) : 0)) + 'px)';
+    if (tb.position.dock === 'top') {
+      node.style.top = gap;
       node.style.left = Math.max(0, anchorRect.left - wrapperRect.left) + 'px';
-    } else if (position.dock === 'bottom') {
-      node.style.bottom = 'calc(100% + 4px)';
+    } else if (tb.position.dock === 'bottom') {
+      node.style.bottom = gap;
       node.style.left = Math.max(0, anchorRect.left - wrapperRect.left) + 'px';
-    } else if (position.dock === 'right') {
-      node.style.right = 'calc(100% + 4px)';
+    } else if (tb.position.dock === 'right') {
+      node.style.right = gap;
       node.style.top = Math.max(0, anchorRect.top - wrapperRect.top) + 'px';
     } else {
-      node.style.left = 'calc(100% + 4px)';
+      node.style.left = gap;
       node.style.top = Math.max(0, anchorRect.top - wrapperRect.top) + 'px';
     }
 
     // Pull back anything that would run off the viewport. Horizontal docks
     // clamp sideways, vertical docks clamp downward.
     var rect = node.getBoundingClientRect();
-    if (isVertical()) {
+    if (isVertical(tb)) {
       var overshootY = rect.bottom - window.innerHeight + 8;
       if (overshootY > 0 && node.style.top) {
         node.style.top = Math.max(0, parseFloat(node.style.top) - overshootY) + 'px';
@@ -6819,6 +8877,66 @@ var DASHICON_NAMES = [
         node.style.left = Math.max(0, parseFloat(node.style.left) - overshootX) + 'px';
       }
     }
+
+    var maxRight = window.innerWidth - 8;
+    var maxBottom = window.innerHeight - 8;
+    var dock = tb.position.dock;
+    // Whether a box runs off the window on the dock's own axis.
+    var offAxis = function (box) {
+      return dock === 'right' ? box.left < 8
+        : dock === 'top' ? box.bottom > maxBottom
+          : dock === 'bottom' ? box.top < 8
+            : box.right > maxRight;
+    };
+
+    // A flyout on the innermost of a stack of toolbars can open beyond
+    // the window: four wide toolbars on the left take 800px, and focus
+    // went into a menu off screen. It flips to the other side of its own
+    // toolbar, still next to its button, over the toolbars nearer the
+    // edge (PR #126 review, CodeRabbit). When that side does not fit
+    // either, it goes back and the pull-back below applies.
+    rect = node.getBoundingClientRect();
+    if (!pastStack && offAxis(rect)) {
+      var flipGap = 'calc(100% + 4px)';
+      var side = dock === 'right' ? ['right', 'left']
+        : dock === 'top' ? ['top', 'bottom']
+          : dock === 'bottom' ? ['bottom', 'top']
+            : ['left', 'right'];
+      node.style[side[0]] = '';
+      node.style[side[1]] = flipGap;
+      var flipped = node.getBoundingClientRect();
+      var flipOff = dock === 'right' ? flipped.right > maxRight
+        : dock === 'top' ? flipped.top < 8
+          : dock === 'bottom' ? flipped.bottom > maxBottom
+            : flipped.left < 8;
+      if (flipOff) {
+        node.style[side[1]] = '';
+        node.style[side[0]] = gap;
+      }
+    }
+
+    // A dialog that opens past a stack of toolbars can start beyond the
+    // window: four wide toolbars on the left take 800px. The dialog is the
+    // way to undo that layout, so it is pulled back into the window on
+    // the dock's own axis too, over part of the stack when it must
+    // (PR #126 review, CodeRabbit). A flyout that fits on neither side of
+    // its toolbar gets the same pull-back.
+    rect = node.getBoundingClientRect();
+    if (offAxis(rect)) {
+      if (dock === 'right') {
+        node.style.left = '';
+        node.style.right = Math.round(wrapperRect.right - 8 - rect.width) + 'px';
+      } else if (dock === 'top') {
+        node.style.bottom = '';
+        node.style.top = Math.round(maxBottom - rect.height - wrapperRect.top) + 'px';
+      } else if (dock === 'bottom') {
+        node.style.top = '';
+        node.style.bottom = Math.round(wrapperRect.bottom - 8 - rect.height) + 'px';
+      } else {
+        node.style.right = '';
+        node.style.left = Math.round(Math.max(8, maxRight - rect.width) - wrapperRect.left) + 'px';
+      }
+    }
   }
 
   /**
@@ -6826,12 +8944,13 @@ var DASHICON_NAMES = [
    * menu is built fresh per open, placed by placeSurface(), and holds
    * document-level listeners for the whole time it is up.
    *
+   * @param {Object}      tb      The toolbar the button is in.
    * @param {HTMLElement} btn     The parent tool button.
    * @param {Object}      tool    Its railModel() entry.
    * @param {HTMLElement} wrapper The positioned region the menu lives in.
    * @return {void}
    */
-  function openFlyoutFor(btn, tool, wrapper) {
+  function openFlyoutFor(tb, btn, tool, wrapper) {
     closeFlyout(false);
     if (!tool.children.length) {
       return;
@@ -6910,10 +9029,10 @@ var DASHICON_NAMES = [
     });
 
     wrapper.appendChild(menu);
-    placeSurface(menu, btn, wrapper);
+    placeSurface(tb, menu, btn, wrapper);
     btn.setAttribute('aria-expanded', 'true');
-    openFlyout = { node: menu, parentBtn: btn };
-    syncLayer();
+    openFlyout = { node: menu, parentBtn: btn, toolbar: tb };
+    syncLayers();
     document.addEventListener('mousedown', onDocMousedown, true);
     document.addEventListener('keydown', onFlyoutKeydown, true);
     document.addEventListener('focusin', onFlyoutFocusin, true);
@@ -6927,10 +9046,17 @@ var DASHICON_NAMES = [
   // -------------------------------------------------------------------
   // Toolbar settings dialog — choose which blocks show as quick slots,
   // reorder them, and save/load named sets. All of it is a per-user
-  // account preference, never site-wide settings or post data.
+  // account preference, never site-wide settings or post data. The one
+  // exception is a shared set (#98): the plugin's own record on the site,
+  // never an authored post (see the "Shared sets" block).
   // -------------------------------------------------------------------
 
   var settingsOpen = false;
+  // The id of the toolbar the dialog's toolbar sections act on: its pins,
+  // its position, its tool names, and the saved set that loads into it
+  // (#95). Module state like editingSlot, so a rebuild keeps the choice.
+  // It goes back to the first toolbar when the chosen one is deleted.
+  var settingsToolbarId = 'main';
   // The pinned slot whose inline Edit form is open ('' = none). Module
   // state, not DOM state, so a rebuild from elsewhere (a drag onto the
   // rail while the form is open) re-renders the form instead of
@@ -6978,13 +9104,50 @@ var DASHICON_NAMES = [
   }
 
   /**
+   * The toolbar the dialog's toolbar sections act on (settingsToolbarId).
+   *
+   * @return {Object} The toolbar; the first toolbar when the id is gone.
+   */
+  function settingsToolbar() {
+    return toolbarById(settingsToolbarId) || mainToolbar;
+  }
+
+  /**
+   * Place each open dialog again. The dialogs open past every toolbar on
+   * the first toolbar's edge (placeSurface's pastStack), so a different
+   * toolbar that arrives on that edge, leaves it, or changes width moves
+   * where they must sit. They hang in the first toolbar's region, which
+   * that change does not rebuild, so nothing else places them (#95).
+   *
+   * @return {void}
+   */
+  function placeOpenDialogs() {
+    var wrapper = document.getElementById(mainToolbar.regionId);
+    if (!wrapper) {
+      return;
+    }
+    var settings = settingsOpen ? settingsNode() : null;
+    if (settings && !settings.classList.contains('toolrail-adddialog')) {
+      placeSurface(mainToolbar, settings, gearButton(), wrapper, true);
+    }
+    var help = helpOpen ? helpNode() : null;
+    if (help) {
+      placeSurface(mainToolbar, help, helpButton() || gearButton(), wrapper, true);
+    }
+    var add = addDialogOpen ? addDialogNode() : null;
+    if (add) {
+      placeSurface(mainToolbar, add, gearButton(), wrapper, true);
+    }
+  }
+
+  /**
    * The rail's settings button — the dialog's anchor and its focus-return
    * target. Null before the rail is built.
    *
    * @return {HTMLElement|null} The button, or null.
    */
   function gearButton() {
-    var rail = document.getElementById('toolrail-rail');
+    var rail = document.getElementById(mainToolbar.railId);
     return rail ? rail.querySelector('[data-tool="settings"]') : null;
   }
 
@@ -7018,7 +9181,7 @@ var DASHICON_NAMES = [
     editFormError = '';
     iconBrowserOpen = false;
     iconBrowserQuery = '';
-    syncLayer();
+    syncLayers();
     // Drop any message that never got rendered — closing the dialog
     // before an in-flight file read resolves used to strand it here, and
     // it then surfaced out of context the NEXT time settings was opened.
@@ -7026,6 +9189,11 @@ var DASHICON_NAMES = [
     settingsStatus = '';
     appearanceStatus = '';
     pinnedStatus = '';
+    toolbarsStatus = '';
+    // The next open starts on the first toolbar, whose gear opened it. A
+    // control that opens the dialog for a different toolbar chooses it
+    // itself (openSettingsFor).
+    settingsToolbarId = mainToolbar.id;
     document.removeEventListener('mousedown', onSettingsMousedown, true);
     document.removeEventListener('keydown', onSettingsKeydown, true);
     document.removeEventListener('focusin', onSettingsFocusin, true);
@@ -7229,13 +9397,17 @@ var DASHICON_NAMES = [
       '#toolrail-settings-search',
       '#toolrail-settings-setname',
       '#toolrail-settings-sidebarwidth-input',
+      '#toolrail-settings-toolbarname',
       '#toolrail-editform-title',
       '#toolrail-editform-description',
       '#toolrail-editform-icon'
     ];
     textFields.forEach(function (sel) {
       var field = node.querySelector(sel);
-      if (field) {
+      // The toolbar Name field belongs to one toolbar (data-toolbar). When
+      // the author chose a different toolbar, its typing is not carried
+      // into the next toolbar's field (#95).
+      if (field && (!field.dataset.toolbar || field.dataset.toolbar === settingsToolbarId)) {
         preserved[sel] = field.value;
       }
     });
@@ -7304,14 +9476,20 @@ var DASHICON_NAMES = [
    * Position picker. Dragging the rail's grip is the pointer affordance;
    * this radio group is the equivalent keyboard and screen-reader path,
    * so repositioning never depends on a drag.
+   *
+   * @param {function(string): string} scoped Adds the chosen toolbar's
+   *                                          name to a heading (#95).
+   * @return {HTMLElement} The fieldset.
    */
-  function buildPositionControl() {
+  function buildPositionControl(scoped) {
+    // The chosen toolbar's position (#95).
+    var tb = settingsToolbar();
     var fieldset = document.createElement('fieldset');
     fieldset.className = 'toolrail-settings-position';
 
     var legend = document.createElement('legend');
     legend.className = 'toolrail-settings-label';
-    legend.textContent = __('Toolbar position', 'editrail');
+    legend.textContent = scoped(__('Toolbar position', 'editrail'));
     fieldset.appendChild(legend);
 
     DOCKS.forEach(function (dock) {
@@ -7320,7 +9498,7 @@ var DASHICON_NAMES = [
       input.type = 'radio';
       input.name = 'toolrail-dock';
       input.value = dock;
-      input.checked = position.dock === dock;
+      input.checked = tb.position.dock === dock;
       input.dataset.dock = dock;
       input.addEventListener('change', function () {
         if (!input.checked) {
@@ -7329,9 +9507,16 @@ var DASHICON_NAMES = [
         // The dock change rebuilds the region, so the dialog is reopened
         // with focus back on the radio the author just chose. A refused
         // dock leaves the radio showing a position the rail is not in, so
-        // repaint the dialog from the real state instead.
-        if (!setDock(dock, { reopenSettings: true })) {
-          refreshSettings('input[data-dock="' + position.dock + '"]');
+        // repaint the dialog from the real state instead. An extra
+        // toolbar's region does not hold the dialog, so its move leaves
+        // the dialog open (setDock), and a repaint places it again.
+        var moved = setDock(tb, dock, { reopenSettings: true });
+        // A move can leave the canvas too narrow; the status line says so
+        // (owner decision 2026-11-16). After setDock: the first
+        // toolbar's move reopened the dialog, which clears the status.
+        toolbarsStatus = moved ? canvasNarrowMessage() : '';
+        if (!moved || tb !== mainToolbar || toolbarsStatus) {
+          refreshSettings('input[data-dock="' + tb.position.dock + '"]');
         }
       });
       row.appendChild(input);
@@ -7360,23 +9545,40 @@ var DASHICON_NAMES = [
    * mode (keyboard-first, like the position radios); the on-rail
    * chevron is opt-in sugar that spends toolbar space only when asked
    * for (owner decision 2026-08-27). Both persist per user.
+   *
+   * @param {function(string): string} scoped Adds the chosen toolbar's
+   *                                          name to a heading (#95).
+   * @return {HTMLElement|DocumentFragment} The fieldset; with several
+   *                                        toolbars, the fieldset and
+   *                                        the expand/contract row.
    */
-  function buildWideControl() {
+  function buildWideControl(scoped) {
     var fieldset = document.createElement('fieldset');
     fieldset.className = 'toolrail-settings-widegroup';
 
     var legend = document.createElement('legend');
     legend.className = 'toolrail-settings-label';
-    legend.textContent = __('Tool names', 'editrail');
+    legend.textContent = scoped(__('Tool names', 'editrail'));
     fieldset.appendChild(legend);
 
     var wideRow = settingsRow('label', 'toolrail-settings-positionrow');
     var wideInput = document.createElement('input');
     wideInput.type = 'checkbox';
     wideInput.id = 'toolrail-settings-wide';
-    wideInput.checked = isWide();
+    // Wide mode is one setting for each toolbar (#95): this checkbox is
+    // the chosen toolbar's.
+    var tb = settingsToolbar();
+    wideInput.checked = isWide(tb);
     wideInput.addEventListener('change', function () {
-      setWide(wideInput.checked);
+      setWide(tb, wideInput.checked);
+      // An extra toolbar on the first toolbar's edge just changed width.
+      placeOpenDialogs();
+      // A wider toolbar can leave the canvas too narrow (owner decision
+      // 2026-11-16); the status line says so. Nothing else to rebuild.
+      toolbarsStatus = wideInput.checked ? canvasNarrowMessage() : '';
+      if (toolbarsStatus) {
+        refreshSettings('#toolrail-settings-wide');
+      }
     });
     var wideText = settingsRow('span', '');
     wideText.textContent = __('Show tool names beside the icons (wide toolbar)', 'editrail');
@@ -7393,23 +9595,36 @@ var DASHICON_NAMES = [
       writeKey(WIDE_TOGGLE_KEY, toggleInput.checked ? '1' : '0');
       // The chevron enters or leaves the rail — rebuild it. Focus stays
       // on this checkbox (rerender only moves focus when it was IN the
-      // rail).
-      rerender();
+      // rail). One setting for every toolbar, and each has a chevron.
+      rerenderToolbars();
     });
     var toggleText = settingsRow('span', '');
-    toggleText.textContent = __('Show an expand/contract button on the toolbar', 'editrail');
+    // One setting for every toolbar (#95), so with several it says so.
+    toggleText.textContent = toolbars.length > 1
+      ? __('Show an expand/contract button on each toolbar', 'editrail')
+      : __('Show an expand/contract button on the toolbar', 'editrail');
     toggleRow.appendChild(toggleInput);
     toggleRow.appendChild(toggleText);
-    fieldset.appendChild(toggleRow);
 
     // Both preferences persist on every dock; the effect shows where
     // wide mode applies. Stated rather than disabling the controls —
     // a disabled checkbox hides its state.
     var hint = settingsRow('p', 'toolrail-settings-empty');
     hint.textContent = __('Tool names show on left, right and floating toolbars.', 'editrail');
-    fieldset.appendChild(hint);
 
-    return fieldset;
+    if (toolbars.length < 2) {
+      fieldset.appendChild(toggleRow);
+      fieldset.appendChild(hint);
+      return fieldset;
+    }
+    // With several toolbars the legend names the chosen toolbar, and the
+    // expand/contract checkbox is one setting for every toolbar, so it
+    // goes after the group, not inside it (review 2026-11-16, finding 7).
+    fieldset.appendChild(hint);
+    var out = document.createDocumentFragment();
+    out.appendChild(fieldset);
+    out.appendChild(toggleRow);
+    return out;
   }
 
   /**
@@ -7582,6 +9797,13 @@ var DASHICON_NAMES = [
   var pinnedStatus = '';
 
   /**
+   * The Toolbar section's transient outcome line (#95): a toolbar added,
+   * renamed, deleted, shown or hidden, or a refusal. Same contract as
+   * pinnedStatus.
+   */
+  var toolbarsStatus = '';
+
+  /**
    * Appearance picker: three contrast-verified presets plus a custom
    * background + text pair. A preset switch re-renders the dialog (the
    * color inputs enable only under Custom); the color inputs apply live
@@ -7736,17 +9958,31 @@ var DASHICON_NAMES = [
     if (!Object.prototype.hasOwnProperty.call(map, name)) {
       return false;
     }
+    downloadSetFile(setFilePayload(name, map[name], loadConfigMeta()[name]));
+    return true;
+  }
+
+  /**
+   * The set file object for one set. One builder for an export, a shared
+   * set's export and a share (#98), so a shared set exports to the same
+   * file as the author's own.
+   *
+   * @param {string}      name   Set name.
+   * @param {Array}       blocks The set's slots.
+   * @param {Object|null} labels The set's label snapshot, or null.
+   * @return {Object} The payload.
+   */
+  function setFilePayload(name, blocks, labels) {
     var payload = {
       format: 'toolrail-set',
       version: 1,
       name: name,
-      blocks: map[name]
+      blocks: blocks
     };
     // The set's label snapshot (saveConfig / importConfigPayload) rides
     // along, keyed by slot name, so a set moved to another site keeps
     // its labels. The key is absent when the set has none, so a plain
     // set file is byte-for-byte what it was before 1.0.1.
-    var labels = loadConfigMeta()[name];
     if (labels) {
       var meta = {};
       Object.keys(labels).forEach(function (slot) {
@@ -7754,6 +9990,17 @@ var DASHICON_NAMES = [
       });
       payload.meta = meta;
     }
+    return payload;
+  }
+
+  /**
+   * Start the download of one set file.
+   *
+   * @param {Object} payload A setFilePayload() result.
+   * @return {void}
+   */
+  function downloadSetFile(payload) {
+    var name = payload.name;
     var slug = name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'set';
     var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     var url = URL.createObjectURL(blob);
@@ -7764,7 +10011,6 @@ var DASHICON_NAMES = [
     a.click();
     a.remove();
     window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-    return true;
   }
 
   /**
@@ -7778,9 +10024,7 @@ var DASHICON_NAMES = [
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.blocks)) {
       return { ok: false, error: __('Not an EditRail set file — expected JSON with a "blocks" array.', 'editrail') };
     }
-    var valid = parsed.blocks.filter(function (n) {
-      return typeof n === 'string' && (BLOCK_NAME_PATTERN.test(n) || PATTERN_SLOT_PATTERN.test(n));
-    });
+    var valid = parsed.blocks.filter(isSetSlotName);
     var dropped = parsed.blocks.length - valid.length;
     // A set file is hand-editable and hand-writable, so it can repeat a
     // block name. Two slots sharing one `pin:<name>` tool id break the
@@ -8273,6 +10517,243 @@ var DASHICON_NAMES = [
    * @param {string}      searchValue The search text to restore.
    * @return {void}
    */
+  /**
+   * The Toolbar section (#95), shown while more than one toolbar exists:
+   * the chooser that decides which toolbar the sections below change, and
+   * for an extra toolbar its Name, Show and Delete controls. It comes
+   * before the sections it scopes, so reading order gives the scope first.
+   *
+   * @return {HTMLElement} The section.
+   */
+  function buildToolbarSection() {
+    var tb = settingsToolbar();
+    var section = settingsRow('div', 'toolrail-settings-toolbars');
+
+    var label = settingsRow('label', 'toolrail-settings-label');
+    label.setAttribute('for', 'toolrail-settings-toolbar');
+    label.textContent = __('Toolbar', 'editrail');
+    section.appendChild(label);
+    var select = document.createElement('select');
+    select.id = 'toolrail-settings-toolbar';
+    select.className = 'toolrail-settings-search';
+    select.setAttribute('aria-describedby', 'toolrail-settings-toolbar-hint');
+    toolbars.forEach(function (other) {
+      var option = document.createElement('option');
+      option.value = other.id;
+      option.textContent = other.hidden
+        ? sprintf(
+          /* translators: %s: the toolbar's name. */
+          __('%s (hidden)', 'editrail'),
+          toolbarLabel(other)
+        )
+        : toolbarLabel(other);
+      option.selected = other === tb;
+      select.appendChild(option);
+    });
+    select.addEventListener('change', function () {
+      settingsToolbarId = select.value;
+      // The Edit form is for a pin of the toolbar that was chosen.
+      editingSlot = '';
+      editFormError = '';
+      iconBrowserOpen = false;
+      iconBrowserQuery = '';
+      refreshSettings('#toolrail-settings-toolbar');
+    });
+    section.appendChild(select);
+    var hint = settingsRow('p', 'toolrail-settings-empty');
+    hint.id = 'toolrail-settings-toolbar-hint';
+    hint.textContent = __('Pinned tools, position, tool names and saved sets below apply to this toolbar.', 'editrail');
+    section.appendChild(hint);
+
+    if (tb !== mainToolbar) {
+      var nameLabel = settingsRow('label', 'toolrail-settings-label');
+      nameLabel.setAttribute('for', 'toolrail-settings-toolbarname');
+      nameLabel.textContent = __('Toolbar name', 'editrail');
+      section.appendChild(nameLabel);
+      var nameRow = settingsRow('div', 'toolrail-settings-saverow');
+      var nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.id = 'toolrail-settings-toolbarname';
+      nameInput.className = 'toolrail-settings-search';
+      nameInput.maxLength = TOOLBAR_NAME_MAX;
+      nameInput.value = tb.name;
+      // refreshSettings keeps typing only for the toolbar it was typed for.
+      nameInput.dataset.toolbar = tb.id;
+      nameInput.setAttribute('aria-describedby', 'toolrail-settings-toolbars-status');
+      nameRow.appendChild(nameInput);
+      var rename = function () {
+        var before = tb.name;
+        var result = renameToolbar(tb, nameInput.value);
+        if (result === 'renamed') {
+          toolbarsStatus = sprintf(
+            /* translators: 1: the old name, 2: the new name. */
+            __('Renamed the %1$s toolbar to %2$s.', 'editrail'),
+            before, tb.name
+          );
+        } else if (result === 'same') {
+          toolbarsStatus = sprintf(
+            /* translators: %s: the toolbar's name. */
+            __('The toolbar is already called %s.', 'editrail'),
+            tb.name
+          );
+        } else if (result === 'empty') {
+          toolbarsStatus = __('Type a name for the toolbar.', 'editrail');
+        } else {
+          toolbarsStatus = __('A different toolbar has that name. Type a different name.', 'editrail');
+        }
+        refreshSettings('#toolrail-settings-toolbarname');
+      };
+      nameInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          rename();
+        }
+      });
+      nameRow.appendChild(settingsButton(__('Rename', 'editrail'), rename, 'toolrail-settings-renametoolbar'));
+      section.appendChild(nameRow);
+
+      // Show or hide (step 3). The same state as the Toolbars menu's
+      // checked item on the first toolbar.
+      var shownRow = settingsRow('label', 'toolrail-settings-positionrow');
+      var shown = document.createElement('input');
+      shown.type = 'checkbox';
+      shown.id = 'toolrail-settings-toolbarshown';
+      shown.checked = !tb.hidden;
+      shown.addEventListener('change', function () {
+        var result = setToolbarHidden(tb, !shown.checked);
+        // One message: the show or hide, a disarm it caused, a canvas
+        // that is now too narrow (review 2026-11-16, finding 2).
+        toolbarsStatus = joinMessages([
+          toolbarShownMessage(tb),
+          result && result.disarmed ? disarmedMessage() : '',
+          tb.hidden ? '' : canvasNarrowMessage()
+        ]);
+        refreshSettings('#toolrail-settings-toolbarshown');
+      });
+      var shownText = settingsRow('span', '');
+      shownText.textContent = __('Show this toolbar', 'editrail');
+      shownRow.appendChild(shown);
+      shownRow.appendChild(shownText);
+      section.appendChild(shownRow);
+
+      var deleteRow = settingsRow('div', 'toolrail-settings-helprow');
+      var del = settingsButton(__('Delete this toolbar', 'editrail'), function () {
+        var name = tb.name;
+        var count = tb.slots.length;
+        var result = deleteToolbar(tb);
+        if (!result) {
+          return;
+        }
+        // Its pins go with it (owner decision 2026-11-14), so say so, and
+        // a disarm it caused in the same message.
+        toolbarsStatus = joinMessages([count
+          ? sprintf(
+            /* translators: 1: the toolbar's name, 2: number of pinned tools. */
+            _n(
+              'Deleted the %1$s toolbar and its %2$d pinned tool.',
+              'Deleted the %1$s toolbar and its %2$d pinned tools.',
+              count,
+              'editrail'
+            ),
+            name,
+            count
+          )
+          : sprintf(
+            /* translators: %s: the toolbar's name. */
+            __('Deleted the %s toolbar.', 'editrail'),
+            name
+          ), result.disarmed ? disarmedMessage() : '']);
+        refreshSettings(['#toolrail-settings-toolbar', '.toolrail-settings-addtoolbar']);
+      }, 'toolrail-settings-deletetoolbar');
+      del.setAttribute('aria-label', sprintf(
+        /* translators: %s: the toolbar's name. */
+        __('Delete the %s toolbar', 'editrail'),
+        tb.name
+      ));
+      deleteRow.appendChild(del);
+      section.appendChild(deleteRow);
+    }
+
+    section.appendChild(buildToolbarsStatus());
+    return section;
+  }
+
+  /**
+   * The Toolbar section's outcome line (toolbarsStatus): rendered as text
+   * where the controls are, and spoken. Built in the Toolbar section when
+   * it shows, else under "Add a toolbar".
+   *
+   * @return {HTMLElement} The line.
+   */
+  function buildToolbarsStatus() {
+    var status = settingsRow('p', 'toolrail-settings-status');
+    status.id = 'toolrail-settings-toolbars-status';
+    status.textContent = toolbarsStatus;
+    if (toolbarsStatus) {
+      speak(toolbarsStatus);
+    }
+    toolbarsStatus = '';
+    return status;
+  }
+
+  /**
+   * "Add a toolbar", and the checkbox for the first toolbar's Toolbars
+   * button (#95). Under the position group: where the toolbars are is
+   * what the author arranges there.
+   *
+   * @param {boolean} withStatus Build the outcome line here, because the
+   *                             Toolbar section is not shown.
+   * @return {HTMLElement} The group.
+   */
+  function buildToolbarAddRow(withStatus) {
+    var group = settingsRow('div', 'toolrail-settings-addtoolbarrow');
+    var row = settingsRow('div', 'toolrail-settings-helprow');
+    row.appendChild(settingsButton(__('Add a toolbar', 'editrail'), function () {
+      var tb = addToolbar();
+      if (!tb) {
+        toolbarsStatus = sprintf(
+          /* translators: %d: the largest number of toolbars. */
+          __('You have %d toolbars, which is the most there can be. Delete a toolbar to add a different one.', 'editrail'),
+          MAX_TOOLBARS
+        );
+        refreshSettings('.toolrail-settings-addtoolbar');
+        return;
+      }
+      // Choose the new toolbar, so the author can name it and pin to it
+      // at once.
+      settingsToolbarId = tb.id;
+      toolbarsStatus = joinMessages([sprintf(
+        /* translators: %s: the new toolbar's name. */
+        __('Added the %s toolbar beside the main toolbar. It is chosen below, and it has no tools yet.', 'editrail'),
+        tb.name
+      ), canvasNarrowMessage()]);
+      refreshSettings('#toolrail-settings-toolbarname');
+    }, 'toolrail-settings-addtoolbar'));
+    group.appendChild(row);
+
+    var buttonRow = settingsRow('label', 'toolrail-settings-positionrow');
+    var buttonToggle = document.createElement('input');
+    buttonToggle.type = 'checkbox';
+    buttonToggle.id = 'toolrail-settings-toolbarsbutton';
+    buttonToggle.checked = readKey(TOOLBARS_BUTTON_HIDDEN_KEY) !== '1';
+    buttonToggle.addEventListener('change', function () {
+      writeKey(TOOLBARS_BUTTON_HIDDEN_KEY, buttonToggle.checked ? '0' : '1');
+      // Focus stays on this checkbox: rerender() only moves focus when it
+      // was in the rail.
+      rerender(mainToolbar);
+    });
+    var buttonText = settingsRow('span', '');
+    buttonText.textContent = __('Show a Toolbars button on the main toolbar when you have more than one toolbar', 'editrail');
+    buttonRow.appendChild(buttonToggle);
+    buttonRow.appendChild(buttonText);
+    group.appendChild(buttonRow);
+
+    if (withStatus) {
+      group.appendChild(buildToolbarsStatus());
+    }
+    return group;
+  }
+
   function buildSettingsContent(node, searchValue) {
     var head = settingsRow('div', 'toolrail-settings-head');
     var title = settingsRow('h2', 'toolrail-settings-title');
@@ -8288,6 +10769,26 @@ var DASHICON_NAMES = [
     note.textContent = __('Pinned tools appear on the toolbar as quick-insert tools: any block type, and any pattern. They are saved to your account on this site, for you only.', 'editrail');
     node.appendChild(note);
 
+    // The toolbar the sections below change (#95). With more than one
+    // toolbar the chooser comes first, and each scoped heading names the
+    // chosen toolbar, so a screen-reader user hears which toolbar a
+    // control changes. With one toolbar the dialog reads as before.
+    var tb = settingsToolbar();
+    var several = toolbars.length > 1;
+    var scoped = function (text) {
+      return several
+        ? sprintf(
+          /* translators: 1: a section heading, 2: the toolbar's name. */
+          __('%1$s: %2$s', 'editrail'),
+          text,
+          toolbarLabel(tb)
+        )
+        : text;
+    };
+    if (several) {
+      node.appendChild(buildToolbarSection());
+    }
+
     // Pinned tools + Add a block come FIRST, directly under the note that
     // introduces them, and the position / tool names / appearance groups
     // follow (QA 2026-09-11, C2; owner decision the same day). Focus
@@ -8302,11 +10803,12 @@ var DASHICON_NAMES = [
     // list — right above the search that added it, owner decision
     // 2026-08-27) ---
     var pinnedHead = settingsRow('h3', 'toolrail-settings-subtitle');
-    pinnedHead.textContent = __('Pinned tools', 'editrail');
+    pinnedHead.textContent = scoped(__('Pinned tools', 'editrail'));
     node.appendChild(pinnedHead);
 
     var pinnedList = settingsRow('ul', 'toolrail-settings-pinned');
-    var slots = loadSlots();
+    // The chosen toolbar's pins (#95).
+    var slots = loadSlots(tb);
     if (!slots.length) {
       var empty = settingsRow('p', 'toolrail-settings-empty');
       empty.textContent = __('Nothing pinned yet.', 'editrail');
@@ -8354,7 +10856,7 @@ var DASHICON_NAMES = [
       // stays (or returns to the search), so without a message a blind
       // author had no way to know the action took (QA 2026-09-11, C4).
       var up = settingsButton('↑', function () {
-        if (moveSlot(name, -1)) {
+        if (moveSlot(tb, name, -1)) {
           pinnedStatus = sprintf(
             /* translators: 1: tool title, 2: new position, 3: number of pinned tools. */
             __('%1$s moved to position %2$d of %3$d.', 'editrail'),
@@ -8368,7 +10870,7 @@ var DASHICON_NAMES = [
       li.appendChild(up);
 
       var down = settingsButton('↓', function () {
-        if (moveSlot(name, 1)) {
+        if (moveSlot(tb, name, 1)) {
           pinnedStatus = sprintf(
             /* translators: 1: tool title, 2: new position, 3: number of pinned tools. */
             __('%1$s moved to position %2$d of %3$d.', 'editrail'),
@@ -8407,12 +10909,18 @@ var DASHICON_NAMES = [
       // speech-input user saying "click Remove" matched nothing. It also
       // matches the wording of the block menu's own Unpin item.
       var remove = settingsButton(__('Unpin', 'editrail'), function () {
-        unpinBlock(name);
-        pinnedStatus = sprintf(
-          /* translators: %s: tool title. */
-          __('%s unpinned from the toolbar.', 'editrail'),
-          label.textContent
-        );
+        unpinBlock(tb, name);
+        pinnedStatus = tb === mainToolbar
+          ? sprintf(
+            /* translators: %s: tool title. */
+            __('%s unpinned from the toolbar.', 'editrail'),
+            label.textContent
+          )
+          : sprintf(
+            /* translators: 1: tool title, 2: the toolbar's name. */
+            __('%1$s unpinned from the %2$s toolbar.', 'editrail'),
+            label.textContent, tb.name
+          );
         refreshSettings('#toolrail-settings-search');
       }, 'toolrail-settings-remove');
       remove.setAttribute('aria-label', sprintf(__('Unpin %s', 'editrail'), label.textContent));
@@ -8449,6 +10957,10 @@ var DASHICON_NAMES = [
     // restoring is never a reset. The migration stamp is untouched: its
     // meaning ("the one-time upgrade has run") is unrelated, and
     // clearing it would re-arm the upgrade path.
+    //
+    // The first toolbar's only (#95): the defaults are what a new account
+    // gets on that toolbar, and the corrupt-list check below reads its
+    // key. An extra toolbar starts empty and has no defaults to restore.
     var restoreRow = settingsRow('div', 'toolrail-settings-restorerow');
     restoreRow.appendChild(settingsButton(__('Restore default tools', 'editrail'), function () {
       // A corrupt stored list must not be silently replaced (review
@@ -8470,7 +10982,7 @@ var DASHICON_NAMES = [
           return;
         }
       }
-      var current = loadSlots();
+      var current = loadSlots(mainToolbar);
       var missing = DEFAULT_SLOTS.filter(function (name) {
         return current.indexOf(name) === -1;
       });
@@ -8480,9 +10992,9 @@ var DASHICON_NAMES = [
         refreshSettings('.toolrail-settings-restore');
         return;
       }
-      saveSlots(current.concat(missing));
+      saveSlots(mainToolbar, current.concat(missing));
       window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-      rerender();
+      rerender(mainToolbar);
       pinnedStatus = sprintf(
         /* translators: %d: number of default tools restored. */
         _n('Restored %d default tool.', 'Restored %d default tools.', missing.length, 'editrail'),
@@ -8490,7 +11002,9 @@ var DASHICON_NAMES = [
       );
       refreshSettings('.toolrail-settings-restore');
     }, 'toolrail-settings-restore'));
-    node.appendChild(restoreRow);
+    if (tb === mainToolbar) {
+      node.appendChild(restoreRow);
+    }
 
     // --- Add a block ---
     var searchLabel = settingsRow('label', 'toolrail-settings-label');
@@ -8518,7 +11032,7 @@ var DASHICON_NAMES = [
     function renderResults() {
       results.textContent = '';
       var term = search.value.trim().toLowerCase();
-      var pinned = loadSlots();
+      var pinned = loadSlots(tb);
       // eslint-disable-next-line no-shadow -- `title` is the candidate's title; this helper never reads the dialog heading.
       var hits = function (title, name) {
         return String(title).toLowerCase().indexOf(term) !== -1 || String(name).toLowerCase().indexOf(term) !== -1;
@@ -8550,11 +11064,17 @@ var DASHICON_NAMES = [
       var resultButton = function (title, kindLabel, ariaLabel, onPin) {
         var btn = settingsButton(title, function () {
           onPin();
-          pinnedStatus = sprintf(
-            /* translators: %s: block or pattern title. */
-            __('%s pinned to the toolbar.', 'editrail'),
-            title
-          );
+          pinnedStatus = tb === mainToolbar
+            ? sprintf(
+              /* translators: %s: block or pattern title. */
+              __('%s pinned to the toolbar.', 'editrail'),
+              title
+            )
+            : sprintf(
+              /* translators: 1: block or pattern title, 2: the toolbar's name. */
+              __('%1$s pinned to the %2$s toolbar.', 'editrail'),
+              title, tb.name
+            );
           refreshSettings('#toolrail-settings-search');
         }, 'toolrail-settings-result');
         btn.setAttribute('aria-label', ariaLabel);
@@ -8568,7 +11088,7 @@ var DASHICON_NAMES = [
           /* translators: %s: block title. */
           __('Pin the %s block to the toolbar', 'editrail'),
           t.title
-        ), function () { pinBlock(t.name); });
+        ), function () { pinBlock(tb, t.name); });
         btn.dataset.block = t.name;
         results.appendChild(btn);
       });
@@ -8577,7 +11097,7 @@ var DASHICON_NAMES = [
           /* translators: %s: pattern title. */
           __('Pin the %s pattern to the toolbar', 'editrail'),
           p.title
-        ), function () { pinBlock(p.id); });
+        ), function () { pinBlock(tb, p.id); });
         btn.dataset.pattern = p.id;
         results.appendChild(btn);
       });
@@ -8587,9 +11107,10 @@ var DASHICON_NAMES = [
 
     // --- Toolbar position, tool names, appearance ---
     node.appendChild(settingsDivider());
-    node.appendChild(buildPositionControl());
+    node.appendChild(buildPositionControl(scoped));
+    node.appendChild(buildToolbarAddRow(!several));
     node.appendChild(settingsDivider());
-    node.appendChild(buildWideControl());
+    node.appendChild(buildWideControl(scoped));
     node.appendChild(settingsDivider());
     node.appendChild(buildAppearanceControl());
     node.appendChild(settingsDivider());
@@ -8621,7 +11142,14 @@ var DASHICON_NAMES = [
     var saveRow = settingsRow('div', 'toolrail-settings-saverow');
     var nameLabel = settingsRow('label', 'toolrail-settings-label');
     nameLabel.setAttribute('for', 'toolrail-settings-setname');
-    nameLabel.textContent = __('Save the current set as', 'editrail');
+    // A set is one toolbar's pins (#95): with several, the label names it.
+    nameLabel.textContent = several
+      ? sprintf(
+        /* translators: %s: the toolbar's name. */
+        __('Save the pins of %s as a set named', 'editrail'),
+        toolbarLabel(tb)
+      )
+      : __('Save the current set as', 'editrail');
     node.appendChild(nameLabel);
 
     var nameInput = document.createElement('input');
@@ -8635,7 +11163,7 @@ var DASHICON_NAMES = [
     // one-field form is expected to.
     var saveSet = function () {
       var trimmed = nameInput.value.trim();
-      if (saveConfig(trimmed)) {
+      if (saveConfig(trimmed, tb)) {
         settingsStatus = sprintf(
           /* translators: %s: set name. */
           __('Saved the set "%s".', 'editrail'),
@@ -8664,18 +11192,46 @@ var DASHICON_NAMES = [
         var label = settingsRow('span', 'toolrail-settings-pinnedname');
         label.textContent = cfg;
         li.appendChild(label);
+        // The user's own shared copy of this set (#98), if any. Text,
+        // never a mark alone: "Shared" beside the name.
+        var copy = ownSharedCopy(cfg);
+        if (copy) {
+          var sharedTag = settingsRow('span', 'toolrail-settings-tag');
+          sharedTag.textContent = __('Shared', 'editrail');
+          li.appendChild(sharedTag);
+        }
+        var shareControls = ownSetShareControls(cfg, copy);
+        if (shareControls.length) {
+          // The extra buttons do not fit on one line in the dialog's
+          // width; this row may wrap.
+          li.classList.add('toolrail-settings-wraprow');
+        }
         var load = settingsButton(__('Load', 'editrail'), function () {
-          loadConfig(cfg);
-          settingsStatus = configLoadedMessage(cfg);
+          // Into the chosen toolbar (#95). A stored change can delete it
+          // while the dialog is open: then the first toolbar, and the
+          // message says which, as the block-menu pin does (PR #126 review).
+          var into = toolbars.indexOf(tb) === -1 ? mainToolbar : tb;
+          loadConfig(cfg, into);
+          settingsStatus = configLoadedMessage(cfg, into);
           refreshSettings('#toolrail-settings-search');
         }, 'toolrail-settings-load');
-        load.setAttribute('aria-label', sprintf(__('Load the set %s', 'editrail'), cfg));
+        load.setAttribute('aria-label', several
+          ? sprintf(
+            /* translators: 1: set name, 2: the toolbar's name. */
+            __('Load the set %1$s into %2$s', 'editrail'),
+            cfg,
+            toolbarLabel(tb)
+          )
+          : sprintf(__('Load the set %s', 'editrail'), cfg));
         li.appendChild(load);
         var exp = settingsButton(__('Export', 'editrail'), function () {
           exportConfig(cfg);
         }, 'toolrail-settings-export');
         exp.setAttribute('aria-label', sprintf(__('Export the set %s as a file', 'editrail'), cfg));
         li.appendChild(exp);
+        shareControls.forEach(function (btn) {
+          li.appendChild(btn);
+        });
         var del = settingsButton(__('Delete', 'editrail'), function () {
           deleteConfig(cfg);
           settingsStatus = sprintf(
@@ -8683,6 +11239,11 @@ var DASHICON_NAMES = [
             __('Deleted the set "%s".', 'editrail'),
             cfg
           );
+          if (copy) {
+            // A delete removes the author's own set only; the shared copy
+            // is the site's, and now shows under "Shared sets" (#98).
+            settingsStatus += ' ' + __('Its shared copy stays shared until you stop sharing it.', 'editrail');
+          }
           refreshSettings('#toolrail-settings-setname');
         }, 'toolrail-settings-delset');
         del.setAttribute('aria-label', sprintf(__('Delete the set %s', 'editrail'), cfg));
@@ -8691,6 +11252,30 @@ var DASHICON_NAMES = [
         setList.appendChild(li);
       });
       node.appendChild(setList);
+    }
+
+    // --- Shared sets (#98): what other users share, and the user's own
+    // copies whose set they have deleted. Absent when there is none, so
+    // a site with no shared set shows the dialog it showed before.
+    var listed = listedSharedSets();
+    if (listed.length) {
+      var sharedHead = settingsRow('h4', 'toolrail-settings-label');
+      sharedHead.id = 'toolrail-settings-shared-head';
+      sharedHead.textContent = __('Shared sets', 'editrail');
+      node.appendChild(sharedHead);
+      var sharedList = settingsRow('ul', 'toolrail-settings-sets');
+      sharedList.setAttribute('aria-labelledby', 'toolrail-settings-shared-head');
+      listed.forEach(function (item, i) {
+        var neighbors = [];
+        if (listed[i + 1]) {
+          neighbors.push(listed[i + 1].id);
+        }
+        if (listed[i - 1]) {
+          neighbors.push(listed[i - 1].id);
+        }
+        sharedList.appendChild(buildSharedSetRow(item, neighbors, tb));
+      });
+      node.appendChild(sharedList);
     }
 
     // --- Import ---
@@ -8758,10 +11343,14 @@ var DASHICON_NAMES = [
       writeKey(SETS_BUTTON_HIDDEN_KEY, setsButtonToggle.checked ? '0' : '1');
       // Focus stays on this checkbox: rerender() only moves focus when
       // it was in the rail.
-      rerender();
+      rerender(mainToolbar);
     });
     var setsButtonText = settingsRow('span', '');
-    setsButtonText.textContent = __('Show a Saved sets button on the toolbar when you have a saved set', 'editrail');
+    // A shared set shows the button too (#98). The longer text only when
+    // there is one, so the dialog is unchanged on a site with none.
+    setsButtonText.textContent = listed.length
+      ? __('Show a Saved sets button on the toolbar when you have a saved set or another user shares one', 'editrail')
+      : __('Show a Saved sets button on the toolbar when you have a saved set', 'editrail');
     setsButtonRow.appendChild(setsButtonToggle);
     setsButtonRow.appendChild(setsButtonText);
     node.appendChild(setsButtonRow);
@@ -8802,7 +11391,7 @@ var DASHICON_NAMES = [
     helpRow.appendChild(settingsButton(__('Open toolbar help', 'editrail'), function () {
       // openHelp closes this dialog on purpose — the panel and the
       // dialog are sibling surfaces anchored to the same rail.
-      var wrapper = document.getElementById('toolrail-region');
+      var wrapper = document.getElementById(mainToolbar.regionId);
       if (wrapper) {
         openHelp(wrapper);
       }
@@ -8818,7 +11407,7 @@ var DASHICON_NAMES = [
       writeKey(HELP_HIDDEN_KEY, hideHelp.checked ? '1' : '0');
       // Rebuild the rail with/without the "?" tool. Focus stays on this
       // checkbox — rerender() only moves focus when it was in the rail.
-      rerender();
+      rerender(mainToolbar);
     });
     var hideHelpText = settingsRow('span', '');
     hideHelpText.textContent = __('Hide the Help button from the toolbar (help stays available here)', 'editrail');
@@ -8839,6 +11428,11 @@ var DASHICON_NAMES = [
       closeSettings(true);
       return;
     }
+    // The dialog always hangs in the FIRST toolbar's region, whichever
+    // toolbar's button opened it: its gear is the focus-return target,
+    // and a rebuild of an extra toolbar must not take the dialog with it
+    // (#95).
+    wrapper = document.getElementById(mainToolbar.regionId) || wrapper;
     closeFlyout(false);
     closeHelp(false);
 
@@ -8855,17 +11449,21 @@ var DASHICON_NAMES = [
     buildSettingsContent(node, '');
     wrapper.appendChild(node);
     settingsOpen = true;
-    syncLayer();
+    syncLayers();
 
     var gear = gearButton();
     if (gear) {
       gear.setAttribute('aria-expanded', 'true');
     }
-    placeSurface(node, gear, wrapper);
+    placeSurface(mainToolbar, node, gear, wrapper, true);
     document.addEventListener('mousedown', onSettingsMousedown, true);
     document.addEventListener('keydown', onSettingsKeydown, true);
     document.addEventListener('focusin', onSettingsFocusin, true);
     window.addEventListener('toolrail:tools-updated', onToolsUpdatedWhileOpen);
+    // Shared sets may have changed since the list last came (#98). Not
+    // awaited: the dialog is complete without it, and it redraws only
+    // when the list did change.
+    refreshSharedSets();
 
     if (focusSelector) {
       var initial = focusableIn(node, focusSelector);
@@ -8875,6 +11473,28 @@ var DASHICON_NAMES = [
       }
     }
     node.querySelector('#toolrail-settings-search').focus();
+  }
+
+  /**
+   * Open Toolbar settings with a toolbar chosen, or choose it in the open
+   * dialog. For the controls that act on one toolbar from outside the
+   * dialog: an empty extra toolbar's "Add tools" button and the Toolbars
+   * menu (#95). openSettings() alone would CLOSE an open dialog.
+   *
+   * @param {Object} tb            The toolbar to choose.
+   * @param {string} focusSelector The control to focus.
+   * @return {void}
+   */
+  function openSettingsFor(tb, focusSelector) {
+    settingsToolbarId = tb.id;
+    if (settingsOpen) {
+      refreshSettings(focusSelector);
+      return;
+    }
+    var wrapper = document.getElementById(mainToolbar.regionId);
+    if (wrapper) {
+      openSettings(wrapper, focusSelector);
+    }
   }
 
   // -------------------------------------------------------------------
@@ -8904,7 +11524,7 @@ var DASHICON_NAMES = [
    * @return {HTMLElement|null} The button, or null.
    */
   function helpButton() {
-    var rail = document.getElementById('toolrail-rail');
+    var rail = document.getElementById(mainToolbar.railId);
     return rail ? rail.querySelector('[data-tool="help"]') : null;
   }
 
@@ -8938,7 +11558,7 @@ var DASHICON_NAMES = [
       node.remove();
     }
     helpOpen = false;
-    syncLayer();
+    syncLayers();
     document.removeEventListener('mousedown', onHelpMousedown, true);
     document.removeEventListener('keydown', onHelpKeydown, true);
     document.removeEventListener('focusin', onHelpFocusin, true);
@@ -9071,7 +11691,9 @@ var DASHICON_NAMES = [
         title: __('Moving the toolbar', 'editrail'),
         body: [
           __('Drag the toolbar by its grip and release near an edge to dock it there, or let go anywhere to float it over the editor.', 'editrail'),
-          __('The keyboard path: pick a position under "Toolbar position" in Toolbar settings.', 'editrail')
+          __('The keyboard path: pick a position under "Toolbar position" in Toolbar settings.', 'editrail'),
+          // More than one toolbar (#95).
+          __('To add a toolbar, use "Add a toolbar" in Toolbar settings. Each toolbar has its own name, pinned tools and position. To change a toolbar, choose it under "Toolbar" at the top of Toolbar settings. The Toolbars button on the main toolbar shows or hides each added toolbar.', 'editrail')
         ]
       },
       {
@@ -9093,6 +11715,8 @@ var DASHICON_NAMES = [
         title: __('Keyboard', 'editrail'),
         body: [
           __('The toolbar is one Tab stop. Arrow keys move between tools, following the toolbar\'s orientation; Home and End jump to the ends.', 'editrail'),
+          // More than one toolbar (#95).
+          __('Each toolbar that you add is one more Tab stop. Arrow keys stay inside one toolbar.', 'editrail'),
           __('ArrowRight opens a tool\'s flyout on a vertical toolbar; ArrowDown opens it on a horizontal one. Escape closes any open panel.', 'editrail'),
           __('Enter arms an insert tool, and a second Enter disarms it. While a tool is armed, Ctrl+Enter (Cmd+Enter on a Mac) inserts its block after the selected block.', 'editrail')
         ]
@@ -9102,7 +11726,9 @@ var DASHICON_NAMES = [
         body: [
           __('Save the current pinned arrangement as a named set in Toolbar settings, and load a set to switch arrangements.', 'editrail'),
           __('When you have a saved set, the Saved sets button on the toolbar opens a list of your sets. Choose a set to load it. A check mark shows the set that matches the toolbar now. You can hide the button in Toolbar settings.', 'editrail'),
-          __('Export a set as a small JSON file and import it on another site. Blocks the site does not have stay in the set and appear when their plugin or theme is active.', 'editrail')
+          __('Export a set as a small JSON file and import it on another site. Blocks the site does not have stay in the set and appear when their plugin or theme is active.', 'editrail'),
+          // #98. Says "if you can share", because a Contributor cannot.
+          __('Share a set with the other users of this site with Share beside the set in Toolbar settings, if your role can publish posts. Sets that other users share show under "Shared sets" and in the Saved sets list, with the name of the user who shared them. A load changes only your own toolbar.', 'editrail')
         ]
       },
       {
@@ -9162,13 +11788,13 @@ var DASHICON_NAMES = [
 
     wrapper.appendChild(node);
     helpOpen = true;
-    syncLayer();
+    syncLayers();
 
     var btn = helpButton();
     if (btn) {
       btn.setAttribute('aria-expanded', 'true');
     }
-    placeSurface(node, btn || gearButton(), wrapper);
+    placeSurface(mainToolbar, node, btn || gearButton(), wrapper, true);
     document.addEventListener('mousedown', onHelpMousedown, true);
     document.addEventListener('keydown', onHelpKeydown, true);
 
@@ -9472,7 +12098,7 @@ var DASHICON_NAMES = [
    * @return {HTMLElement|null} The button, or null.
    */
   function overviewButton() {
-    var rail = document.getElementById('toolrail-rail');
+    var rail = document.getElementById(mainToolbar.railId);
     return rail ? rail.querySelector('[data-tool="overview"]') : null;
   }
 
@@ -12609,7 +15235,7 @@ var DASHICON_NAMES = [
       // guard protects the rail's own focus, nothing more).
       if (reselected && typeof window.requestAnimationFrame === 'function') {
         var reassertFocus = function () {
-          var rail = document.getElementById('toolrail-rail');
+          var rail = document.getElementById(mainToolbar.railId);
           var fresh = overviewButton();
           if (fresh && (!rail || !rail.contains(document.activeElement))) {
             fresh.focus();
@@ -12707,14 +15333,40 @@ var DASHICON_NAMES = [
    * fine. So this owns only "does the rail want to be on top", and the
    * stylesheet vetoes it synchronously for modals with
    * `body:has(.components-modal__screen-overlay)`.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {void}
    */
-  function syncLayer() {
-    var region = document.getElementById('toolrail-region');
+  function syncLayer(tb) {
+    var region = document.getElementById(tb.regionId);
     if (!region) {
       return;
     }
-    var wantsTop = settingsOpen || helpOpen || addDialogOpen || !!openFlyout || !!drag || position.dock === 'float';
-    region.classList.toggle('is-raised', wantsTop);
+    // Only the toolbar that OWNS the open surface or the drag is raised
+    // for it. The three dialogs hang in the first toolbar's region. A
+    // floating toolbar is always raised: it sits over the side panels,
+    // and lowered it went under the settings sidebar while a dialog was
+    // open (review 2026-11-16, finding 1).
+    var owner = openFlyout ? openFlyout.toolbar
+      : (settingsOpen || helpOpen || addDialogOpen) ? mainToolbar
+        : drag ? drag.toolbar : null;
+    var owns = owner === tb || (!!drag && drag.toolbar === tb);
+    region.classList.toggle('is-raised', owns || tb.position.dock === 'float');
+    // Two raised regions tie at the same z-index, and the later one in
+    // the document paints over the other's flyout or dialog. So the
+    // owner takes one level more (has-surface, in the stylesheet, under
+    // the same modal veto). Only when a different toolbar is on the page:
+    // with one toolbar there is nothing to beat, and the region keeps
+    // exactly the classes it had before #95.
+    var others = toolbars.some(function (other) {
+      return other !== tb && !!document.getElementById(other.regionId);
+    });
+    region.classList.toggle('has-surface', owns && others);
+  }
+
+  /** syncLayer for every toolbar: one surface or drag decides them all. */
+  function syncLayers() {
+    toolbars.forEach(syncLayer);
   }
 
   /** Clamp + apply the floating offsets. No-op for a docked rail, whose
@@ -12759,9 +15411,13 @@ var DASHICON_NAMES = [
    * dozen provider tools is taller than the usable area, and offsetHeight
    * has to already reflect the cap for the clamp to be right. A no-op for
    * every docked position, which clears the inline styles instead.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {void}
    */
-  function applyFloatPosition() {
-    var region = document.getElementById('toolrail-region');
+  function applyFloatPosition(tb) {
+    var position = tb.position;
+    var region = document.getElementById(tb.regionId);
     if (!region) {
       return;
     }
@@ -12798,15 +15454,17 @@ var DASHICON_NAMES = [
    * rail's orientation, arrow keys and surface directions all change with
    * it.
    *
+   * @param {Object} tb   The toolbar to move.
    * @param {string} dock One of DOCKS.
    * @param {Object} opts {x, y} for a float, {reopenSettings} to keep the
    *                      settings dialog open across the move.
    * @return {boolean} Whether the dock was applied.
    */
-  function setDock(dock, opts) {
+  function setDock(tb, dock, opts) {
     if (DOCKS.indexOf(dock) === -1) {
       return false;
     }
+    var position = tb.position;
     var options = opts || {};
     var reopen = !!options.reopenSettings;
     var previous = position.dock;
@@ -12817,7 +15475,7 @@ var DASHICON_NAMES = [
     // off a different node in the editor's skeleton, and a dock whose node
     // is not on the page would leave the rail unmounted with nothing but
     // an unrelated DOM mutation to bring it back.
-    if (!dockPlacement()) {
+    if (!dockParent(tb)) {
       position.dock = previous;
       warn('cannot dock to "' + dock + '" — that part of the editor is not present.');
       return false;
@@ -12831,28 +15489,36 @@ var DASHICON_NAMES = [
         position.y = options.y;
       }
     }
-    savePosition();
+    savePosition(tb);
 
     closeFlyout(false);
-    closeSettings(false);
-    closeHelp(false);
+    // The three dialogs hang in the FIRST toolbar's region, so only its
+    // rebuild takes them down. An extra toolbar's move from Toolbar
+    // settings leaves the dialog open; it is placed again below, because
+    // the stack on the first toolbar's edge can have changed (#95).
+    if (tb === mainToolbar) {
+      closeSettings(false);
+      closeHelp(false);
+    }
 
-    var existing = document.getElementById('toolrail-region');
+    var existing = document.getElementById(tb.regionId);
     if (existing) {
       existing.remove();
     }
-    mount();
+    mount(tb);
 
-    if (reopen) {
-      var wrapper = document.getElementById('toolrail-region');
+    if (reopen && tb === mainToolbar) {
+      var wrapper = document.getElementById(tb.regionId);
       if (wrapper) {
         openSettings(wrapper, 'input[data-dock="' + dock + '"]');
       }
     }
+    if (tb !== mainToolbar) {
+      placeOpenDialogs();
+    }
 
-    window.dispatchEvent(new CustomEvent('toolrail:position-changed', {
-      detail: { dock: dock, x: position.x, y: position.y }
-    }));
+    // toolrail:position-changed, then toolrail:toolbars-changed.
+    announceToolbarsChange(tb.id, 'position');
     return true;
   }
 
@@ -12888,9 +15554,37 @@ var DASHICON_NAMES = [
     return best;
   }
 
+  /**
+   * The room the docked toolbars on an edge take, counting only those
+   * BEFORE a toolbar in toolbar order, or only those AFTER it. Each later
+   * toolbar sits between the one before it and the canvas
+   * (placeToolbarRegions), so the snap preview can show where a toolbar
+   * lands (#95).
+   *
+   * @param {Object}  tb    The toolbar being dragged.
+   * @param {string}  edge  'left', 'right', 'top' or 'bottom'.
+   * @param {boolean} after Count the toolbars after tb, not before it.
+   * @return {number} The size in px, 0 or more.
+   */
+  function edgeOffset(tb, edge, after) {
+    var offset = 0;
+    var index = toolbars.indexOf(tb);
+    toolbars.forEach(function (other, i) {
+      var counts = after ? i > index : i < index;
+      var region = counts && other.position.dock === edge ? document.getElementById(other.regionId) : null;
+      if (region) {
+        var r = region.getBoundingClientRect();
+        offset += edge === 'top' || edge === 'bottom' ? r.height : r.width;
+      }
+    });
+    return offset;
+  }
+
   /** Translucent band showing where a release would dock the rail. Fixed
-      to the viewport so it never depends on the editor's own positioning. */
-  function showSnapPreview(edge) {
+      to the viewport so it never depends on the editor's own positioning.
+      @param {string}      edge The edge, or 'float' to remove the band.
+      @param {Object|null} tb   The toolbar being dragged. */
+  function showSnapPreview(edge, tb) {
     var el = document.getElementById('toolrail-snap-preview');
     var body = skeletonBody();
     if (edge === 'float' || !body) {
@@ -12907,15 +15601,40 @@ var DASHICON_NAMES = [
     }
     var r = body.getBoundingClientRect();
     var box = { left: r.left, top: r.top, width: r.width, height: r.height };
+    // The left and right docks hang INSIDE __body, so its edge is the
+    // editor's edge and the toolbars before tb push the band inward. The
+    // top and bottom docks hang OUTSIDE __body, in __editor, so its edge
+    // is already past every docked bar there: tb lands next to __body,
+    // past only the bars that come AFTER it in toolbar order (PR #126
+    // review, CodeRabbit: counting the ones before it put the band one
+    // bar too far).
     if (edge === 'left') {
+      box.left = r.left + (tb ? edgeOffset(tb, edge, false) : 0);
       box.width = RAIL_BAND;
     } else if (edge === 'right') {
-      box.left = r.right - RAIL_BAND;
+      box.left = r.right - RAIL_BAND - (tb ? edgeOffset(tb, edge, false) : 0);
       box.width = RAIL_BAND;
     } else if (edge === 'top') {
+      // At __body's top, where the bar lands as __body moves down for it
+      // (the band as it was with one toolbar), above the later bars.
+      box.top = r.top - (tb ? edgeOffset(tb, edge, true) : 0);
       box.height = RAIL_BAND;
     } else {
-      box.top = r.bottom - RAIL_BAND;
+      // The publish footer overlays the bottom of __body, which core keeps
+      // clear with a padding-bottom there. The first bar on the bottom
+      // edge takes the same room as a margin below itself (the
+      // stylesheet's .has-footer rule), so it lands above the footer, not
+      // at __body's edge. A bar already on the bottom edge holds that
+      // margin outside __body, so it is not counted twice (PR #126
+      // review, CodeRabbit).
+      var footerRoom = 0;
+      var bottomTaken = toolbars.some(function (other) {
+        return other.position.dock === 'bottom' && !!document.getElementById(other.regionId);
+      });
+      if (!bottomTaken) {
+        footerRoom = parseFloat(window.getComputedStyle(body).paddingBottom) || 0;
+      }
+      box.top = r.bottom - RAIL_BAND - footerRoom + (tb ? edgeOffset(tb, edge, true) : 0);
       box.height = RAIL_BAND;
     }
     el.style.left = box.left + 'px';
@@ -12924,6 +15643,11 @@ var DASHICON_NAMES = [
     el.style.height = box.height + 'px';
   }
 
+  // The toolbar drag in flight: {toolbar, startDock, startX, startY,
+  // grabX, grabY, candidate, torn}, or null. One for the page, not one
+  // for each toolbar (see newToolbar): there is one pointer, so one drag,
+  // and its three document listeners are single functions that read this
+  // one record. The record names the toolbar that is moving.
   var drag = null;
 
   /**
@@ -12931,14 +15655,16 @@ var DASHICON_NAMES = [
    * grab offset and the dock to return to on Escape, then listen for the
    * move, the release and the cancel.
    *
-   * @param {MouseEvent} e The grip mousedown.
+   * @param {Object}     tb The toolbar the grip belongs to.
+   * @param {MouseEvent} e  The grip mousedown.
    * @return {void}
    */
-  function startDrag(e) {
+  function startDrag(tb, e) {
     if (e.button !== 0) {
       return;
     }
-    var region = document.getElementById('toolrail-region');
+    var position = tb.position;
+    var region = document.getElementById(tb.regionId);
     if (!region) {
       return;
     }
@@ -12949,6 +15675,7 @@ var DASHICON_NAMES = [
 
     var rect = region.getBoundingClientRect();
     drag = {
+      toolbar: tb,
       startDock: position.dock,
       startX: position.x,
       startY: position.y,
@@ -12958,7 +15685,7 @@ var DASHICON_NAMES = [
       torn: position.dock === 'float'
     };
 
-    syncLayer();
+    syncLayers();
     document.body.classList.add('toolrail-dragging');
     document.addEventListener('mousemove', onDragMove, true);
     document.addEventListener('mouseup', onDragEnd, true);
@@ -12978,6 +15705,7 @@ var DASHICON_NAMES = [
       return;
     }
     e.preventDefault();
+    var tb = drag.toolbar;
 
     // Tear a docked rail off on first movement so it follows the pointer,
     // the way a docked palette in a graphics editor does.
@@ -12985,22 +15713,22 @@ var DASHICON_NAMES = [
       drag.torn = true;
       var parent = skeletonBody();
       var parentRect = parent ? parent.getBoundingClientRect() : { left: 0, top: 0 };
-      setDock('float', {
+      setDock(tb, 'float', {
         x: e.clientX - parentRect.left - drag.grabX,
         y: e.clientY - parentRect.top - drag.grabY
       });
     }
 
-    var region = document.getElementById('toolrail-region');
+    var region = document.getElementById(tb.regionId);
     var host = region && region.parentNode ? region.parentNode.getBoundingClientRect() : null;
     if (region && host) {
-      position.x = e.clientX - host.left - drag.grabX;
-      position.y = e.clientY - host.top - drag.grabY;
-      applyFloatPosition();
+      tb.position.x = e.clientX - host.left - drag.grabX;
+      tb.position.y = e.clientY - host.top - drag.grabY;
+      applyFloatPosition(tb);
     }
 
     drag.candidate = snapCandidate(e.clientX, e.clientY);
-    showSnapPreview(drag.candidate);
+    showSnapPreview(drag.candidate, tb);
   }
 
   /**
@@ -13015,7 +15743,7 @@ var DASHICON_NAMES = [
     document.removeEventListener('mouseup', onDragEnd, true);
     document.removeEventListener('keydown', onDragKey, true);
     drag = null;
-    syncLayer();
+    syncLayers();
   }
 
   /**
@@ -13026,11 +15754,18 @@ var DASHICON_NAMES = [
     if (!drag) {
       return;
     }
+    var tb = drag.toolbar;
     var candidate = drag.candidate;
-    var x = position.x;
-    var y = position.y;
+    var x = tb.position.x;
+    var y = tb.position.y;
     finishDrag();
-    setDock(candidate === 'float' ? 'float' : candidate, { x: x, y: y });
+    setDock(tb, candidate === 'float' ? 'float' : candidate, { x: x, y: y });
+    // A drop on an edge can leave the canvas too narrow (owner decision
+    // 2026-11-16). The drag says nothing else.
+    var narrow = canvasNarrowMessage();
+    if (narrow) {
+      speak(narrow);
+    }
   }
 
   /** Escape abandons a drag and puts the rail back where it started. */
@@ -13040,19 +15775,22 @@ var DASHICON_NAMES = [
     }
     e.preventDefault();
     e.stopPropagation();
+    var tb = drag.toolbar;
     var startDock = drag.startDock;
     var startX = drag.startX;
     var startY = drag.startY;
     finishDrag();
-    setDock(startDock, { x: startX, y: startY });
+    setDock(tb, startDock, { x: startX, y: startY });
   }
 
   // Keep a floating rail inside the editor when the window resizes, and
   // re-clamp the settings sidebar, whose maximum follows the window.
   window.addEventListener('resize', function () {
-    if (position.dock === 'float') {
-      applyFloatPosition();
-    }
+    toolbars.forEach(function (tb) {
+      if (tb.position.dock === 'float') {
+        applyFloatPosition(tb);
+      }
+    });
     syncSidebarWidth();
   });
 
@@ -13074,11 +15812,12 @@ var DASHICON_NAMES = [
    * canvas, carrying the payload core's own inserter sends so core's drop
    * zone owns the rest; the keyboard path stays arm, then Ctrl+Enter.
    *
+   * @param {Object}      tb      The toolbar the button is built for.
    * @param {Object}      tool    A railModel() entry.
    * @param {HTMLElement} wrapper The positioned region, for flyout placing.
    * @return {HTMLButtonElement} The button.
    */
-  function buildToolButton(tool, wrapper) {
+  function buildToolButton(tb, tool, wrapper) {
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'toolrail-tool';
@@ -13116,7 +15855,7 @@ var DASHICON_NAMES = [
     if (tool.customIcon) {
       renderCustomIcon(icon, tool.customIcon);
     } else if (tool.pinnedBlock) {
-      renderBlockIcon(icon, tool.blockIcon);
+      renderBlockIcon(tb, icon, tool.blockIcon);
     } else if (tool.icon) {
       icon.innerHTML = tool.icon;
     } else {
@@ -13150,10 +15889,11 @@ var DASHICON_NAMES = [
     if (isArmingTool(tool)) {
       btn.draggable = true;
       btn.addEventListener('dragstart', function (e) {
-        onToolDragStart(e, tool);
+        onToolDragStart(e, tool, tb);
       });
       btn.addEventListener('dragend', function () {
         railDragActive = false;
+        railDragToolbar = null;
       });
     }
 
@@ -13166,7 +15906,7 @@ var DASHICON_NAMES = [
         if (openFlyout && openFlyout.parentBtn === btn) {
           closeFlyout(true);
         } else {
-          openFlyoutFor(btn, tool, wrapper);
+          openFlyoutFor(tb, btn, tool, wrapper);
         }
         return;
       }
@@ -13220,14 +15960,44 @@ var DASHICON_NAMES = [
    * unfocusable, because the keyboard and screen-reader path for
    * repositioning is the settings dialog's "Toolbar position" radio
    * group.
+   *
+   * @param {Object} tb The toolbar the grip moves.
+   * @return {HTMLElement} The grip.
    */
-  function buildGrip() {
+  function buildGrip(tb) {
     var grip = document.createElement('div');
     grip.className = 'toolrail-grip';
     grip.setAttribute('aria-hidden', 'true');
     grip.title = __('Drag to move the toolbar', 'editrail');
-    grip.addEventListener('mousedown', startDrag);
+    grip.addEventListener('mousedown', function (e) {
+      startDrag(tb, e);
+    });
     return grip;
+  }
+
+  /**
+   * The one button of an extra toolbar that has no pinned tool yet: it
+   * opens Toolbar settings with that toolbar chosen, at the search that
+   * pins to it. Rail chrome with a reserved id (allToolIds).
+   *
+   * @param {Object} tb An extra toolbar.
+   * @return {Object} The tool descriptor.
+   */
+  function addToolsTool(tb) {
+    return {
+      id: ADD_TOOLS_TOOL_ID,
+      label: sprintf(
+        /* translators: %s: the toolbar's name. */
+        __('Add tools to %s', 'editrail'),
+        tb.name
+      ),
+      shortLabel: __('Add tools', 'editrail'),
+      icon: ICONS.add,
+      supports: { canvas: false },
+      onActivate: function () {
+        openSettingsFor(tb, '#toolrail-settings-search');
+      }
+    };
   }
 
   /**
@@ -13237,23 +16007,30 @@ var DASHICON_NAMES = [
    * toolbar, arrows within — and disposes the previous generation's icon
    * roots and scroll observer, since it is their only producer.
    *
+   * @param {Object}      tb      The toolbar to build.
    * @param {HTMLElement} wrapper The positioned region.
    * @return {HTMLElement} The rail.
    */
-  function buildRail(wrapper) {
+  function buildRail(tb, wrapper) {
     // The previous generation of pinned-icon React roots belongs to the
     // rail this one replaces — and so does its scroll observer.
-    disposeIconRoots();
-    if (railScrollObserver) {
-      railScrollObserver.disconnect();
-      railScrollObserver = null;
+    disposeIconRoots(tb);
+    if (tb.scrollObserver) {
+      tb.scrollObserver.disconnect();
+      tb.scrollObserver = null;
     }
 
     var rail = document.createElement('div');
-    rail.id = 'toolrail-rail';
+    rail.id = tb.railId;
+    // The stylesheet styles every rail by this class. The id is the
+    // toolbar's own, so it cannot carry rules that each toolbar needs.
+    rail.className = 'toolrail-rail';
     rail.setAttribute('role', 'toolbar');
-    rail.setAttribute('aria-orientation', isVertical() ? 'vertical' : 'horizontal');
-    rail.setAttribute('aria-label', __('Tools', 'editrail'));
+    rail.setAttribute('aria-orientation', isVertical(tb) ? 'vertical' : 'horizontal');
+    // An extra toolbar's accessible name is the name the author gave it.
+    // The first toolbar's stays "Tools" (owner decision 2026-11-14, #95).
+    var first = tb === mainToolbar;
+    rail.setAttribute('aria-label', first ? __('Tools', 'editrail') : tb.name);
 
     // The head shares the scroll/tail container grammar (and, crucially,
     // their cross-axis padding): the chevron is a .toolrail-tool, so
@@ -13262,7 +16039,7 @@ var DASHICON_NAMES = [
     // outside the rail onto the editor (review 2026-08-27, finding 1).
     var head = document.createElement('div');
     head.className = 'toolrail-head';
-    head.appendChild(buildGrip());
+    head.appendChild(buildGrip(tb));
 
     // Wide-mode chevron, at the rail's head beside the grip — OPT-IN
     // via Toolbar settings (isWideToggleShown; owner decision
@@ -13275,14 +16052,14 @@ var DASHICON_NAMES = [
     // palette only — a label-per-tool row makes a horizontal bar
     // unusably long, so the toggle does not render on top/bottom (V1
     // decision, roadmap R2).
-    if (isVertical() && isWideToggleShown()) {
+    if (isVertical(tb) && isWideToggleShown()) {
       var wideToggle = document.createElement('button');
       wideToggle.type = 'button';
       wideToggle.className = 'toolrail-tool toolrail-tool--wide-toggle';
       wideToggle.dataset.tool = 'wide-toggle';
       wideToggle.setAttribute('aria-label', __('Show tool names', 'editrail'));
       wideToggle.title = __('Show tool names', 'editrail');
-      wideToggle.setAttribute('aria-pressed', isWide() ? 'true' : 'false');
+      wideToggle.setAttribute('aria-pressed', isWide(tb) ? 'true' : 'false');
       // A toggle (pressed = "names are showing"), so it takes the R10
       // bar-only treatment — built inline, it would otherwise miss the
       // data-kind buildToolButton stamps (review 2026-08-29).
@@ -13300,14 +16077,25 @@ var DASHICON_NAMES = [
       wideToggle.appendChild(wideLabel);
       wideToggle.addEventListener('click', function () {
         // setWide owns the pressed-state paint (shared with the
-        // settings checkbox).
-        setWide(!isWide());
+        // settings checkbox). Each toolbar's chevron widens that toolbar
+        // (#95).
+        setWide(tb, !isWide(tb));
+        // A wider toolbar on the first toolbar's edge moves where the
+        // dialogs must sit.
+        placeOpenDialogs();
+        // And it can leave the canvas too narrow (owner decision
+        // 2026-11-16). The chevron says nothing else, so this is the
+        // one message.
+        var narrow = isWide(tb) ? canvasNarrowMessage() : '';
+        if (narrow) {
+          speak(narrow);
+        }
       });
       head.appendChild(wideToggle);
     }
     rail.appendChild(head);
 
-    var model = railModel();
+    var model = railModel(tb);
 
     // A rail carrying many provider tools and pins can be taller than
     // the editor, so the TOOLS live in their own scrolling section while
@@ -13337,18 +16125,31 @@ var DASHICON_NAMES = [
       byId[t.id] = t;
     });
 
-    scrollArea.appendChild(buildToolButton(byId.select, wrapper));
+    // An extra toolbar has no built-in tools (#95): its model is its pins
+    // and the provider tools nested under them.
+    if (byId.select) {
+      scrollArea.appendChild(buildToolButton(tb, byId.select, wrapper));
+    }
     if (byId.section) {
-      scrollArea.appendChild(buildToolButton(byId.section, wrapper));
+      scrollArea.appendChild(buildToolButton(tb, byId.section, wrapper));
     }
 
     model.slots.forEach(function (slot) {
-      scrollArea.appendChild(buildToolButton(slot, wrapper));
+      scrollArea.appendChild(buildToolButton(tb, slot, wrapper));
     });
 
-    scrollArea.appendChild(buildSeparator());
+    // An extra toolbar with no pins would have no button at all: no Tab
+    // stop, and an empty role="toolbar". It shows one button that opens
+    // Toolbar settings for it, until its first pin.
+    if (!first && !model.slots.length) {
+      scrollArea.appendChild(buildToolButton(tb, addToolsTool(tb), wrapper));
+    }
+
+    if (first) {
+      scrollArea.appendChild(buildSeparator());
+    }
     if (byId.overview) {
-      scrollArea.appendChild(buildToolButton(byId.overview, wrapper));
+      scrollArea.appendChild(buildToolButton(tb, byId.overview, wrapper));
     }
 
     var registeredTop = model.tools.filter(function (t) {
@@ -13357,7 +16158,7 @@ var DASHICON_NAMES = [
     if (registeredTop.length) {
       scrollArea.appendChild(buildSeparator());
       registeredTop.forEach(function (tool) {
-        scrollArea.appendChild(buildToolButton(tool, wrapper));
+        scrollArea.appendChild(buildToolButton(tb, tool, wrapper));
       });
     }
 
@@ -13392,7 +16193,7 @@ var DASHICON_NAMES = [
         var delta = dir === 'prev' ? -1 : 1;
         // Instant, not smooth — a smooth scroll here would need the
         // triple motion-flatten; an instant step needs nothing.
-        if (isVertical()) {
+        if (isVertical(tb)) {
           scrollArea.scrollBy(0, delta * Math.max(88, scrollArea.clientHeight * 0.6));
         } else {
           // RTL x-scrolling runs NEGATIVE from the right edge, so
@@ -13413,7 +16214,7 @@ var DASHICON_NAMES = [
      * from the start on either side.
      */
     function syncScrollSteps() {
-      var vertical = isVertical();
+      var vertical = isVertical(tb);
       // abs() because RTL reports scrollLeft as 0..-max; the distance
       // from the start is what the buttons care about on either side.
       var pos = vertical ? scrollArea.scrollTop : Math.abs(scrollArea.scrollLeft);
@@ -13429,8 +16230,8 @@ var DASHICON_NAMES = [
       // sizes read 0, so both buttons hide); the observer fires once
       // the section gets its real box after insertion, and again on any
       // editor resize — panel toggles included.
-      railScrollObserver = new ResizeObserver(syncScrollSteps);
-      railScrollObserver.observe(scrollArea);
+      tb.scrollObserver = new ResizeObserver(syncScrollSteps);
+      tb.scrollObserver.observe(scrollArea);
     }
     syncScrollSteps();
     // Post-insertion pass: mount() inserts the rail synchronously after
@@ -13444,6 +16245,39 @@ var DASHICON_NAMES = [
     rail.appendChild(scrollArea);
     rail.appendChild(scrollNext);
 
+    // Only the first toolbar has a tail: Saved sets, Toolbars, Help and
+    // Toolbar settings are one each for the page (owner decision
+    // 2026-11-14, #95), and each dialog returns focus to its button here.
+    if (first) {
+      rail.appendChild(buildRailTail(tb, wrapper));
+    }
+
+    // Roving tabindex: exactly one tab stop. The INITIAL stop is Select
+    // (the primary tool), not whatever happens to render first — the
+    // wide-mode chevron sits ahead of it in DOM order but is chrome, not
+    // where entering the toolbar should land. Home/End and arrows still
+    // reach every control, chevron included. An extra toolbar has no
+    // Select; its first tool is the stop, for the same reason.
+    var firstBtn = rail.querySelector('[data-tool="select"]')
+      || scrollArea.querySelector('.toolrail-tool')
+      || rail.querySelector('.toolrail-tool');
+    if (firstBtn) {
+      firstBtn.tabIndex = 0;
+    }
+
+    bindRailKeys(tb, rail, wrapper);
+    return rail;
+  }
+
+  /**
+   * The first toolbar's always-visible tail: the Saved sets and Toolbars
+   * buttons when they show, Help, and the settings gear last.
+   *
+   * @param {Object}      tb      The first toolbar.
+   * @param {HTMLElement} wrapper Its region.
+   * @return {HTMLElement} The tail.
+   */
+  function buildRailTail(tb, wrapper) {
     // The always-visible tail. The help "?" sits last-but-one, beside
     // the gear — unless the author hid it (Toolbar settings), in which
     // case the panel stays reachable from the Help button inside that
@@ -13455,7 +16289,12 @@ var DASHICON_NAMES = [
     // other toolbar-level controls and stays visible however many tools
     // scroll above it.
     if (isSetsButtonShown()) {
-      tail.appendChild(buildToolButton(setsMenuTool(wrapper), wrapper));
+      tail.appendChild(buildToolButton(tb, setsMenuTool(wrapper), wrapper));
+    }
+    // Toolbars (#95): shows or hides each extra toolbar. Only while an
+    // extra toolbar exists; see isToolbarsButtonShown().
+    if (isToolbarsButtonShown()) {
+      tail.appendChild(buildToolButton(tb, toolbarsMenuTool(), wrapper));
     }
     if (!isHelpHidden()) {
       var help = document.createElement('button');
@@ -13505,18 +16344,20 @@ var DASHICON_NAMES = [
       openSettings(wrapper);
     });
     tail.appendChild(gear);
-    rail.appendChild(tail);
+    return tail;
+  }
 
-    // Roving tabindex: exactly one tab stop. The INITIAL stop is Select
-    // (the primary tool), not whatever happens to render first — the
-    // wide-mode chevron sits ahead of it in DOM order but is chrome, not
-    // where entering the toolbar should land. Home/End and arrows still
-    // reach every control, chevron included.
-    var firstBtn = rail.querySelector('[data-tool="select"]') || rail.querySelector('.toolrail-tool');
-    if (firstBtn) {
-      firstBtn.tabIndex = 0;
-    }
-
+  /**
+   * Bind a rail's two keyboard listeners: the roving tab stop follows
+   * focus, and the APG toolbar keys move it. Each rail gets its own pair,
+   * so arrow keys stay inside one toolbar (#95).
+   *
+   * @param {Object}      tb      The toolbar.
+   * @param {HTMLElement} rail    Its rail.
+   * @param {HTMLElement} wrapper Its region.
+   * @return {void}
+   */
+  function bindRailKeys(tb, rail, wrapper) {
     // The tab stop follows FOCUS, not only the arrow keys. A mouse click,
     // or a screen reader that moves focus onto the button it activates,
     // puts focus on a tool without the keydown handler below; the stop
@@ -13541,7 +16382,7 @@ var DASHICON_NAMES = [
     // horizontal rail moves on Left/Right and opens its flyouts with
     // ArrowDown. The move axis and the open key are never the same key.
     rail.addEventListener('keydown', function (e) {
-      var vertical = isVertical();
+      var vertical = isVertical(tb);
       var nextKey = vertical ? 'ArrowDown' : 'ArrowRight';
       var prevKey = vertical ? 'ArrowUp' : 'ArrowLeft';
       var openKey = vertical ? 'ArrowRight' : 'ArrowDown';
@@ -13557,13 +16398,20 @@ var DASHICON_NAMES = [
       e.preventDefault();
       if (e.key === openKey) {
         var toolId = btns[idx].dataset.tool;
-        // The Saved sets button is rail chrome, not a registered tool, so
-        // findTool() does not know it.
-        var tool = toolId === SETS_TOOL_ID ? setsMenuTool(wrapper) : findTool(toolId);
+        // The Saved sets and Toolbars buttons are rail chrome, not
+        // registered tools, so findTool() does not know them.
+        // A tool is looked up in THIS toolbar's model: the same pin can
+        // have a different flyout on two toolbars (a provider child can
+        // nest under a provider tool on the first toolbar and under the
+        // pin on an extra one), and the page-wide findTool() returns the
+        // first toolbar's (PR #126 review, CodeRabbit).
+        var tool = toolId === SETS_TOOL_ID ? setsMenuTool(wrapper)
+          : toolId === TOOLBAR_LIST_TOOL_ID ? toolbarsMenuTool()
+            : modelTool(tb, toolId);
         // Same gate as the click path: a fully dimmed container offers
         // no flyout by keyboard either (review 2026-08-29).
         if (tool && tool.children && tool.children.length && buttonAvailable(tool)) {
-          openFlyoutFor(btns[idx], tool, wrapper);
+          openFlyoutFor(tb, btns[idx], tool, wrapper);
         }
         return;
       }
@@ -13574,8 +16422,6 @@ var DASHICON_NAMES = [
       btns[next].tabIndex = 0;
       btns[next].focus();
     });
-
-    return rail;
   }
 
   /**
@@ -13584,29 +16430,34 @@ var DASHICON_NAMES = [
    * target. It joins the editor's region-navigation cycle, so the rail is
    * reachable by that shortcut like any other editor region.
    *
+   * @param {Object} tb The toolbar to build.
    * @return {HTMLElement} The region.
    */
-  function buildWrapper() {
+  function buildWrapper(tb) {
     var wrapper = document.createElement('div');
-    wrapper.id = 'toolrail-region';
+    wrapper.id = tb.regionId;
     // interface-navigable-region joins the editor's region-navigation cycle
     // (the Phase 0 gap: the theme rail was unreachable via that shortcut).
     wrapper.className = 'interface-navigable-region toolrail-region';
     wrapper.setAttribute('role', 'region');
-    wrapper.setAttribute('aria-label', __('Tool rail', 'editrail'));
+    // "Tool rail" for the first toolbar, "Tool rail: <name>" for an extra
+    // one, so each landmark in the region cycle says which toolbar it is.
+    wrapper.setAttribute('aria-label', regionLabel(tb));
     wrapper.tabIndex = -1;
+    // Which toolbar this region is: 'main' or an extra toolbar's id (#95).
+    wrapper.dataset.toolbar = tb.id;
     // Every dock-dependent style keys off this: rail orientation, which
     // border carries the edge, and which way surfaces open.
-    wrapper.dataset.dock = position.dock;
+    wrapper.dataset.dock = tb.position.dock;
     // Wide mode is persisted independently of the dock; the wide CSS is
     // keyed to vertical docks + float, so a stored wide state is simply
-    // inert while the rail is horizontal.
-    if (isWide()) {
+    // inert while the rail is horizontal. One for each toolbar (#95).
+    if (isWide(tb)) {
       wrapper.dataset.wide = 'true';
     }
     applyAppearance(wrapper);
 
-    wrapper.appendChild(buildRail(wrapper));
+    wrapper.appendChild(buildRail(tb, wrapper));
 
     // Drop target: a block type or a pattern dragged from the inserter
     // pins at once; a block dragged out of the canvas opens the
@@ -13640,7 +16491,7 @@ var DASHICON_NAMES = [
       }
       e.preventDefault();
       try {
-        handleRailDrop(JSON.parse(raw), wrapper);
+        handleRailDrop(tb, JSON.parse(raw), wrapper);
       } catch (err) {
         /* Unrecognized payload — ignore. */
       }
@@ -13664,14 +16515,47 @@ var DASHICON_NAMES = [
    * on every rerender (the worst that can follow is a no-op re-pin of a
    * tool that is already pinned) and on any dragend or drop the editor
    * document sees.
+   *
+   * One for the page, not one for each toolbar (see newToolbar): the
+   * browser runs one drag at a time, and the flag says where that drag
+   * STARTED, which is what a region's dragover asks.
+   *
+   * With several toolbars (#95), only a rebuild of the toolbar the drag
+   * started on clears it (railDragToolbar): that rebuild is what can
+   * detach the source. A rebuild of a different toolbar left the drag
+   * unguarded, and a drop on a third toolbar then pinned the tool there
+   * (PR #126 review, CodeRabbit).
    */
   var railDragActive = false;
+  // The toolbar whose tool is mid-drag, or null.
+  var railDragToolbar = null;
+
+  /**
+   * Clear the tool-drag guard when the drag started on this toolbar. For
+   * a path that takes the toolbar's buttons out of the document without
+   * rerender(): a hide, a delete, a stored change that rebuilds it, a
+   * move to a new dock. The removed source node gets the drag's dragend,
+   * but a node out of the document does not pass it on to the document's
+   * listeners, so the guard stayed set and the next drag from the
+   * inserter was refused (PR #126 review, Claude).
+   *
+   * @param {Object} tb The toolbar whose buttons go.
+   * @return {void}
+   */
+  function releaseToolDragOf(tb) {
+    if (railDragToolbar === tb) {
+      railDragActive = false;
+      railDragToolbar = null;
+    }
+  }
 
   document.addEventListener('dragend', function () {
     railDragActive = false;
+    railDragToolbar = null;
   }, true);
   document.addEventListener('drop', function () {
     railDragActive = false;
+    railDragToolbar = null;
   }, true);
 
   /**
@@ -13682,9 +16566,10 @@ var DASHICON_NAMES = [
    *
    * @param {DragEvent} e    The dragstart.
    * @param {Object}    tool The tool's model entry.
+   * @param {Object}    tb   The toolbar the tool's button is on.
    * @return {void}
    */
-  function onToolDragStart(e, tool) {
+  function onToolDragStart(e, tool, tb) {
     if (!e.dataTransfer || !toolAvailable(tool)) {
       e.preventDefault();
       return;
@@ -13696,11 +16581,13 @@ var DASHICON_NAMES = [
     }
     closeFlyout(false);
     railDragActive = true;
+    railDragToolbar = tb || null;
     try {
       e.dataTransfer.setData('wp-blocks', JSON.stringify({ type: 'inserter', blocks: blocks }));
       e.dataTransfer.effectAllowed = 'copy';
     } catch (err) {
       railDragActive = false;
+      railDragToolbar = null;
       e.preventDefault();
     }
   }
@@ -13815,11 +16702,14 @@ var DASHICON_NAMES = [
    * pin the type, or save the block as a pattern (settings, contents
    * and all) and pin that (owner decision 2026-09-02).
    *
+   * A drop pins to the toolbar it landed on (#95).
+   *
+   * @param {Object}      tb      The toolbar the drop landed on.
    * @param {Object}      data    The parsed payload.
    * @param {HTMLElement} wrapper The rail region.
    * @return {void}
    */
-  function handleRailDrop(data, wrapper) {
+  function handleRailDrop(tb, data, wrapper) {
     if (!data) {
       return;
     }
@@ -13835,7 +16725,7 @@ var DASHICON_NAMES = [
       if (first.name === 'core/block') {
         var ref = first.attributes && first.attributes.ref;
         if (ref && /^[0-9]+$/.test(String(ref))) {
-          pinBlock(USER_PATTERN_SLOT_PREFIX + ref);
+          pinBlock(tb, USER_PATTERN_SLOT_PREFIX + ref);
         }
         return;
       }
@@ -13844,11 +16734,11 @@ var DASHICON_NAMES = [
       // block-type drop costs one serialize and a map of compares.
       var pattern = matchPattern(blocks);
       if (pattern) {
-        pinBlock(pattern.id);
+        pinBlock(tb, pattern.id);
         return;
       }
       if (typeof first.name === 'string' && first.name) {
-        pinBlock(first.name);
+        pinBlock(tb, first.name);
       }
       return;
     }
@@ -13895,7 +16785,7 @@ var DASHICON_NAMES = [
       node.remove();
     }
     addDialogOpen = false;
-    syncLayer();
+    syncLayers();
     document.removeEventListener('mousedown', onAddDialogMousedown, true);
     document.removeEventListener('keydown', onAddDialogKeydown, true);
     document.removeEventListener('focusin', onAddDialogFocusin, true);
@@ -14054,13 +16944,23 @@ var DASHICON_NAMES = [
   }
 
   /**
+   * The pins go to the toolbar whose region the block was dropped on, and
+   * to the first toolbar from the block menu. The dialog hangs in the
+   * first toolbar's region either way, like the other two dialogs (#95).
+   *
    * @param {string[]}    clientIds The canvas block(s) to add.
-   * @param {HTMLElement} wrapper   The rail region to hang the dialog in
-   *                                (defaults to the mounted one).
+   * @param {HTMLElement} wrapper   The rail region the block was dropped
+   *                                on (defaults to the first toolbar's).
    * @return {boolean} Whether the dialog opened.
    */
   function openAddToToolbar(clientIds, wrapper) {
-    wrapper = wrapper || document.getElementById('toolrail-region');
+    var target = mainToolbar;
+    toolbars.forEach(function (tb) {
+      if (wrapper && wrapper.id === tb.regionId) {
+        target = tb;
+      }
+    });
+    wrapper = document.getElementById(mainToolbar.regionId) || wrapper;
     var sel = wp.data.select('core/block-editor');
     var ids = Array.isArray(clientIds) ? clientIds.filter(function (id) { return !!sel.getBlock(id); }) : [];
     if (!wrapper || !ids.length) {
@@ -14103,7 +17003,7 @@ var DASHICON_NAMES = [
       typeHead.textContent = __('Block type', 'editrail');
       node.appendChild(typeHead);
       var typeNote = settingsRow('p', 'toolrail-settings-empty');
-      if (isPinned(single.name)) {
+      if (isPinnedOn(target, single.name)) {
         typeNote.textContent = sprintf(
           /* translators: %s: block title. */
           __('The %s block type is already pinned.', 'editrail'),
@@ -14121,12 +17021,44 @@ var DASHICON_NAMES = [
             singleTitle
           ),
           function () {
-            pinBlock(single.name);
-            speak(sprintf(
-              /* translators: %s: block title. */
-              __('%s pinned to the toolbar.', 'editrail'),
-              singleTitle
-            ));
+            // A stored change can delete the toolbar while the dialog is
+            // open; a pin on a deleted object is lost in silence. Pin to
+            // the first toolbar then, and the message says which, the
+            // same rule as the pattern save below (PR #126 review,
+            // CodeRabbit).
+            if (toolbars.indexOf(target) === -1) {
+              target = mainToolbar;
+            }
+            // The toolbar it falls back to can have the pin already, and
+            // a stored change can add it while the dialog is open: then
+            // nothing was pinned, and the message says so (PR #126
+            // review, CodeRabbit).
+            if (!pinBlock(target, single.name)) {
+              speak(target === mainToolbar
+                ? sprintf(
+                  /* translators: %s: block title. */
+                  __('%s is already pinned on the main toolbar.', 'editrail'),
+                  singleTitle
+                )
+                : sprintf(
+                  /* translators: 1: block title, 2: the toolbar's name. */
+                  __('%1$s is already pinned on the %2$s toolbar.', 'editrail'),
+                  singleTitle, target.name
+                ));
+              closeAddDialog(ids[0]);
+              return;
+            }
+            speak(target === mainToolbar
+              ? sprintf(
+                /* translators: %s: block title. */
+                __('%s pinned to the toolbar.', 'editrail'),
+                singleTitle
+              )
+              : sprintf(
+                /* translators: 1: block or pattern title, 2: the toolbar's name. */
+                __('%1$s pinned to the %2$s toolbar.', 'editrail'),
+                singleTitle, target.name
+              ));
             closeAddDialog(ids[0]);
           },
           'toolrail-adddialog-pintype'
@@ -14173,12 +17105,22 @@ var DASHICON_NAMES = [
         saveBtn.disabled = true;
         status.textContent = __('Saving…', 'editrail');
         savePatternFromBlocks(name, blocks).then(function (pattern) {
-          pinBlock(pattern.id);
-          speak(sprintf(
-            /* translators: %s: pattern name. */
-            __('Saved "%s" as a pattern and pinned it to the toolbar.', 'editrail'),
-            pattern.title
-          ));
+          // The save is async: a toolbar deleted meanwhile has no pins.
+          if (toolbars.indexOf(target) === -1) {
+            target = mainToolbar;
+          }
+          pinBlock(target, pattern.id);
+          speak(target === mainToolbar
+            ? sprintf(
+              /* translators: %s: pattern name. */
+              __('Saved "%s" as a pattern and pinned it to the toolbar.', 'editrail'),
+              pattern.title
+            )
+            : sprintf(
+              /* translators: 1: pattern name, 2: the toolbar's name. */
+              __('Saved "%1$s" as a pattern and pinned it to the %2$s toolbar.', 'editrail'),
+              pattern.title, target.name
+            ));
           closeAddDialog(ids[0]);
         }, function (err) {
           saveBtn.disabled = false;
@@ -14205,8 +17147,8 @@ var DASHICON_NAMES = [
     node.appendChild(status);
     wrapper.appendChild(node);
     addDialogOpen = true;
-    syncLayer();
-    placeSurface(node, gearButton(), wrapper);
+    syncLayers();
+    placeSurface(mainToolbar, node, gearButton(), wrapper, true);
     document.addEventListener('mousedown', onAddDialogMousedown, true);
     document.addEventListener('keydown', onAddDialogKeydown, true);
     document.addEventListener('focusin', onAddDialogFocusin, true);
@@ -14223,6 +17165,9 @@ var DASHICON_NAMES = [
   // fresh buttons carry default state).
   // -------------------------------------------------------------------
 
+  // One for the page, not one for each toolbar (see newToolbar): the
+  // signature is built from the armed tool, the mode and each registered
+  // tool's own state, and none of those belongs to one toolbar.
   var lastPaintedSignature = false;
 
   /**
@@ -14264,8 +17209,10 @@ var DASHICON_NAMES = [
    * @return {void}
    */
   function syncPressed(force) {
-    var rail = document.getElementById('toolrail-rail');
-    if (!rail) {
+    var built = toolbars.some(function (tb) {
+      return !!document.getElementById(tb.railId);
+    });
+    if (!built) {
       return;
     }
     var signature = pressedSignature();
@@ -14273,8 +17220,23 @@ var DASHICON_NAMES = [
       return;
     }
     lastPaintedSignature = signature;
+    toolbars.forEach(paintPressed);
+  }
 
-    var model = railModel();
+  /**
+   * The paint of syncPressed for ONE toolbar's rail. syncPressed owns the
+   * change guard: the signature is one for the page, so a guard here
+   * would let the first toolbar's paint stop the second's.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {void}
+   */
+  function paintPressed(tb) {
+    var rail = document.getElementById(tb.railId);
+    if (!rail) {
+      return;
+    }
+    var model = railModel(tb);
 
     model.tools.concat(model.slots).forEach(function (tool) {
       var btn = rail.querySelector(toolSelector(tool.id));
@@ -14329,40 +17291,77 @@ var DASHICON_NAMES = [
   // Mount machinery
   // -------------------------------------------------------------------
 
-  function mount() {
-    var place = dockPlacement();
-    if (!place) {
+  /**
+   * Put a toolbar's region where its dock hangs: build it when it is not
+   * in the document, and move it back when the editor's re-render moved
+   * it.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {boolean} False when the editor chrome for the dock is not on
+   *                   the page yet.
+   */
+  function mount(tb) {
+    // A hidden toolbar has no region at all (#95), so there is nothing
+    // to build or to put back. That is a success, not "not yet".
+    if (tb.hidden) {
+      return true;
+    }
+    if (!dockParent(tb)) {
       return false;
     }
     bindCanvas();
 
-    var existing = document.getElementById('toolrail-region');
+    var existing = document.getElementById(tb.regionId);
     if (existing) {
       // Re-home a rail that the editor's own re-render moved out from
       // under its dock, without rebuilding it.
-      if (!isPlacedCorrectly(existing, place)) {
-        place.parent.insertBefore(existing, place.before);
-        applyFloatPosition();
-        syncLayer();
-      }
+      placeToolbarRegions(null, null).forEach(function (moved) {
+        applyFloatPosition(moved);
+        syncLayer(moved);
+      });
       return true;
     }
 
-    closeFlyout(false);
+    // Only a flyout of THIS toolbar hangs off the buttons a new region
+    // replaces.
+    if (openFlyout && openFlyout.toolbar === tb) {
+      closeFlyout(false);
+    }
     // A destroyed region takes the settings dialog with it, but not the
     // module state that says one is open — without this the rebuilt gear
     // renders aria-expanded="true" with no dialog behind it, and its
     // listeners outlive the node they were bound for. Same for the help
-    // panel.
-    closeSettings(false);
-    closeHelp(false);
+    // panel. The dialogs hang in the first toolbar's region only (#95).
+    if (tb === mainToolbar) {
+      closeSettings(false);
+      closeHelp(false);
+    }
+    // A new region means new buttons: a tool drag from the old ones has
+    // lost its source node (setDock, or the editor's re-render removed
+    // the region).
+    releaseToolDragOf(tb);
 
-    place.parent.insertBefore(buildWrapper(), place.before);
-    applyFloatPosition();
-    syncLayer();
+    placeToolbarRegions(tb, buildWrapper(tb));
+    applyFloatPosition(tb);
+    syncLayer(tb);
     // Force: a re-mounted rail carries brand-new buttons.
     syncPressed(true);
     return true;
+  }
+
+  /**
+   * mount() for every toolbar.
+   *
+   * @return {boolean} False when a toolbar could not be mounted yet.
+   */
+  function mountToolbars() {
+    var mounted = true;
+    toolbars.forEach(function (tb) {
+      if (!mount(tb)) {
+        mounted = false;
+      }
+    });
+    return mounted;
   }
 
   /**
@@ -14376,14 +17375,22 @@ var DASHICON_NAMES = [
    * focus to Select, so a rebuild the author did not start (an extension
    * registering a tool, a set import finishing) moved them off their
    * place in the toolbar (PR #97 review).
+   *
+   * @param {Object} tb The toolbar to rebuild.
+   * @return {void}
    */
-  function rerender() {
-    var wrapper = document.getElementById('toolrail-region');
+  function rerender(tb) {
+    var wrapper = document.getElementById(tb.regionId);
     if (!wrapper) {
       return;
     }
-    railDragActive = false;
-    var oldRail = document.getElementById('toolrail-rail');
+    // Only this toolbar's rebuild can detach the drag source (see
+    // railDragActive). With no recorded source, as before #95.
+    if (!railDragToolbar || railDragToolbar === tb) {
+      railDragActive = false;
+      railDragToolbar = null;
+    }
+    var oldRail = document.getElementById(tb.railId);
     var hadFocus = !!(oldRail && oldRail.contains(document.activeElement));
     var focusedTool = hadFocus && document.activeElement.dataset
       ? document.activeElement.dataset.tool || ''
@@ -14392,12 +17399,17 @@ var DASHICON_NAMES = [
     // one of its items, the rebuild removes the menu and focus would fall
     // to the page; send it to the menu's rebuilt parent button instead
     // (PR #97 review). Read before closeFlyout(), which clears the state.
-    if (!hadFocus && openFlyout && openFlyout.node.contains(document.activeElement)) {
+    var ownsFlyout = !!openFlyout && openFlyout.toolbar === tb;
+    if (!hadFocus && ownsFlyout && openFlyout.node.contains(document.activeElement)) {
       hadFocus = true;
       focusedTool = openFlyout.parentBtn.dataset.tool || '';
     }
-    closeFlyout(false);
-    var newRail = buildRail(wrapper);
+    // A flyout of a different toolbar hangs off a button this rebuild
+    // does not replace, so it stays open.
+    if (ownsFlyout) {
+      closeFlyout(false);
+    }
+    var newRail = buildRail(tb, wrapper);
     if (oldRail) {
       wrapper.replaceChild(newRail, oldRail);
     } else {
@@ -14426,7 +17438,7 @@ var DASHICON_NAMES = [
     var tries = 0;
     var timer = window.setInterval(function () {
       tries++;
-      if (mount() || tries > 100) {
+      if (mountToolbars() || tries > 100) {
         window.clearInterval(timer);
         observe();
       }
@@ -14462,8 +17474,8 @@ var DASHICON_NAMES = [
       }
       pending = window.setTimeout(function () {
         pending = null;
-        mount();
-        syncLayer();
+        mountToolbars();
+        syncLayers();
         healOverview();
         syncSidebarWidth();
       }, 100);
@@ -14610,20 +17622,96 @@ var DASHICON_NAMES = [
   // Public API
   // -------------------------------------------------------------------
 
+  // The pin, set and position calls take an OPTIONAL toolbar id as their
+  // last argument (#95). Without one they mean what they meant with one
+  // toolbar: the first toolbar, except where a pin on any SHOWN toolbar
+  // must count (isPinned, a pin of a block that is already pinned, unpin,
+  // move). A hidden toolbar's pins do not count without an id (owner
+  // decision 2026-11-16, D4); with its id, every call acts on it. An id
+  // that names no toolbar is refused: false, or null for a getter.
   window.toolrail = {
     registerTool: registerTool,
-    pinBlock: pinBlock,
-    unpinBlock: unpinBlock,
+    /**
+     * @param {string} blockName Block type or pattern slot name.
+     * @param {string} [id]      A toolbar id; the first toolbar without.
+     * @return {boolean} True when the toolbar changed. Without an id,
+     *                   false when any SHOWN toolbar already has the pin,
+     *                   the same rule as the block menu's item.
+     */
+    pinBlock: function (blockName, id) {
+      var tb = apiToolbar(id);
+      if (!tb || ((id === undefined || id === null) && isPinned(blockName))) {
+        return false;
+      }
+      return pinBlock(tb, blockName);
+    },
+    /**
+     * @param {string} blockName Block type or pattern slot name.
+     * @param {string} [id]      A toolbar id; every SHOWN toolbar
+     *                           without (a hidden one keeps its pin).
+     * @return {boolean} True when a toolbar changed.
+     */
+    unpinBlock: function (blockName, id) {
+      if (id === undefined || id === null) {
+        return unpinEverywhere(blockName);
+      }
+      var tb = apiToolbar(id);
+      return tb ? unpinBlock(tb, blockName) : false;
+    },
     getPatterns: allPatterns,
     openAddToToolbar: openAddToToolbar,
-    isPinned: isPinned,
-    moveSlot: moveSlot,
+    /**
+     * @param {string} blockName Block type or pattern slot name.
+     * @param {string} [id]      A toolbar id; any SHOWN toolbar without.
+     * @return {boolean}
+     */
+    isPinned: function (blockName, id) {
+      if (id === undefined || id === null) {
+        return isPinned(blockName);
+      }
+      var tb = apiToolbar(id);
+      return tb ? isPinnedOn(tb, blockName) : false;
+    },
+    /**
+     * @param {string} blockName Block type or pattern slot name.
+     * @param {number} delta     -1 or 1.
+     * @param {string} [id]      A toolbar id; without one, the first
+     *                           SHOWN toolbar that has the pin.
+     * @return {boolean} True when the slot moved.
+     */
+    moveSlot: function (blockName, delta, id) {
+      var tb = apiToolbar(id);
+      if (id === undefined || id === null) {
+        tb = toolbars.filter(function (other) {
+          return !other.hidden && isPinnedOn(other, blockName);
+        })[0] || mainToolbar;
+      }
+      return tb ? moveSlot(tb, blockName, delta) : false;
+    },
     getPinMeta: getPinMeta,
     setPinMeta: setPinMeta,
     getPinData: getPinData,
     setPinData: setPinData,
-    saveConfig: saveConfig,
-    loadConfig: loadConfig,
+    /**
+     * @param {string} name  Set name.
+     * @param {string} [id]  The toolbar whose pins are saved; the first
+     *                       toolbar without.
+     * @return {boolean} True when saved.
+     */
+    saveConfig: function (name, id) {
+      var tb = apiToolbar(id);
+      return tb ? saveConfig(name, tb) : false;
+    },
+    /**
+     * @param {string} name  Set name.
+     * @param {string} [id]  The toolbar the set loads into; the first
+     *                       toolbar without.
+     * @return {boolean} True when the set existed and was applied.
+     */
+    loadConfig: function (name, id) {
+      var tb = apiToolbar(id);
+      return tb ? loadConfig(name, tb) : false;
+    },
     deleteConfig: deleteConfig,
     getConfigs: loadConfigs,
     exportConfig: exportConfig,
@@ -14653,9 +17741,41 @@ var DASHICON_NAMES = [
     getMode: railMode,
     prefs: extPrefs,
     getCanvasGeometry: getCanvasGeometry,
-    getDock: function () { return position.dock; },
-    setDock: function (dock) { return setDock(dock); },
-    getPosition: function () { return { dock: position.dock, x: position.x, y: position.y }; }
+    getDock: function (id) {
+      var tb = apiToolbar(id);
+      return tb ? tb.position.dock : null;
+    },
+    setDock: function (dock, id) {
+      var tb = apiToolbar(id);
+      return tb ? setDock(tb, dock) : false;
+    },
+    getPosition: function (id) {
+      var tb = apiToolbar(id);
+      if (!tb) {
+        return null;
+      }
+      var position = tb.position;
+      return { dock: position.dock, x: position.x, y: position.y };
+    },
+    /**
+     * Every toolbar, the first one first (id 'main'), in the order of
+     * the Tab order and of a shared edge (#95). A copy: changing it
+     * changes nothing.
+     *
+     * @return {Object[]} {id, name, dock, x, y, hidden} each.
+     */
+    getToolbars: function () {
+      return toolbars.map(function (tb) {
+        return {
+          id: tb.id,
+          name: toolbarLabel(tb),
+          dock: tb.position.dock,
+          x: tb.position.x,
+          y: tb.position.y,
+          hidden: tb.hidden
+        };
+      });
+    }
   };
 
   // -------------------------------------------------------------------
@@ -14699,10 +17819,13 @@ var DASHICON_NAMES = [
             items.push(el(wp.components.MenuItem, {
               key: 'toolrail-pin',
               onClick: function () {
+                // Pin to the first toolbar; unpin from every toolbar,
+                // because the item says "Unpin" when ANY toolbar shows
+                // the block (owner decision 2026-11-14, #95).
                 if (pinned) {
-                  unpinBlock(name);
+                  unpinEverywhere(name);
                 } else {
-                  pinBlock(name);
+                  pinBlock(mainToolbar, name);
                 }
                 close();
               }
@@ -14818,10 +17941,13 @@ var DASHICON_NAMES = [
           markPrefsReady();
         }
         // An attach that keeps both stamps needs no repair, but it can
-        // still replace the saved sets under the rail (PR #97 review).
+        // still replace the saved sets under the rail (PR #97 review),
+        // and the extra toolbars (#95). syncToolbars() costs one read and
+        // one compare when the toolbars did not change.
         repairing = true;
         try {
           reconcileSetsButton();
+          syncToolbars();
         } finally {
           repairing = false;
         }
@@ -14832,14 +17958,16 @@ var DASHICON_NAMES = [
         migrateLocalToPrefs();
         migrateSlots();
         var restored = loadPosition();
-        position.dock = restored.dock;
-        position.x = restored.x;
-        position.y = restored.y;
-        var existingRegion = document.getElementById('toolrail-region');
+        mainToolbar.position.dock = restored.dock;
+        mainToolbar.position.x = restored.x;
+        mainToolbar.position.y = restored.y;
+        var existingRegion = document.getElementById(mainToolbar.regionId);
         if (existingRegion) {
           existingRegion.remove();
         }
-        mount();
+        mount(mainToolbar);
+        // The attach also brings the extra toolbars the account has.
+        syncToolbars();
       } finally {
         repairing = false;
       }
@@ -14872,8 +18000,11 @@ var DASHICON_NAMES = [
     // the account preferences FIRST, then read position and run the slot
     // migration against the lifted state.
     migrateLocalToPrefs();
-    position = loadPosition();
+    mainToolbar.position = loadPosition();
     migrateSlots();
+    // The extra toolbars (#95). With none stored this changes nothing and
+    // builds nothing; start() mounts whatever it read.
+    syncToolbars();
     // These writes can still lose a race with the preferences store's
     // own async attach — watchPersistenceAttach() catches and repairs
     // that if it happens.
@@ -14881,6 +18012,9 @@ var DASHICON_NAMES = [
     registerPinMenuItem();
     start();
     watchPatternCatalog();
+    // The shared sets (#98), once per page. Not awaited: the rail is up
+    // without them, and a failed request leaves it as it is.
+    refreshSharedSets();
   }
 
   if (window._wpLoadBlockEditor && typeof window._wpLoadBlockEditor.then === 'function') {

@@ -2,13 +2,23 @@
 /**
  * Uninstall helpers: what deleting the plugin removes, and how.
  *
- * The plugin writes nothing of its own to the database: no options, no
- * transients, no post meta, no tables. Its whole footprint is the per-user
- * editor preferences (pinned tools and their custom names, descriptions and
- * icons, toolbar position, saved sets, appearance, the help and inserter
- * toggles) that `core/preferences` persists under the
- * `toolrail` scope of core's OWN user-meta row, `{blog prefix}persisted_preferences`
- * (wp-includes/script-loader.php builds that key with $wpdb->get_blog_prefix()).
+ * The plugin writes no options, no transients, no post meta and no tables,
+ * and it never writes into an author's posts. Its footprint is two things.
+ *
+ * 1. Shared sets (#98): the posts of its own private post type
+ *    `editrail_set` (includes/shared-sets.php), one per author and shared
+ *    set name, on each site. toolrail_uninstall_delete_shared_sets()
+ *    deletes them; see its docblock.
+ *
+ * 2. The per-user editor preferences (pinned tools and their custom names,
+ *    descriptions and icons, toolbar position, the extra toolbars with
+ *    their names, pins and positions (#95), saved sets, appearance, the
+ *    help and inserter toggles) that `core/preferences` persists under the
+ *    `toolrail` scope of core's OWN user-meta row,
+ *    `{blog prefix}persisted_preferences` (wp-includes/script-loader.php
+ *    builds that key with $wpdb->get_blog_prefix()).
+ *
+ * The rest of this note is about the preferences.
  * That row is one PHP-serialized array per user which also holds core's
  * editor preferences, so uninstall cannot delete a row: it strips ONE key
  * out of each user's array and writes the rest back untouched.
@@ -140,24 +150,107 @@ function toolrail_uninstall_scrub_site($meta_key, $now) {
 }
 
 /**
- * Remove the plugin's per-user preferences from every user, on every site.
+ * The sites uninstall visits: every site of a network, or [null] for the one
+ * site of a single install. One list for both footprints, so the shared sets
+ * and the preferences can never cover different sites.
+ *
+ * WP_Site_Query defaults `number` to 100 and emits a LIMIT only when it is
+ * truthy, so 0 is the documented "all sites".
+ *
+ * @return array Site IDs, or [null].
+ */
+function toolrail_uninstall_site_ids() {
+    return is_multisite() ? (array) get_sites(['fields' => 'ids', 'number' => 0]) : [null];
+}
+
+/**
+ * Delete every shared set (`editrail_set` post) of the CURRENT site.
+ *
+ * The type name is written out here because the root uninstall.php loads
+ * only this file; it must equal TOOLRAIL_SHARED_SET_TYPE in
+ * includes/shared-sets.php (Test_Uninstall checks that).
+ *
+ * The IDs come from a direct query on the type, every status included: the
+ * type is not registered while uninstall runs (the plugin is inactive), and
+ * get_posts() with an unregistered type and status 'any' leaves out trash
+ * and auto-draft rows. The routes only ever write `publish`, but a row from
+ * another path must not survive a delete of the plugin.
+ *
+ * Each post goes through wp_delete_post() with $force_delete, never to the
+ * trash: that also deletes its post meta, its revisions (the type supports
+ * none, but the query for them is on post_parent and runs anyway), its
+ * comments and its term relationships, and clears the object cache, so no
+ * orphaned row is left.
+ *
+ * @return int Number of posts deleted.
+ */
+function toolrail_uninstall_delete_shared_sets_here() {
+    global $wpdb;
+
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- one-time uninstall pass; the type is not registered, so no API query finds every row.
+    $ids   = $wpdb->get_col($wpdb->prepare("SELECT ID FROM {$wpdb->posts} WHERE post_type = %s", 'editrail_set'));
+    $count = 0;
+    foreach ((array) $ids as $id) {
+        if (wp_delete_post((int) $id, true)) {
+            $count++;
+        }
+    }
+    return $count;
+}
+
+/**
+ * Delete the shared sets on every site that toolrail_uninstall_site_ids()
+ * lists.
+ *
+ * The preferences pass needs no switch_to_blog(): user meta is one table for
+ * the whole network, and the site only changes the key. Posts are a table
+ * PER SITE, and wp_delete_post() works on the current site's tables, so here
+ * each network site is switched to and back. A single install ([null])
+ * switches nothing.
+ *
+ * @return int Number of posts deleted across all sites.
+ */
+function toolrail_uninstall_delete_shared_sets() {
+    $total = 0;
+    foreach (toolrail_uninstall_site_ids() as $site_id) {
+        if (null === $site_id) {
+            $total += toolrail_uninstall_delete_shared_sets_here();
+            continue;
+        }
+        switch_to_blog((int) $site_id);
+        try {
+            $total += toolrail_uninstall_delete_shared_sets_here();
+        } finally {
+            restore_current_blog();
+        }
+    }
+    return $total;
+}
+
+/**
+ * Remove the plugin's footprint, on every site: the shared sets, then the
+ * per-user preferences of every user.
  *
  * Plugin files are shared across a network, so WordPress runs uninstall once
  * for the whole network; every site's meta key is visited here. Site ids go
- * straight to get_blog_prefix(), so no switch_to_blog() is needed.
+ * straight to get_blog_prefix(), so the preferences pass needs no
+ * switch_to_blog() (the shared-set pass does; see
+ * toolrail_uninstall_delete_shared_sets()).
  *
- * @return int Number of user rows rewritten across all sites.
+ * @return int Number of user rows rewritten across all sites. The shared
+ *             sets are counted by toolrail_uninstall_delete_shared_sets().
  */
 function toolrail_uninstall() {
     global $wpdb;
 
+    toolrail_uninstall_delete_shared_sets();
+
     // Same shape core writes from JS: new Date().toISOString(). One hour
     // ahead, so a browser whose clock runs ahead of the server's still sees
     // the stripped server copy as the newer one (see the file docblock).
-    $now      = gmdate('Y-m-d\TH:i:s', time() + 3600) . '.000Z';
-    $site_ids = is_multisite() ? get_sites(['fields' => 'ids', 'number' => 0]) : [null];
-    $total    = 0;
-    foreach ((array) $site_ids as $site_id) {
+    $now   = gmdate('Y-m-d\TH:i:s', time() + 3600) . '.000Z';
+    $total = 0;
+    foreach (toolrail_uninstall_site_ids() as $site_id) {
         $meta_key = $wpdb->get_blog_prefix($site_id) . 'persisted_preferences';
         $total   += toolrail_uninstall_scrub_site($meta_key, $now);
     }

@@ -132,6 +132,15 @@
     z-index: 100001;
 }
 
+/* With more than one toolbar (#95), a floating toolbar stays raised while
+   a different toolbar owns an open flyout, dialog or drag. The two would
+   tie at 100001 and the later one in the document would paint on top, so
+   the owner takes one level more. The modal veto below has the higher
+   specificity (0,3,1 against 0,3,0), so it lowers both levels. */
+.toolrail-region.is-raised.has-surface {
+    z-index: 100002;
+}
+
 /* A modal must ALWAYS win, and this is the SOLE owner of that decision.
    Doing it in JS as well put a ~100ms lag at each edge (a just-opened modal
    briefly covered; the palette briefly stuck behind the panels after the
@@ -159,6 +168,13 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
     margin-bottom: calc(var(--wpds-dimension-size-md, 32px) + 1px);
 }
 
+/* Two toolbars on the bottom edge (#95): only the LAST bar sits on the
+   footer, so only that one keeps the reservation. Measured with the rule
+   above on both bars: a 33px empty band between them. */
+.has-footer .toolrail-region[data-dock="bottom"]:has(~ .toolrail-region[data-dock="bottom"]) {
+    margin-bottom: 0;
+}
+
 /* Floating: the skeleton body is already position:relative in core, so the
    palette anchors to the editor area and cannot be dragged out into the
    admin chrome. The z-index clears core's .interface-interface-skeleton__
@@ -176,11 +192,11 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
     max-height: calc(100% - 32px);
 }
 
-.toolrail-region[data-dock="float"][data-wide] #toolrail-rail {
+.toolrail-region[data-dock="float"][data-wide] .toolrail-rail {
     width: 200px;
 }
 
-#toolrail-rail {
+.toolrail-rail {
     flex: 1 1 auto;
     /* Same automatic-minimum escape as the region above. */
     min-width: 0;
@@ -198,15 +214,15 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
    overflow-x: hidden erased the "never color alone" indicator; on the
    container's own padding, the bar sits inside the padding box and
    survives. */
-.toolrail-region[data-dock="left"] #toolrail-rail,
-.toolrail-region[data-dock="right"] #toolrail-rail,
-.toolrail-region[data-dock="float"] #toolrail-rail {
+.toolrail-region[data-dock="left"] .toolrail-rail,
+.toolrail-region[data-dock="right"] .toolrail-rail,
+.toolrail-region[data-dock="float"] .toolrail-rail {
     flex-direction: column;
     padding: 12px 0;
 }
 
-.toolrail-region[data-dock="top"] #toolrail-rail,
-.toolrail-region[data-dock="bottom"] #toolrail-rail {
+.toolrail-region[data-dock="top"] .toolrail-rail,
+.toolrail-region[data-dock="bottom"] .toolrail-rail {
     flex-direction: row;
     padding: 0 12px;
 }
@@ -377,23 +393,23 @@ body:has(.components-modal__screen-overlay) .toolrail-region.is-raised {
     border-left-color: currentcolor;
 }
 
-.toolrail-region[data-dock="left"] #toolrail-rail {
+.toolrail-region[data-dock="left"] .toolrail-rail {
     border-right: 1px solid var(--toolrail-edge);
 }
 
-.toolrail-region[data-dock="right"] #toolrail-rail {
+.toolrail-region[data-dock="right"] .toolrail-rail {
     border-left: 1px solid var(--toolrail-edge);
 }
 
-.toolrail-region[data-dock="top"] #toolrail-rail {
+.toolrail-region[data-dock="top"] .toolrail-rail {
     border-bottom: 1px solid var(--toolrail-edge);
 }
 
-.toolrail-region[data-dock="bottom"] #toolrail-rail {
+.toolrail-region[data-dock="bottom"] .toolrail-rail {
     border-top: 1px solid var(--toolrail-edge);
 }
 
-.toolrail-region[data-dock="float"] #toolrail-rail {
+.toolrail-region[data-dock="float"] .toolrail-rail {
     border: 1px solid var(--toolrail-border);
     border-radius: 6px;
     box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
@@ -681,7 +697,8 @@ body.toolrail-dragging * {
 }
 
 /* Flyout menu. Its offsets are set inline by placeSurface(), which opens
-   it away from whichever edge the rail is docked to. */
+   it away from whichever edge the rail is docked to, or toward that edge
+   when the window has no room on the far side. */
 .toolrail-flyout {
     position: absolute;
     min-width: 180px;
@@ -930,11 +947,29 @@ body.toolrail-dragging * {
 }
 
 .toolrail-settings-pinnedrow,
-.toolrail-settings-setrow {
+.toolrail-settings-setrow,
+.toolrail-settings-sharedrow {
     display: flex;
     align-items: center;
     gap: 4px;
     padding: 2px 0;
+}
+
+/* Shared sets (#98): a set row with share controls, and every row of the
+   Shared sets list, has more buttons than the dialog's width holds on one
+   line, so it wraps. The name keeps the first line when it is long. */
+.toolrail-settings-wraprow,
+.toolrail-settings-sharedrow {
+    flex-wrap: wrap;
+}
+
+/* "Shared by <display name>": the name comes from another user and can be
+   long; the buttons' accessible names carry it in full. */
+.toolrail-settings-sharedby {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .toolrail-settings-pinnedname {
@@ -1069,7 +1104,7 @@ body.toolrail-dragging * {
 }
 
 /* Drop-target hint while a block drag hovers the rail. */
-.toolrail-region.is-drop-target #toolrail-rail {
+.toolrail-region.is-drop-target .toolrail-rail {
     outline: 2px dashed var(--toolrail-focus-ring);
     outline-offset: -4px;
 }
@@ -2077,6 +2112,28 @@ body.toolrail-sidebar-resizing * {
 .toolrail-settings textarea.toolrail-settings-search:focus {
     border-color: var(--toolrail-field-border);
     box-shadow: none;
+}
+
+/* The Toolbar chooser (#95). wp-admin's forms.css styles every select
+   through `.wp-core-ui select` (0,1,1), with its arrow as a background
+   image, so this sets the background COLOR only and keeps the arrow. */
+.toolrail-settings select.toolrail-settings-search {
+    background-color: var(--toolrail-field-bg);
+    color: var(--toolrail-fg-strong);
+    border: 1px solid var(--toolrail-field-border);
+    box-shadow: none;
+    font-size: 13px;
+    max-width: none;
+}
+
+.toolrail-settings select.toolrail-settings-search:focus {
+    border-color: var(--toolrail-field-border);
+    box-shadow: none;
+}
+
+/* Name, Show and Delete for the chosen extra toolbar (#95). */
+.toolrail-settings-toolbars {
+    margin: 0 0 12px;
 }
 
 /* --- The Icon field's row and its Dashicon browser (1.0.1) --- */
