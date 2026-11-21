@@ -1848,15 +1848,18 @@ body.toolrail-canvas-marquee .block-editor-block-popover__inbetween .block-edito
 }
 
 /* A dimmed action stays focusable and keeps its name; the script says
-   why when it is pressed. */
+   why when it is pressed. It is dimmed by its colors, not by opacity:
+   opacity would dim its focus ring too, below 3:1 against the bar
+   (PR #124 review). */
 .toolrail-csel-btn[aria-disabled="true"] {
-    opacity: 0.45;
+    color: #8a8a8a;
+    border-color: #3a3a3a;
     cursor: default;
 }
 
 .toolrail-csel-btn[aria-disabled="true"]:hover {
     background: #2a2a2a;
-    color: #e0e0e0;
+    color: #8a8a8a;
 }
 
 .toolrail-csel-btn:focus-visible {

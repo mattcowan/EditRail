@@ -6997,6 +6997,29 @@ var DASHICON_NAMES = [
   }
 
   /**
+   * Clear selection, from the bar. When WordPress holds the same blocks
+   * (a Move mirrored a range there), its selection is cleared too, or
+   * the blocks would still show as selected after "Selection cleared".
+   * Any other WordPress selection, such as the block cursor, is the
+   * author's own and stays (PR #124 review). With nothing selected,
+   * focus goes to the canvas body, as it does for several blocks.
+   *
+   * @return {void}
+   */
+  function clearCanvasSelectionFromBar() {
+    var current = wp.data.select('core/block-editor').getSelectedBlockClientIds();
+    if (current.length > 1 && canvasSelectSameSet(current, csel.ids)) {
+      csel.applying = true;
+      try {
+        wp.data.dispatch('core/block-editor').clearSelectedBlock();
+      } finally {
+        csel.applying = false;
+      }
+    }
+    endCanvasSelection(true);
+  }
+
+  /**
    * The selection a toggle builds on. The click builds on what is
    * selected now ("and this one too"). The key and the menu item build on
    * the KEPT set only: their targets ARE the WordPress selection, so
@@ -7826,7 +7849,7 @@ var DASHICON_NAMES = [
         deleteCanvasSelection();
         break;
       case 'clear':
-        endCanvasSelection(true);
+        clearCanvasSelectionFromBar();
         break;
       default:
         break;
@@ -8075,6 +8098,25 @@ var DASHICON_NAMES = [
   }
 
   /**
+   * The rectangle from the press to the pointer, in canvas DOCUMENT
+   * coordinates.
+   *
+   * @param {Object} m The marquee state.
+   * @return {Object} {left, top, right, bottom}
+   */
+  function canvasMarqueeBox(m) {
+    var win = m.doc.defaultView;
+    var sx = win.scrollX || win.pageXOffset || 0;
+    var sy = win.scrollY || win.pageYOffset || 0;
+    return {
+      left: Math.min(m.docX, m.lastX + sx),
+      right: Math.max(m.docX, m.lastX + sx),
+      top: Math.min(m.docY, m.lastY + sy),
+      bottom: Math.max(m.docY, m.lastY + sy)
+    };
+  }
+
+  /**
    * The blocks a rectangle selects, by the level rule in the banner.
    *
    * @param {Object} m   The marquee state.
@@ -8259,12 +8301,7 @@ var DASHICON_NAMES = [
     var win = m.doc.defaultView;
     var sx = win.scrollX || win.pageXOffset || 0;
     var sy = win.scrollY || win.pageYOffset || 0;
-    var box = {
-      left: Math.min(m.docX, m.lastX + sx),
-      right: Math.max(m.docX, m.lastX + sx),
-      top: Math.min(m.docY, m.lastY + sy),
-      bottom: Math.max(m.docY, m.lastY + sy)
-    };
+    var box = canvasMarqueeBox(m);
     m.hits = canvasMarqueeHits(m, box);
     var shown = m.additive ? canvasSelectMerge(m.baseIds, m.hits) : m.hits;
     var signature = shown.join(',');
@@ -8372,6 +8409,12 @@ var DASHICON_NAMES = [
     window.setTimeout(function () {
       csel.swallowClick = false;
     }, 0);
+    // The rectangles were measured once for the drag. A block can move
+    // during it (an image loads above it), so the hits are worked out
+    // again on fresh measurements before they are committed (PR #124
+    // review).
+    m.rects = Object.create(null);
+    m.hits = canvasMarqueeHits(m, canvasMarqueeBox(m));
     commitCanvasSelection(m.additive ? canvasSelectMerge(m.baseIds, m.hits) : m.hits, 'pointer', false);
   }
 

@@ -298,6 +298,28 @@ test.describe('canvas selection (#14): the rectangle', () => {
     expect(before).not.toContain('toolrail');
   });
 
+  test('a block that moves during the drag is measured again at the release', async ({ page }) => {
+    await openNewPost(page);
+    const ids = await seedCanvas(page);
+    const alpha = await boxOf(page, ids.alpha);
+    const gamma = await boxOf(page, ids.gamma);
+    const x = await marginX(page, ids.alpha);
+
+    await drag(page, { x, y: alpha.top - 4 }, { x: alpha.left + 200, y: gamma.top + gamma.height / 2 }, { hold: true });
+    expect(await outlined(page)).toEqual([ids.alpha, ids.beta, ids.gamma]);
+    // The layout changes under the held pointer, as when an image loads:
+    // Beta and Gamma move down, out of the rectangle (PR #124 review).
+    await canvas(page).locator('#block-' + ids.alpha).evaluate((el) => {
+      el.style.minHeight = '800px';
+    });
+    await page.mouse.up();
+
+    await expect.poll(() => selected(page)).toEqual([ids.alpha]);
+    await canvas(page).locator('#block-' + ids.alpha).evaluate((el) => {
+      el.style.minHeight = '';
+    });
+  });
+
   test('a drag that starts below the last block selects too, and the paragraph WordPress appends for the press is removed', async ({ page }) => {
     await openNewPost(page);
     const ids = await seedCanvas(page);
@@ -759,8 +781,19 @@ test.describe('canvas selection (#14): keyboard', () => {
       const cs = getComputedStyle(btn);
       const a = lum(cs.outlineColor);
       const b = lum(getComputedStyle(btn.parentElement).backgroundColor);
-      return { style: cs.outlineStyle, width: cs.outlineWidth, ratio: (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) };
+      return {
+        disabled: btn.getAttribute('aria-disabled'),
+        opacity: cs.opacity,
+        style: cs.outlineStyle,
+        width: cs.outlineWidth,
+        ratio: (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05),
+      };
     });
+    // Move up is dimmed here (the first member is at the top). The ratio
+    // above uses the declared colors, so it holds only when nothing
+    // paints the ring with less opacity (PR #124 review).
+    expect(ring.disabled).toBe('true');
+    expect(ring.opacity).toBe('1');
     expect(ring.style).toBe('solid');
     expect(ring.width).toBe('2px');
     expect(ring.ratio).toBeGreaterThanOrEqual(3);
@@ -1008,6 +1041,22 @@ test.describe('canvas selection (#14): group actions', () => {
     // The set stays kept too, so the bar is still there for the next step.
     await expect(bar(page)).toBeVisible();
     expect(await outlined(page)).toEqual([ids.alpha, ids.gamma]);
+  });
+
+  test('Clear selection after a pointer Move also clears the range it handed to WordPress', async ({ page }) => {
+    await openNewPost(page);
+    const ids = await seedCanvas(page);
+    await keepWithClicks(page, [ids.alpha, ids.gamma]);
+    await barButton(page, 'down').click();
+    await expect.poll(() => selected(page)).toEqual([ids.alpha, ids.gamma]);
+
+    // "Selection cleared" must be true of what the author sees: the two
+    // blocks WordPress holds were the kept set (PR #124 review).
+    await barButton(page, 'clear').click();
+    await expect(bar(page)).toBeHidden();
+    await expect.poll(() => selected(page)).toEqual([]);
+    expect(await outlined(page)).toEqual([]);
+    await expect.poll(() => liveText(page)).toBe('Selection cleared.');
   });
 
   test('Move up leaves a locked member where it is, and says so', async ({ page }) => {
