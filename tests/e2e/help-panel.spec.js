@@ -41,10 +41,11 @@ test.describe('help panel', () => {
     await expect(panel.locator('#toolrail-help-title')).toHaveText('Toolbar help');
     await expect(helpBtn).toHaveAttribute('aria-expanded', 'true');
 
-    // All eight sections render as headed text (Section overview joined
+    // All nine sections render as headed text (Section overview joined
     // in 0.1.14; "What a highlighted tool means" in 0.1.18, R10;
-    // "Settings sidebar width" in 1.0.5, #28).
-    await expect(panel.locator('h3')).toHaveCount(8);
+    // "Settings sidebar width" in 1.0.5, #28; "Selecting several blocks"
+    // with #14).
+    await expect(panel.locator('h3')).toHaveCount(9);
     await expect(panel.locator('h3').last()).toHaveText('What a highlighted tool means');
 
     // An explicit open moves focus into the panel…
