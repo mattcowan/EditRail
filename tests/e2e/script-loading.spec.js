@@ -15,7 +15,7 @@
  * It does not use openNewPost(): that helper waits for the rail, and here
  * there is none.
  */
-const { test, expect, AUTH, openNewPost, waitForSavedPref } = require('./helpers');
+const { test, expect, AUTH, openNewPost, waitForSavedPref, clickBelowContent, blockNames } = require('./helpers');
 
 test.use({ storageState: AUTH });
 
@@ -89,6 +89,34 @@ test.describe('script loading (#102)', () => {
       expect(pageErrors, 'no uncaught error in the page').toEqual([]);
     });
   }
+
+  // A provider (README, "Extending") depends only on toolrail-editor-rail
+  // and calls registerTool() while its script is first evaluated. The
+  // fixture in tests/e2e/fixtures/mu-plugins does that when the
+  // toolrail_e2e_provider cookie is set (PR #127 review).
+  test('a provider that depends on toolrail-editor-rail runs after all seven files, and its tool works', async ({ page, context, baseURL }) => {
+    const pageErrors = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    await context.addCookies([{ name: 'toolrail_e2e_provider', value: '1', url: baseURL }]);
+    await openNewPost(page);
+
+    const seen = await page.evaluate(() => window.__toolrailE2EProvider || null);
+    // CI always has the fixture (.wp-env.json). Another site may not.
+    test.skip(!seen && !process.env.CI, 'The e2e provider fixture is not on this site: copy tests/e2e/fixtures/mu-plugins/e2e-provider.php to its mu-plugins folder.');
+    expect(seen, 'the fixture provider ran').not.toBeNull();
+    // It ran after the last file: the public API was there, the private
+    // one was gone, and registerTool() did not throw.
+    expect(seen).toMatchObject({ api: 'object', internal: 'undefined', error: null });
+
+    await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').focus();
+    await page.keyboard.press('ArrowRight');
+    const child = page.locator('.toolrail-flyout [data-tool="e2e-provider-child"]');
+    await expect(child).toBeVisible();
+    await child.click();
+    await clickBelowContent(page);
+    expect(await blockNames(page)).toContain('core/quote');
+    expect(pageErrors, 'no uncaught error in the page').toEqual([]);
+  });
 
   // editor-rail-dom.js listens for window resizes, to keep a floating
   // toolbar in the window and to size the settings sidebar. When the last

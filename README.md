@@ -203,6 +203,8 @@ npx wp-env stop
 
 To use your own WordPress site, copy `.env.example` to `.env` and set `TOOLRAIL_URL`, `TOOLRAIL_ADMIN_USER` and `TOOLRAIL_ADMIN_PASS`. A variable set on the command line wins over `.env`. `docs/releasing.md` lists every variable.
 
+One test loads a tool provider from `tests/e2e/fixtures/mu-plugins/e2e-provider.php`. wp-env loads it as a must-use plugin. On your own site, copy the file to `wp-content/mu-plugins/`, or the test is skipped. The file does nothing unless a test sets its cookie.
+
 The screen-reader journeys need more setup. Do these three steps once on the machine:
 
 ```
