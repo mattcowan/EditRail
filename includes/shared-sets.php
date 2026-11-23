@@ -47,7 +47,7 @@
  *
  * TRUST. The server never trusts the payload: every write goes through
  * toolrail_shared_set_normalize() (the grammar importConfigPayload() in
- * assets/editor-rail.js enforces on a set file, plus size, name and count
+ * assets/editor-rail-settings.js enforces on a set file, plus size, name and count
  * caps), and every read goes through it again, so a row written by any
  * other path (a database edit, an import) is checked before a browser sees
  * it. toolrail_shared_set_guard_insert() refuses every insert or update of
@@ -240,9 +240,10 @@ function toolrail_shared_set_cut($text, $max) {
 
 /**
  * Whether a string is a slot the rail can pin: a block name, or a pattern
- * slot. The same two expressions as BLOCK_NAME_PATTERN and
- * PATTERN_SLOT_PATTERN in assets/editor-rail.js, with \z for $: PHP's $
- * also matches before a final line break, JavaScript's does not. Pure.
+ * slot. The same two expressions as BLOCK_NAME_PATTERN
+ * (assets/editor-rail-settings.js) and PATTERN_SLOT_PATTERN
+ * (assets/editor-rail-registry.js), with \z for $: PHP's $ also matches
+ * before a final line break, JavaScript's does not. Pure.
  *
  * @param mixed $slot Candidate slot.
  * @return bool
@@ -263,7 +264,7 @@ const TOOLRAIL_SHARED_SET_JSON_FLAGS = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_S
 
 /**
  * One pin's label entry, cleaned the way normalizePinMeta() in
- * assets/editor-rail.js cleans it: title and description with white-space
+ * assets/editor-rail-registry.js cleans it: title and description with white-space
  * runs collapsed, trimmed and cut to 80 and 240 characters; an icon that is
  * a Dashicon name or at most three characters (grapheme clusters); and
  * extension data in namespaces of [a-z0-9-], each plain JSON of at most
@@ -337,7 +338,7 @@ function toolrail_shared_set_refuse($code, $message) {
 /**
  * Validate and normalize one set, as the JSON text of a set file.
  *
- * The same grammar importConfigPayload() in assets/editor-rail.js applies
+ * The same grammar importConfigPayload() in assets/editor-rail-settings.js applies
  * to a set file: an object with a `blocks` array; entries that are not a
  * block name or a pattern slot are dropped; repeats are collapsed to the
  * first; labels are kept only for the set's own slots, each through
@@ -419,7 +420,7 @@ function toolrail_shared_set_normalize($raw) {
         }
     }
 
-    // The set file's own field order (exportConfig in assets/editor-rail.js).
+    // The set file's own field order (exportConfig in assets/editor-rail-settings.js).
     $set = (object) [
         'format'  => 'toolrail-set',
         'version' => 1,
