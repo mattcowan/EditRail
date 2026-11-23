@@ -15,7 +15,7 @@
  * It does not use openNewPost(): that helper waits for the rail, and here
  * there is none.
  */
-const { test, expect, AUTH } = require('./helpers');
+const { test, expect, AUTH, openNewPost, waitForSavedPref } = require('./helpers');
 
 test.use({ storageState: AUTH });
 
@@ -89,4 +89,38 @@ test.describe('script loading (#102)', () => {
       expect(pageErrors, 'no uncaught error in the page').toEqual([]);
     });
   }
+
+  // editor-rail-dom.js listens for window resizes, to keep a floating
+  // toolbar in the window and to size the settings sidebar. When the last
+  // file does not load, the rail never starts, and a resize must leave
+  // core's sidebar alone (PR #127 review).
+  test('a window resize does not size the sidebar when editor-rail.js does not load', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => {
+      window.wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-sidebar-resize', '1');
+      window.wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-sidebar-width', '500');
+    });
+    await waitForSavedPref(page, 'toolrail-sidebar-resize', (v) => v === '1');
+    await waitForSavedPref(page, 'toolrail-sidebar-width', (v) => v === '500');
+
+    const pageErrors = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    await page.route('**/assets/editor-rail.js*', (route) => route.abort());
+    await page.goto('/wp-admin/post-new.php');
+    await expect(page.frameLocator('iframe[name="editor-canvas"]').locator('.is-root-container')).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('#toolrail-region')).toHaveCount(0);
+
+    await page.evaluate(() => window.wp.data.dispatch('core/interface').enableComplementaryArea('core', 'edit-post/document'));
+    await expect(page.locator('.interface-complementary-area')).toBeVisible();
+    const size = page.viewportSize();
+    await page.setViewportSize({ width: size.width - 40, height: size.height });
+    await page.setViewportSize(size);
+    // Two frames, so a resize handler has run.
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+    await expect(page.locator('#toolrail-sidebar-handle')).toHaveCount(0);
+    expect(await page.evaluate(() => [...document.body.classList].filter((c) => c.startsWith('toolrail-')))).toEqual([]);
+    await expect(page.locator('.interface-complementary-area')).toHaveJSProperty('offsetWidth', 280);
+    expect(pageErrors, 'no uncaught error in the page').toEqual([]);
+  });
 });

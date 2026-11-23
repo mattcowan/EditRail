@@ -38,9 +38,15 @@ const ig = ignore().add(fs.readFileSync(distignorePath, 'utf8'));
 // Preflight: the main file does an unconditional require_once on the
 // includes, and enqueues the assets — a zip without any of these fatals
 // on activation or mounts nothing. The rail's scripts are the files that
-// toolrail_rail_scripts() in includes/rail.php registers (#102): when one
-// is missing, WordPress drops `toolrail-editor-rail` and every provider
-// script that depends on it.
+// toolrail_rail_scripts() in includes/rail.php registers (#102). Two
+// failures look alike in the editor, and are found in different places:
+//  - A file missing from the zip: rail.php still registers its handle, so
+//    WordPress prints every rail script. The browser's request for the
+//    missing file fails, and the guard at the top of each later rail file
+//    stops it: no rail. Check the package (this list).
+//  - A handle that is not registered: WordPress itself does not print
+//    `toolrail-editor-rail` or any provider script that depends on it.
+//    Check toolrail_rail_scripts().
 const requiredFiles = [
   'editrail.php',
   'readme.txt',

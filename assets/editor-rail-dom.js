@@ -589,7 +589,13 @@
 
   // Keep a floating rail inside the editor when the window resizes, and
   // re-clamp the settings sidebar, whose maximum follows the window.
+  // Nothing until start() runs: when editor-rail.js does not load, the
+  // rail never starts, and a resize must leave the editor alone.
+  var railStarted = false;
   window.addEventListener('resize', function () {
+    if (!railStarted) {
+      return;
+    }
     T.toolbars.forEach(function (tb) {
       if (tb.position.dock === 'float') {
         applyFloatPosition(tb);
@@ -2240,6 +2246,7 @@
    */
   function start() {
     var tries = 0;
+    railStarted = true;
     var timer = window.setInterval(function () {
       tries++;
       if (mountToolbars() || tries > 100) {
