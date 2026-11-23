@@ -2,8 +2,8 @@
  * EditRail, part 2 of 7 (editor-rail-registry.js).
  *
  * The tool registry: shape output, the built-in tools, registerTool,
- * the quick slots, pin metadata, the Saved sets button and the
- * pattern catalog.
+ * the quick slots, pin metadata, the Saved sets button, shared sets
+ * and the pattern catalog.
  *
  * The public contract (window.toolrail) and the long API documentation
  * are in the header of assets/editor-rail.js, the last of the rail's
@@ -39,9 +39,20 @@
   var SET_META_KEY = T.SET_META_KEY;
   var SETS_BUTTON_HIDDEN_KEY = T.SETS_BUTTON_HIDDEN_KEY;
   var SETS_TOOL_ID = T.SETS_TOOL_ID;
+  var TOOLBARS_BUTTON_HIDDEN_KEY = T.TOOLBARS_BUTTON_HIDDEN_KEY;
+  var TOOLBAR_LIST_TOOL_ID = T.TOOLBAR_LIST_TOOL_ID;
+  var ADD_TOOLS_TOOL_ID = T.ADD_TOOLS_TOOL_ID;
   var SHAPE_FILL = T.SHAPE_FILL;
   var readKey = T.readKey;
   var writeKey = T.writeKey;
+  var mainToolbar = T.mainToolbar;
+  var toolbarById = T.toolbarById;
+  var toolbarLabel = T.toolbarLabel;
+  var saveToolbars = T.saveToolbars;
+  var disarmedMessage = T.disarmedMessage;
+  var joinMessages = T.joinMessages;
+  var setToolbarHidden = T.setToolbarHidden;
+  var canvasNarrowMessage = T.canvasNarrowMessage;
   var ICONS = T.ICONS;
 
   // -------------------------------------------------------------------
@@ -206,7 +217,9 @@
     // tool must not be able to collide with them.
     // A registered 'saved-sets' would also get the Saved sets menu from
     // the rail's ArrowRight handler, which checks this id first.
-    var ids = ['settings', 'help', 'wide-toggle', SETS_TOOL_ID];
+    // The Toolbars button and an empty extra toolbar's "Add tools" button
+    // are chrome with a data-tool id too (#95).
+    var ids = ['settings', 'help', 'wide-toggle', SETS_TOOL_ID, TOOLBAR_LIST_TOOL_ID, ADD_TOOLS_TOOL_ID];
     BUILTIN_TOOLS.forEach(function (t) {
       ids.push(t.id);
       (t.children || []).forEach(function (c) { ids.push(c.id); });
@@ -274,7 +287,9 @@
     });
 
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    T.rerender();
+    // Every toolbar: a tool with a `parent` nests under that pin on each
+    // toolbar that shows it.
+    rerenderToolbars();
     return true;
   }
 
@@ -419,7 +434,19 @@
   // may run again from watchPersistenceAttach() if the persistence
   // layer's own attach lands late and wipes this pass.
 
-  function loadSlots() {
+  /**
+   * A toolbar's pinned slots, in rail order. Each toolbar has its own
+   * list, and the same slot can be on more than one toolbar (owner
+   * decision 2026-11-14, #95). The first toolbar's list is the SLOTS_KEY
+   * preference; an extra toolbar's list is in its record.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {string[]} Slot names. A copy.
+   */
+  function loadSlots(tb) {
+    if (tb !== mainToolbar) {
+      return tb.slots.slice();
+    }
     var raw = readKey(SLOTS_KEY);
     if (null === raw) {
       // Post-migration this means the author emptied the rail, which is a
@@ -441,74 +468,125 @@
    * hand over a list from a saved set or an imported file without cleaning
    * it first.
    *
-   * @param {Array} slots Slot names, in rail order.
+   * @param {Object} tb    The toolbar.
+   * @param {Array}  slots Slot names, in rail order.
    * @return {void}
    */
-  function saveSlots(slots) {
-    writeKey(SLOTS_KEY, JSON.stringify(normalizeSlots(slots)));
+  function saveSlots(tb, slots) {
+    if (tb === mainToolbar) {
+      writeKey(SLOTS_KEY, JSON.stringify(normalizeSlots(slots)));
+    } else {
+      tb.slots = normalizeSlots(slots);
+      saveToolbars();
+    }
   }
 
   /**
-   * Whether a slot name is currently pinned to the rail.
+   * Whether a slot name is pinned to one toolbar.
+   *
+   * @param {Object} tb        The toolbar.
+   * @param {string} blockName Block type or pattern slot name.
+   * @return {boolean} True when pinned there.
+   */
+  function isPinnedOn(tb, blockName) {
+    return loadSlots(tb).indexOf(blockName) !== -1;
+  }
+
+  /**
+   * Whether a slot name is pinned to a toolbar the author can see: the
+   * first toolbar or a SHOWN extra toolbar. A hidden toolbar's pins do not
+   * count (owner decision 2026-11-16, D4): the block menu then offers
+   * "Pin to toolbar", and a pin made there goes to the first toolbar. The
+   * hidden toolbar keeps its own pin.
    *
    * @param {string} blockName Block type or pattern slot name.
-   * @return {boolean} True when pinned.
+   * @return {boolean} True when pinned on a shown toolbar.
    */
   function isPinned(blockName) {
-    return loadSlots().indexOf(blockName) !== -1;
+    return T.toolbars.some(function (tb) {
+      return !tb.hidden && isPinnedOn(tb, blockName);
+    });
   }
 
   /**
-   * Pin a slot to the end of the rail, then rebuild. A no-op for an empty
-   * name or one already pinned.
+   * Whether a slot name is pinned to any toolbar, shown or hidden. A
+   * pin's own name, description, icon and extension data belong to the
+   * slot name, so they exist for as long as this is true: hiding a
+   * toolbar must not cost its pins their labels.
    *
+   * @param {string} blockName Block type or pattern slot name.
+   * @return {boolean} True when pinned anywhere.
+   */
+  function isPinnedAnywhere(blockName) {
+    return T.toolbars.some(function (tb) {
+      return isPinnedOn(tb, blockName);
+    });
+  }
+
+  /**
+   * Pin a slot to the end of a toolbar, then rebuild it. A no-op for an
+   * empty name or one already pinned to that toolbar.
+   *
+   * @param {Object} tb        The toolbar.
    * @param {string} blockName Block type or pattern slot name.
    * @return {boolean} True when the rail changed.
    */
-  function pinBlock(blockName) {
+  function pinBlock(tb, blockName) {
     if (typeof blockName !== 'string' || blockName === '') {
       return false;
     }
-    var slots = loadSlots();
+    var slots = loadSlots(tb);
     if (slots.indexOf(blockName) !== -1) {
       return false;
     }
     slots.push(blockName);
-    saveSlots(slots);
+    saveSlots(tb, slots);
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    T.rerender();
+    T.rerender(tb);
+    rerenderMainForParents(tb);
     return true;
   }
 
   /**
-   * Unpin a slot and rebuild. The author's metadata and any extension data
-   * go with it, so a later re-pin starts clean.
+   * Unpin a slot from a toolbar and rebuild it. The author's metadata and
+   * any extension data go with the LAST copy of the pin, so a later
+   * re-pin starts clean.
    *
+   * @param {Object} tb        The toolbar.
    * @param {string} blockName Block type or pattern slot name.
    * @return {boolean} True when the rail changed.
    */
-  function unpinBlock(blockName) {
-    var slots = loadSlots();
+  function unpinBlock(tb, blockName) {
+    var slots = loadSlots(tb);
     var idx = slots.indexOf(blockName);
     if (idx === -1) {
       return false;
     }
     slots.splice(idx, 1);
-    saveSlots(slots);
+    saveSlots(tb, slots);
     // The author's name/description/icon for this pin, and any extension
     // data on it, go with it: a later re-pin is a fresh tool, and the map
-    // only ever describes tools the author has.
-    if (clearPinMeta(blockName)) {
+    // only ever describes tools the author has. A different toolbar that
+    // still shows the pin keeps them.
+    if (!isPinnedAnywhere(blockName) && clearPinMeta(blockName)) {
       announcePinMetaChange(blockName);
     }
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    T.rerender();
+    T.rerender(tb);
+    rerenderMainForParents(tb);
     return true;
   }
 
-  /** Move a pinned slot up (-1) or down (+1) in the rail order. */
-  function moveSlot(blockName, delta) {
-    var slots = loadSlots();
+  /**
+   * Move a pinned slot up (-1) or down (+1) in a toolbar's order.
+   *
+   * @param {Object} tb        The toolbar.
+   * @param {string} blockName Block type or pattern slot name.
+   * @param {number} delta     -1 or 1.
+   * @return {boolean} True when the slot moved.
+   */
+  function moveSlot(tb, blockName, delta) {
+    var slots = loadSlots(tb);
     var idx = slots.indexOf(blockName);
     var to = idx + delta;
     if (idx === -1 || to < 0 || to >= slots.length) {
@@ -516,10 +594,69 @@
     }
     slots.splice(idx, 1);
     slots.splice(to, 0, blockName);
-    saveSlots(slots);
+    saveSlots(tb, slots);
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    T.rerender();
+    T.rerender(tb);
     return true;
+  }
+
+  /**
+   * The public call's toolbar: the first toolbar when the caller names
+   * none, so every call an extension made before #95 means what it meant.
+   *
+   * @param {*} id A toolbar id, or nothing.
+   * @return {Object|null} The toolbar; null for an id that is not there.
+   */
+  function apiToolbar(id) {
+    return id === undefined || id === null ? mainToolbar : toolbarById(String(id));
+  }
+
+  /**
+   * Unpin a slot from every toolbar that shows it, so isPinned() is false
+   * afterwards. The block menu's "Unpin from toolbar" shows exactly when
+   * isPinned() is true, so its action must reach a pin that only an
+   * extra toolbar shows (#95). A HIDDEN toolbar keeps its pin: its pins do
+   * not count for isPinned() (owner decision 2026-11-16, D4).
+   *
+   * @param {string} blockName Block type or pattern slot name.
+   * @return {boolean} True when a toolbar changed.
+   */
+  function unpinEverywhere(blockName) {
+    var changed = false;
+    T.toolbars.slice().forEach(function (tb) {
+      if (!tb.hidden && unpinBlock(tb, blockName)) {
+        changed = true;
+      }
+    });
+    return changed;
+  }
+
+  /**
+   * Rebuild every shown toolbar's rail. For a change that is not one
+   * toolbar's: the tool registry, the pattern catalog, a pin's own name
+   * or icon (the same pin can be on two toolbars).
+   *
+   * @return {void}
+   */
+  function rerenderToolbars() {
+    T.toolbars.forEach(T.rerender);
+  }
+
+  /**
+   * After the pins of an extra toolbar change, rebuild the first toolbar
+   * when a provider tool names a parent. Such a tool sits under its
+   * parent pin wherever that pin is, and at the first toolbar's top level
+   * when no toolbar has the pin (railModel), so the first toolbar's
+   * contents depend on the other toolbars' pins (#95).
+   *
+   * @param {Object|null} tb The toolbar whose pins changed; null when
+   *                         the stored list changed (any toolbar).
+   * @return {void}
+   */
+  function rerenderMainForParents(tb) {
+    if (tb !== mainToolbar && registered.some(function (t) { return !!t.parent; })) {
+      T.rerender(mainToolbar);
+    }
   }
 
   // -------------------------------------------------------------------
@@ -818,7 +955,7 @@ var DASHICON_NAMES = [
    * tag and Reset button key off it). A copy: editing it changes nothing.
    */
   function getPinMeta(blockName) {
-    if (!isPinned(blockName)) {
+    if (!isPinnedAnywhere(blockName)) {
       return null;
     }
     var map = loadPinMeta();
@@ -842,7 +979,7 @@ var DASHICON_NAMES = [
    * @return {boolean} Whether the slot is pinned and the change was made.
    */
   function setPinMeta(blockName, meta) {
-    if (!isPinned(blockName)) {
+    if (!isPinnedAnywhere(blockName)) {
       return false;
     }
     var map = loadPinMeta();
@@ -862,7 +999,7 @@ var DASHICON_NAMES = [
     persistPinMeta(map);
     announcePinMetaChange(blockName);
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    T.rerender();
+    rerenderToolbars();
     return true;
   }
 
@@ -876,7 +1013,7 @@ var DASHICON_NAMES = [
    * @return {*} The stored JSON value, or null.
    */
   function getPinData(blockName, namespace) {
-    if (typeof namespace !== 'string' || !PIN_DATA_NAMESPACE.test(namespace) || !isPinned(blockName)) {
+    if (typeof namespace !== 'string' || !PIN_DATA_NAMESPACE.test(namespace) || !isPinnedAnywhere(blockName)) {
       return null;
     }
     var map = loadPinMeta();
@@ -908,7 +1045,7 @@ var DASHICON_NAMES = [
    * @return {boolean} Whether the change was accepted and written.
    */
   function setPinData(blockName, namespace, data) {
-    if (!isPinned(blockName) || typeof namespace !== 'string' || !PIN_DATA_NAMESPACE.test(namespace)) {
+    if (!isPinnedAnywhere(blockName) || typeof namespace !== 'string' || !PIN_DATA_NAMESPACE.test(namespace)) {
       return false;
     }
     var map = loadPinMeta();
@@ -1069,15 +1206,19 @@ var DASHICON_NAMES = [
    * of the labels those pins carry right now — so restoring the set later
    * restores what the author saw, not just which blocks were on the rail.
    *
+   * A set is a snapshot of ONE toolbar's pins. It keeps no link to the
+   * toolbar it came from, so it loads into any toolbar (#95).
+   *
    * @param {string} name Set name; trimmed, and refused when empty.
+   * @param {Object} tb   The toolbar whose pins are saved.
    * @return {boolean} True when saved.
    */
-  function saveConfig(name) {
+  function saveConfig(name, tb) {
     if (typeof name !== 'string' || name.trim() === '') {
       return false;
     }
     var map = loadConfigs();
-    var slots = loadSlots();
+    var slots = loadSlots(tb);
     map[name.trim()] = slots;
     persistConfigs(map);
     // The set carries the labels its pins have right now (Pin metadata).
@@ -1092,25 +1233,44 @@ var DASHICON_NAMES = [
    * namespace so a namespace added since the set was saved survives.
    *
    * @param {string} name Set name.
+   * @param {Object} tb   The toolbar the set is loaded into.
    * @return {boolean} True when the set existed and was applied.
    */
-  function loadConfig(name) {
+  function loadConfig(name, tb) {
     var map = loadConfigs();
     if (!Object.prototype.hasOwnProperty.call(map, name) || !Array.isArray(map[name])) {
       return false;
     }
+    applySet(map[name], loadConfigMeta()[name], tb);
+    return true;
+  }
+
+  /**
+   * Put one set on a toolbar: what loadConfig() does for a saved set, and
+   * what a shared set's load does with its copy (#98), so the two can
+   * never differ. A set is a snapshot loaded INTO a toolbar (#95): only
+   * that toolbar's pins change.
+   *
+   * @param {Array}       blocks The set's slots, in rail order.
+   * @param {Object|null} labels The set's label snapshot (normalizeSetMeta
+   *                             output), or null/undefined for none.
+   * @param {Object}      tb     The toolbar the set is loaded into.
+   * @return {void}
+   */
+  function applySet(blocks, labels, tb) {
     // saveSlots normalizes: a set stored by an older build, hand-edited,
     // or imported from a file can carry duplicates and non-strings.
-    saveSlots(map[name]);
-    var pinned = loadSlots();
+    saveSlots(tb, blocks);
+    var pinned = loadSlots(tb);
     var pinMeta = loadPinMeta();
     var changed = [];
     // Loading a set UNPINS every slot it does not name, and an unpinned
     // slot keeps no entry — the same rule unpinBlock applies — or a
     // re-pin months later would come up with stale labels and stale
-    // extension data (PR review 2026-09-05, finding 2).
+    // extension data (PR review 2026-09-05, finding 2). A slot that a
+    // different toolbar still shows is still pinned, and keeps its entry.
     Object.keys(pinMeta).forEach(function (slot) {
-      if (pinned.indexOf(slot) === -1) {
+      if (!isPinnedAnywhere(slot)) {
         delete pinMeta[slot];
         changed.push(slot);
       }
@@ -1120,7 +1280,6 @@ var DASHICON_NAMES = [
     // data merges per namespace, so a namespace the snapshot never saw
     // (an extension installed since the set was saved) is kept rather
     // than dropped. Slots the snapshot does not name keep what they have.
-    var labels = loadConfigMeta()[name];
     if (labels) {
       Object.keys(labels).forEach(function (slot) {
         if (pinned.indexOf(slot) === -1) {
@@ -1153,8 +1312,8 @@ var DASHICON_NAMES = [
       changed.forEach(announcePinMetaChange);
     }
     window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-    T.rerender();
-    return true;
+    // The set's labels land on its pins wherever they show.
+    rerenderToolbars();
   }
 
   /**
@@ -1191,7 +1350,8 @@ var DASHICON_NAMES = [
    * @return {string} The set name, or '' when no set matches.
    */
   function currentConfigName() {
-    var current = JSON.stringify(loadSlots());
+    // The Saved sets button is on the first toolbar and loads into it.
+    var current = JSON.stringify(loadSlots(mainToolbar));
     var map = loadConfigs();
     var names = Object.keys(map);
     for (var i = 0; i < names.length; i++) {
@@ -1203,14 +1363,39 @@ var DASHICON_NAMES = [
   }
 
   /**
+   * The Saved sets menu item that matches the rail now: the user's own set
+   * from currentConfigName() first, then the first listed shared set (#98)
+   * with the same slots. One item at most, as the menu promises.
+   *
+   * @return {string} The item's id, or '' when nothing matches.
+   */
+  function currentSetMenuId() {
+    var own = currentConfigName();
+    if (own) {
+      return SETS_TOOL_ID + ':' + own;
+    }
+    // The menu is on the first toolbar and loads into it (#95).
+    var current = JSON.stringify(loadSlots(mainToolbar));
+    var listed = listedSharedSets();
+    for (var i = 0; i < listed.length; i++) {
+      if (JSON.stringify(listed[i].blocks) === current) {
+        return SETS_TOOL_ID + '-shared-' + listed[i].id;
+      }
+    }
+    return '';
+  }
+
+  /**
    * Whether the rail shows the Saved sets button: the author has at
-   * least one saved set and has not hidden the button in Toolbar
-   * settings. With no set the menu would have nothing to switch to.
+   * least one saved set, or another user shares one (#98), and has not
+   * hidden the button in Toolbar settings. With no set the menu would
+   * have nothing to switch to.
    *
    * @return {boolean}
    */
   function isSetsButtonShown() {
-    return readKey(SETS_BUTTON_HIDDEN_KEY) !== '1' && Object.keys(loadConfigs()).length > 0;
+    return readKey(SETS_BUTTON_HIDDEN_KEY) !== '1'
+      && (Object.keys(loadConfigs()).length > 0 || listedSharedSets().length > 0);
   }
 
   /**
@@ -1226,7 +1411,7 @@ var DASHICON_NAMES = [
    * @return {boolean} True when the rail was rebuilt.
    */
   function reconcileSetsButton() {
-    var rail = document.getElementById('toolrail-rail');
+    var rail = document.getElementById(mainToolbar.railId);
     if (!rail) {
       return false;
     }
@@ -1234,7 +1419,7 @@ var DASHICON_NAMES = [
     if (rendered === isSetsButtonShown()) {
       return false;
     }
-    T.rerender();
+    T.rerender(mainToolbar);
     return true;
   }
 
@@ -1243,10 +1428,34 @@ var DASHICON_NAMES = [
    * and the Saved sets menu so both say the same thing.
    *
    * @param {string} name Set name.
+   * @param {Object} tb   The toolbar the set was loaded into.
    * @return {string} The message.
    */
-  function configLoadedMessage(name) {
-    var missing = T.missingBlockCount(loadSlots());
+  function configLoadedMessage(name, tb) {
+    var missing = T.missingBlockCount(loadSlots(tb));
+    // An extra toolbar is named, so the author hears which toolbar the
+    // set went into (#95). The first toolbar's messages are as before.
+    if (tb !== mainToolbar) {
+      return missing > 0
+        ? sprintf(
+          /* translators: 1: set name, 2: the toolbar's name, 3: count of unavailable blocks. */
+          _n(
+            'Loaded "%1$s" into the %2$s toolbar. %3$d pinned block is not available on this site and stays hidden until its plugin or theme is active.',
+            'Loaded "%1$s" into the %2$s toolbar. %3$d pinned blocks are not available on this site and stay hidden until their plugin or theme is active.',
+            missing,
+            'editrail'
+          ),
+          name,
+          tb.name,
+          missing
+        )
+        : sprintf(
+          /* translators: 1: set name, 2: the toolbar's name. */
+          __('Loaded "%1$s" into the %2$s toolbar.', 'editrail'),
+          name,
+          tb.name
+        );
+    }
     if (missing > 0) {
       return sprintf(
         /* translators: 1: set name, 2: count of unavailable blocks. */
@@ -1283,8 +1492,8 @@ var DASHICON_NAMES = [
    * @return {void}
    */
   function loadConfigFromMenu(name) {
-    if (loadConfig(name)) {
-      speak(configLoadedMessage(name));
+    if (loadConfig(name, mainToolbar)) {
+      speak(configLoadedMessage(name, mainToolbar));
     } else {
       // Deleted in another tab since the menu opened.
       speak(sprintf(
@@ -1293,7 +1502,18 @@ var DASHICON_NAMES = [
         name
       ));
     }
-    var btn = document.querySelector('#toolrail-rail ' + toolSelector(SETS_TOOL_ID)) || T.gearButton();
+    focusSetsButton();
+  }
+
+  /**
+   * Focus the rebuilt Saved sets button after a load from its menu, or
+   * Toolbar settings when the rebuilt rail has none (see
+   * loadConfigFromMenu). The button is on the first toolbar (#95).
+   *
+   * @return {void}
+   */
+  function focusSetsButton() {
+    var btn = document.querySelector('#' + mainToolbar.railId + ' ' + toolSelector(SETS_TOOL_ID)) || T.gearButton();
     if (btn) {
       btn.focus();
     }
@@ -1304,7 +1524,8 @@ var DASHICON_NAMES = [
    * GETTER, read from storage on every access: the flyout reads them when
    * it opens, so a set saved, deleted or imported since the rail was
    * built shows without a rebuild, and the checked item follows the
-   * current pins.
+   * current pins. The author's own sets come first, then the sets other
+   * users share (#98), each named with who shared it.
    *
    * @param {HTMLElement} wrapper The rail region (for the settings dialog).
    * @return {Object} The tool descriptor.
@@ -1319,18 +1540,40 @@ var DASHICON_NAMES = [
     Object.defineProperty(tool, 'children', {
       enumerable: true,
       get: function () {
-        var current = currentConfigName();
+        var current = currentSetMenuId();
         var items = Object.keys(loadConfigs()).map(function (name) {
+          var id = SETS_TOOL_ID + ':' + name;
           return {
-            id: SETS_TOOL_ID + ':' + name,
-            label: name,
+            id: id,
+            // Text, never a mark alone: the author shares this set.
+            label: ownSharedCopy(name)
+              ? sprintf(
+                /* translators: %s: set name. */
+                __('%s (shared)', 'editrail'),
+                name
+              )
+              : name,
             radio: true,
-            checked: name === current,
+            checked: id === current,
             supports: { canvas: false },
             onActivate: function () {
               loadConfigFromMenu(name);
             }
           };
+        });
+        listedSharedSets().forEach(function (item) {
+          // '-shared-' not ':', so no set name can produce this id.
+          var sharedId = SETS_TOOL_ID + '-shared-' + item.id;
+          items.push({
+            id: sharedId,
+            label: sharedSetMenuLabel(item),
+            radio: true,
+            checked: sharedId === current,
+            supports: { canvas: false },
+            onActivate: function () {
+              loadSharedSetFromMenu(item.id);
+            }
+          });
         });
         items.push({
           // '-' not ':', so no set name can produce this id.
@@ -1346,6 +1589,803 @@ var DASHICON_NAMES = [
       }
     });
     return tool;
+  }
+
+  // The Toolbars button (#95) is the Saved sets button's sibling and is
+  // built the same way: rail chrome in the first toolbar's tail, a
+  // container tool whose children are read on every open.
+
+  /**
+   * Whether the first toolbar shows the Toolbars button: the author has
+   * an extra toolbar and has not hidden the button in Toolbar settings.
+   * With no extra toolbar the menu would have nothing to show or hide.
+   *
+   * @return {boolean}
+   */
+  function isToolbarsButtonShown() {
+    return T.toolbars.length > 1 && readKey(TOOLBARS_BUTTON_HIDDEN_KEY) !== '1';
+  }
+
+  /**
+   * Rebuild the first toolbar when the Toolbars button it shows no longer
+   * matches isToolbarsButtonShown(): the first extra toolbar adds the
+   * button and a delete of the last one removes it. The same compare of
+   * the rendered rail with the state as reconcileSetsButton().
+   *
+   * @return {boolean} True when the rail was rebuilt.
+   */
+  function reconcileToolbarsButton() {
+    var rail = document.getElementById(mainToolbar.railId);
+    if (!rail) {
+      return false;
+    }
+    var rendered = !!rail.querySelector(toolSelector(TOOLBAR_LIST_TOOL_ID));
+    if (rendered === isToolbarsButtonShown()) {
+      return false;
+    }
+    T.rerender(mainToolbar);
+    return true;
+  }
+
+  /**
+   * Show or hide a toolbar from the Toolbars menu, say what happened, and
+   * put focus back on the Toolbars button. The flyout closed before this
+   * ran, without a refocus (an action item may move focus itself), so
+   * without this the focus would fall to the page body.
+   *
+   * @param {string} id The toolbar's id.
+   * @return {void}
+   */
+  function toggleToolbarFromMenu(id) {
+    var tb = toolbarById(id);
+    if (tb && tb !== mainToolbar) {
+      var result = setToolbarHidden(tb, !tb.hidden);
+      // ONE speak() with every fact: a second call in the same task
+      // replaces the first (review 2026-11-16, finding 2).
+      speak(joinMessages([
+        toolbarShownMessage(tb),
+        result && result.disarmed ? disarmedMessage() : '',
+        tb.hidden ? '' : canvasNarrowMessage()
+      ]));
+    }
+    var rail = document.getElementById(mainToolbar.railId);
+    var btn = (rail && rail.querySelector(toolSelector(TOOLBAR_LIST_TOOL_ID))) || T.gearButton();
+    if (btn) {
+      btn.focus();
+    }
+  }
+
+  /**
+   * The outcome text for a show or hide, shared by the Toolbars menu and
+   * the checkbox in Toolbar settings so both say the same thing.
+   *
+   * @param {Object} tb An extra toolbar.
+   * @return {string} The message.
+   */
+  function toolbarShownMessage(tb) {
+    return sprintf(
+      tb.hidden
+        /* translators: %s: the toolbar's name. */
+        ? __('The %s toolbar is hidden.', 'editrail')
+        /* translators: %s: the toolbar's name. */
+        : __('The %s toolbar is shown.', 'editrail'),
+      tb.name
+    );
+  }
+
+  /**
+   * The Toolbars button as a rail tool descriptor. Each extra toolbar is
+   * a child with onActivate and isActive, which the flyout draws as a
+   * menuitemcheckbox: checked means shown. The children are a GETTER, for
+   * the same reason as the Saved sets menu's.
+   *
+   * @return {Object} The tool descriptor.
+   */
+  function toolbarsMenuTool() {
+    var tool = {
+      id: TOOLBAR_LIST_TOOL_ID,
+      label: __('Toolbars', 'editrail'),
+      shortLabel: __('Toolbars', 'editrail'),
+      icon: ICONS.toolbars
+    };
+    Object.defineProperty(tool, 'children', {
+      enumerable: true,
+      get: function () {
+        var items = T.toolbars.slice(1).map(function (tb) {
+          return {
+            id: TOOLBAR_LIST_TOOL_ID + ':' + tb.id,
+            label: tb.name,
+            supports: { canvas: false },
+            isActive: function () {
+              return !tb.hidden;
+            },
+            onActivate: function () {
+              toggleToolbarFromMenu(tb.id);
+            }
+          };
+        });
+        items.push({
+          // '-' not ':', so no toolbar id can produce this id.
+          id: TOOLBAR_LIST_TOOL_ID + '-settings',
+          label: __('Add or change toolbars…', 'editrail'),
+          separatorBefore: true,
+          supports: { canvas: false },
+          onActivate: function () {
+            // At the toolbar chooser, which leads the toolbar sections.
+            T.openSettingsFor(T.settingsToolbar(), '#toolrail-settings-toolbar');
+          }
+        });
+        return items;
+      }
+    });
+    return tool;
+  }
+
+  // -------------------------------------------------------------------
+  // Shared sets (#98). An author can share one of their saved sets with
+  // the other users of this site; every user who can edit posts sees the
+  // shared sets in Toolbar settings and in the Saved sets menu, marked as
+  // shared and named with who shared them, and can load or export them.
+  //
+  // The server keeps each shared set as a COPY in the set file format,
+  // one per author and set name (includes/shared-sets.php, which also
+  // decides who may share, read and stop sharing). A load applies that
+  // copy exactly as Load applies the user's own set (applySet), with the
+  // same message, and links nothing: the user's pins do not follow later
+  // changes. The author's own set and its shared copy are also separate:
+  // a change reaches other users only when the author shares the set
+  // again, which replaces the copy in place.
+  //
+  // Nothing here waits on the network. The list arrives once after boot
+  // and again each time Toolbar settings opens. Until it arrives, and
+  // whenever a request fails (no capability, offline, a server error),
+  // the rail and the dialog are exactly what they are without the
+  // feature. Set names and display names come from OTHER users, so they
+  // reach the DOM only through textContent and attribute values, never
+  // as markup.
+  // -------------------------------------------------------------------
+
+  var SHARED_SETS_PATH = '/editrail/v1/sets';
+  // The last list the server sent, normalized (normalizeSharedSet),
+  // oldest share first. A failed request keeps it.
+  var sharedSets = [];
+  // Whether the server says this user may share (publish_posts). False
+  // until the list arrives, so no Share button shows before then.
+  var canShareSets = false;
+  // The list request in flight, so a second caller joins it.
+  var sharedSetsRequest = null;
+  // A share or stop-sharing request is in flight. One at a time: a second
+  // press while the first is out does nothing.
+  var sharedSetBusy = false;
+
+  /**
+   * Whether wp.apiFetch is there. The rail declares it as a dependency,
+   * but a context without it must still boot.
+   *
+   * @return {boolean}
+   */
+  function canFetchSharedSets() {
+    return !!(wp.apiFetch && typeof wp.apiFetch === 'function');
+  }
+
+  /**
+   * Whether a string is a slot a set may hold: a block name or a pattern
+   * slot. The one grammar for a set file (importConfigPayload) and a
+   * shared set; includes/shared-sets.php applies the same one.
+   *
+   * @param {*} name Candidate slot.
+   * @return {boolean}
+   */
+  function isSetSlotName(name) {
+    return typeof name === 'string' && (T.BLOCK_NAME_PATTERN.test(name) || PATTERN_SLOT_PATTERN.test(name));
+  }
+
+  /**
+   * One list entry from the server, checked again here: the server
+   * validates, but this is what the rail renders and loads. `set` is the
+   * set file's JSON as text.
+   *
+   * @param {*} raw One entry of the response's `sets`.
+   * @return {Object|null} {id, name, blocks, labels, author, mine,
+   *                       canDelete}, or null when it is not a set.
+   */
+  function normalizeSharedSet(raw) {
+    if (!raw || typeof raw !== 'object' || typeof raw.set !== 'string') {
+      return null;
+    }
+    var id = typeof raw.id === 'number' && raw.id > 0 && Math.floor(raw.id) === raw.id ? raw.id : 0;
+    var parsed;
+    try {
+      parsed = JSON.parse(raw.set);
+    } catch (e) {
+      return null;
+    }
+    if (!id || !parsed || typeof parsed !== 'object' || !Array.isArray(parsed.blocks)
+      || typeof parsed.name !== 'string' || parsed.name.trim() === '') {
+      return null;
+    }
+    var blocks = normalizeSlots(parsed.blocks.filter(isSetSlotName));
+    return {
+      id: id,
+      name: parsed.name,
+      blocks: blocks,
+      labels: normalizeSetMeta(parsed.meta, blocks),
+      author: typeof raw.author === 'string' ? raw.author : '',
+      mine: raw.mine === true,
+      canDelete: raw.can_delete === true
+    };
+  }
+
+  /**
+   * A comparable form of a list, so a refresh that brings nothing new
+   * rebuilds nothing.
+   *
+   * @param {Array} list Normalized entries.
+   * @return {string}
+   */
+  function sharedSetsSignature(list) {
+    return JSON.stringify(list.map(function (item) {
+      return [item.id, item.name, item.blocks, item.labels, item.author, item.mine, item.canDelete];
+    }));
+  }
+
+  /**
+   * Take a list response: keep it, and when it changed what the user can
+   * see, add or remove the Saved sets button and redraw an open dialog.
+   *
+   * @param {*} body The response body: {can_share, sets}.
+   * @return {void}
+   */
+  function receiveSharedSets(body) {
+    var list = body && Array.isArray(body.sets)
+      ? body.sets.map(normalizeSharedSet).filter(Boolean)
+      : [];
+    var share = !!(body && body.can_share === true);
+    var changed = share !== canShareSets || sharedSetsSignature(list) !== sharedSetsSignature(sharedSets);
+    sharedSets = list;
+    canShareSets = share;
+    if (changed) {
+      reconcileSetsButton();
+      // Redraw an open dialog, but not from under the author: the redraw
+      // can hand focus back only to a control that has an id, and the row
+      // buttons (Load, Export, Unpin, the arrows) have none, so focus would
+      // jump to the search field. This list arrives on its own, a moment
+      // after the dialog opens; an author who is already on a row button
+      // keeps it, and the dialog shows the new list at its next redraw
+      // (any action in it) or when it opens again. A stale row still acts
+      // on its own copy, and a set that is gone answers "no longer shared".
+      var focused = document.activeElement;
+      var dialog = T.settingsOpen ? T.settingsNode() : null;
+      if (dialog && !(focused && dialog.contains(focused) && !focused.id)) {
+        T.refreshSettings();
+      }
+    }
+  }
+
+  /**
+   * Ask the server for the list. Never throws and never rejects: a failed
+   * request keeps the last list, and the rail goes on as it is.
+   *
+   * @return {Promise|null} Settles when the list is in, or null when
+   *                        apiFetch is not there.
+   */
+  function refreshSharedSets() {
+    if (!canFetchSharedSets()) {
+      return null;
+    }
+    if (sharedSetsRequest) {
+      return sharedSetsRequest;
+    }
+    try {
+      sharedSetsRequest = wp.apiFetch({ path: SHARED_SETS_PATH }).then(function (body) {
+        sharedSetsRequest = null;
+        receiveSharedSets(body);
+      }, function () {
+        sharedSetsRequest = null;
+      });
+    } catch (e) {
+      sharedSetsRequest = null;
+    }
+    return sharedSetsRequest;
+  }
+
+  /**
+   * The current user's own shared copy of one of their sets, or null.
+   *
+   * @param {string} name Set name.
+   * @return {Object|null}
+   */
+  function ownSharedCopy(name) {
+    for (var i = 0; i < sharedSets.length; i++) {
+      if (sharedSets[i].mine && sharedSets[i].name === name) {
+        return sharedSets[i];
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The shared sets listed under "Shared sets" and in the menu: every one
+   * except the user's own copies of sets they still have, which their own
+   * set's row and menu item stand for. A copy whose own set the author has
+   * deleted is still listed, so it can be loaded or stopped.
+   *
+   * @return {Array} Normalized entries.
+   */
+  function listedSharedSets() {
+    var own = loadConfigs();
+    return sharedSets.filter(function (item) {
+      return !(item.mine && Object.prototype.hasOwnProperty.call(own, item.name));
+    });
+  }
+
+  /**
+   * One shared set by its ID, from the last list.
+   *
+   * @param {number} id Post ID.
+   * @return {Object|null}
+   */
+  function findSharedSet(id) {
+    for (var i = 0; i < sharedSets.length; i++) {
+      if (sharedSets[i].id === id) {
+        return sharedSets[i];
+      }
+    }
+    return null;
+  }
+
+  /**
+   * "Shared by <name>", the visible mark on a shared set.
+   *
+   * @param {Object} item A normalized entry.
+   * @return {string}
+   */
+  function sharedByText(item) {
+    if (item.mine) {
+      return __('Shared by you', 'editrail');
+    }
+    return item.author
+      ? sprintf(
+        /* translators: %s: display name of the user who shared the set. */
+        __('Shared by %s', 'editrail'),
+        item.author
+      )
+      : __('Shared by another user', 'editrail');
+  }
+
+  /**
+   * A shared set's menu item text: the name and who shared it, so a
+   * shared set and one of the user's own sets with the same name are two
+   * different items to a screen reader too.
+   *
+   * @param {Object} item A normalized entry.
+   * @return {string}
+   */
+  function sharedSetMenuLabel(item) {
+    if (item.mine) {
+      return sprintf(
+        /* translators: %s: set name. */
+        __('%s (shared by you)', 'editrail'),
+        item.name
+      );
+    }
+    return item.author
+      ? sprintf(
+        /* translators: 1: set name, 2: display name of the user who shared it. */
+        __('%1$s (shared by %2$s)', 'editrail'),
+        item.name,
+        item.author
+      )
+      : sprintf(
+        /* translators: %s: set name. */
+        __('%s (shared by another user)', 'editrail'),
+        item.name
+      );
+  }
+
+  /**
+   * "shared by <name>", lower case, for inside the accessible names of a
+   * shared set's buttons, after the set name.
+   *
+   * @param {Object} item A normalized entry.
+   * @return {string}
+   */
+  function sharedByPhrase(item) {
+    if (item.mine) {
+      return __('shared by you', 'editrail');
+    }
+    return item.author
+      ? sprintf(
+        /* translators: %s: display name of the user who shared the set. */
+        __('shared by %s', 'editrail'),
+        item.author
+      )
+      : __('shared by another user', 'editrail');
+  }
+
+  /**
+   * Load a shared set from the Saved sets menu: the same as
+   * loadConfigFromMenu() for one of the user's own sets, so it loads into
+   * the first toolbar, which has the menu (#95).
+   *
+   * @param {number} id Post ID.
+   * @return {void}
+   */
+  function loadSharedSetFromMenu(id) {
+    var item = findSharedSet(id);
+    if (item) {
+      applySet(item.blocks, item.labels, mainToolbar);
+      speak(configLoadedMessage(item.name, mainToolbar));
+    } else {
+      speak(__('That set is no longer shared.', 'editrail'));
+    }
+    focusSetsButton();
+  }
+
+  /**
+   * The set file payload of one of the user's own sets, as the server
+   * receives it on a share: the same object exportConfig() writes.
+   *
+   * @param {string} name Set name.
+   * @return {Object|null} Null when the set does not exist.
+   */
+  function ownSetPayload(name) {
+    var map = loadConfigs();
+    if (!Object.prototype.hasOwnProperty.call(map, name) || !Array.isArray(map[name])) {
+      return null;
+    }
+    return T.setFilePayload(name, map[name], loadConfigMeta()[name]);
+  }
+
+  /**
+   * Whether the author's own set differs from its shared copy, compared
+   * the way the server stores a set (valid slots, repeats collapsed,
+   * labels of the set's own slots), so "Share again" shows only when it
+   * would send something new.
+   *
+   * @param {string} name Set name.
+   * @param {Object} copy The shared copy (a normalized entry).
+   * @return {boolean}
+   */
+  function sharedCopyIsOlder(name, copy) {
+    var payload = ownSetPayload(name);
+    if (!payload) {
+      return false;
+    }
+    var blocks = normalizeSlots(payload.blocks.filter(isSetSlotName));
+    return JSON.stringify(blocks) !== JSON.stringify(copy.blocks)
+      || JSON.stringify(normalizeSetMeta(payload.meta, blocks)) !== JSON.stringify(copy.labels);
+  }
+
+  /**
+   * The text of a failed request, for the author: the server's own
+   * sentence when it sent one, else a general one.
+   *
+   * @param {*} err What apiFetch rejected with.
+   * @return {string}
+   */
+  function sharedSetErrorText(err) {
+    return err && typeof err.message === 'string' && err.message
+      ? err.message
+      : __('The server did not answer.', 'editrail');
+  }
+
+  /**
+   * Report the outcome of a share or stop-sharing request. The request is
+   * async, so the dialog can be closed by the time it settles; the same
+   * rule as reportImport(): an open dialog shows the message in its
+   * status line and speaks it, otherwise it is only spoken.
+   *
+   * @param {string}          message        Outcome text.
+   * @param {string|string[]} focusSelectors Where focus goes in the dialog.
+   * @return {void}
+   */
+  function reportSharedSet(message, focusSelectors) {
+    if (!T.settingsOpen || !T.settingsNode()) {
+      speak(message);
+      return;
+    }
+    T.settingsStatus = message;
+    T.refreshSettings(focusSelectors);
+  }
+
+  /**
+   * Put one entry from a share response into the list, replacing an entry
+   * with the same ID (a share again keeps its ID).
+   *
+   * @param {Object} item A normalized entry.
+   * @return {void}
+   */
+  function storeSharedSet(item) {
+    var next = sharedSets.filter(function (existing) {
+      return existing.id !== item.id;
+    });
+    next.push(item);
+    next.sort(function (a, b) {
+      return a.id - b.id;
+    });
+    sharedSets = next;
+  }
+
+  /**
+   * A selector prefix for one of the user's own set rows in the dialog,
+   * for a focus target after a rebuild. attrValue() escapes quotes and
+   * backslashes; a name from a set file can also hold a control
+   * character, which a CSS string must escape as a code point or the
+   * selector does not parse.
+   *
+   * @param {string} name Set name.
+   * @return {string} The selector prefix, with a trailing space.
+   */
+  function setRowSelector(name) {
+    // eslint-disable-next-line no-control-regex -- matching control characters is the point: each one is escaped.
+    var value = attrValue(name).replace(/[\u0000-\u001f\u007f]/g, function (c) {
+      return '\\' + c.charCodeAt(0).toString(16) + ' ';
+    });
+    return '.toolrail-settings-setrow[data-config="' + value + '"] ';
+  }
+
+  /**
+   * Send a share or stop-sharing request and mark it in flight. An
+   * apiFetch that throws instead of rejecting must not leave the flag set,
+   * or every later press would do nothing.
+   *
+   * @param {Object} options apiFetch options.
+   * @return {Promise|null} The request, or null when it could not start.
+   */
+  function sendSharedSetRequest(options) {
+    var request;
+    try {
+      request = wp.apiFetch(options);
+    } catch (e) {
+      return null;
+    }
+    if (!request || typeof request.then !== 'function') {
+      return null;
+    }
+    sharedSetBusy = true;
+    return request;
+  }
+
+  /**
+   * Share one of the user's own sets, or share it again. Focus stays in
+   * the set's row: on Stop sharing, which every shared row has.
+   *
+   * @param {string} name Set name.
+   * @return {void}
+   */
+  function shareConfig(name) {
+    var payload = ownSetPayload(name);
+    if (sharedSetBusy || !payload || !canFetchSharedSets()) {
+      return;
+    }
+    var again = !!ownSharedCopy(name);
+    var row = setRowSelector(name);
+    var request = sendSharedSetRequest({
+      path: SHARED_SETS_PATH,
+      method: 'POST',
+      data: { set: JSON.stringify(payload) }
+    });
+    if (!request) {
+      return;
+    }
+    request.then(function (body) {
+      sharedSetBusy = false;
+      var item = normalizeSharedSet(body);
+      if (item) {
+        storeSharedSet(item);
+        reconcileSetsButton();
+      }
+      reportSharedSet(again
+        ? sprintf(
+          /* translators: %s: set name. */
+          __('Shared the set "%s" again. Other users on this site now get this version.', 'editrail'),
+          name
+        )
+        : sprintf(
+          /* translators: %s: set name. */
+          __('Shared the set "%s". Other users on this site can now load it.', 'editrail'),
+          name
+        ), [row + '.toolrail-settings-unshare', row + '.toolrail-settings-share']);
+    }, function (err) {
+      sharedSetBusy = false;
+      reportSharedSet(sprintf(
+        /* translators: 1: set name, 2: the reason, a full sentence. */
+        __('The set "%1$s" was not shared. %2$s', 'editrail'),
+        name,
+        sharedSetErrorText(err)
+      ), [row + '.toolrail-settings-share', row + '.toolrail-settings-load']);
+    });
+  }
+
+  /**
+   * Stop sharing a set: the server deletes its shared copy. The user's own
+   * set, if they have one, stays.
+   *
+   * @param {Object}          item           The shared copy (normalized).
+   * @param {string|string[]} focusSelectors Where focus goes after the
+   *                                         dialog redraws.
+   * @return {void}
+   */
+  function unshareSet(item, focusSelectors) {
+    if (sharedSetBusy || !canFetchSharedSets()) {
+      return;
+    }
+    var forget = function () {
+      sharedSets = sharedSets.filter(function (existing) {
+        return existing.id !== item.id;
+      });
+      reconcileSetsButton();
+    };
+    var request = sendSharedSetRequest({
+      path: SHARED_SETS_PATH + '/' + item.id,
+      method: 'DELETE'
+    });
+    if (!request) {
+      return;
+    }
+    request.then(function () {
+      sharedSetBusy = false;
+      forget();
+      reportSharedSet(sprintf(
+        /* translators: %s: set name. */
+        __('Stopped sharing the set "%s".', 'editrail'),
+        item.name
+      ), focusSelectors);
+    }, function (err) {
+      sharedSetBusy = false;
+      // Gone already (another user or tab stopped it): say so, and drop it.
+      if (err && err.code === 'rest_post_invalid_id') {
+        forget();
+        reportSharedSet(sprintf(
+          /* translators: %s: set name. */
+          __('The set "%s" is no longer shared.', 'editrail'),
+          item.name
+        ), focusSelectors);
+        return;
+      }
+      reportSharedSet(sprintf(
+        /* translators: 1: set name, 2: the reason, a full sentence. */
+        __('The set "%1$s" is still shared. %2$s', 'editrail'),
+        item.name,
+        sharedSetErrorText(err)
+      ), focusSelectors);
+    });
+  }
+
+  /**
+   * The share controls for one of the user's own set rows in Toolbar
+   * settings: "Share" when the set is not shared and the user may share;
+   * "Share again" when the shared copy is older than the set; "Stop
+   * sharing" when the set is shared and the user may delete the copy.
+   * A user who can do none of these gets no control, so the row is what
+   * it was before #98.
+   *
+   * @param {string}      name Set name.
+   * @param {Object|null} copy The user's shared copy, or null.
+   * @return {Array<HTMLElement>} Buttons, in row order.
+   */
+  function ownSetShareControls(name, copy) {
+    var out = [];
+    var row = setRowSelector(name);
+    if (!copy && canShareSets) {
+      var share = T.settingsButton(__('Share', 'editrail'), function () {
+        shareConfig(name);
+      }, 'toolrail-settings-share');
+      share.setAttribute('aria-label', sprintf(
+        /* translators: %s: set name. */
+        __('Share the set %s with other users on this site', 'editrail'),
+        name
+      ));
+      out.push(share);
+    }
+    if (copy && canShareSets && sharedCopyIsOlder(name, copy)) {
+      var again = T.settingsButton(__('Share again', 'editrail'), function () {
+        shareConfig(name);
+      }, 'toolrail-settings-share');
+      again.setAttribute('aria-label', sprintf(
+        /* translators: %s: set name. */
+        __('Share again: replace the shared copy of the set %s with the set as it is now', 'editrail'),
+        name
+      ));
+      out.push(again);
+    }
+    if (copy && copy.canDelete) {
+      var stop = T.settingsButton(__('Stop sharing', 'editrail'), function () {
+        unshareSet(copy, [row + '.toolrail-settings-share', row + '.toolrail-settings-load']);
+      }, 'toolrail-settings-unshare');
+      stop.setAttribute('aria-label', sprintf(
+        /* translators: %s: set name. */
+        __('Stop sharing the set %s', 'editrail'),
+        name
+      ));
+      out.push(stop);
+    }
+    return out;
+  }
+
+  /**
+   * One row of the "Shared sets" list in Toolbar settings: the name, who
+   * shared it, Load, Export, and Stop sharing when the user may delete it.
+   * Every accessible name carries "shared by …", so this row and one of
+   * the user's own sets with the same name never sound the same.
+   *
+   * @param {Object} item      A normalized entry.
+   * @param {Array}  neighbors The IDs of the rows after and before this
+   *                           one, in that order: focus goes to the first
+   *                           that remains after a stop.
+   * @param {Object} tb        The toolbar chosen in the dialog: Load puts
+   *                           the set into it, as an own set's Load does
+   *                           (#95).
+   * @return {HTMLElement} The list item.
+   */
+  function buildSharedSetRow(item, neighbors, tb) {
+    var li = T.settingsRow('li', 'toolrail-settings-sharedrow');
+    li.dataset.sharedId = String(item.id);
+    var label = T.settingsRow('span', 'toolrail-settings-pinnedname');
+    label.textContent = item.name;
+    li.appendChild(label);
+    var tag = T.settingsRow('span', 'toolrail-settings-tag toolrail-settings-sharedby');
+    tag.textContent = sharedByText(item);
+    li.appendChild(tag);
+
+    var by = sharedByPhrase(item);
+    var load = T.settingsButton(__('Load', 'editrail'), function () {
+      // Into the chosen toolbar (#95), or the first one when a stored
+      // change deleted it while the dialog was open (PR #126 review).
+      var into = T.toolbars.indexOf(tb) === -1 ? mainToolbar : tb;
+      applySet(item.blocks, item.labels, into);
+      T.settingsStatus = configLoadedMessage(item.name, into);
+      T.refreshSettings('#toolrail-settings-search');
+    }, 'toolrail-settings-sharedload');
+    // With several toolbars the name says which one Load fills, as an own
+    // set's Load does.
+    load.setAttribute('aria-label', T.toolbars.length > 1
+      ? sprintf(
+        /* translators: 1: set name, 2: "shared by <name>", 3: the toolbar's name. */
+        __('Load the set %1$s, %2$s, into %3$s', 'editrail'),
+        item.name,
+        by,
+        toolbarLabel(tb)
+      )
+      : sprintf(
+        /* translators: 1: set name, 2: "shared by <name>". */
+        __('Load the set %1$s, %2$s', 'editrail'),
+        item.name,
+        by
+      ));
+    li.appendChild(load);
+
+    var exp = T.settingsButton(__('Export', 'editrail'), function () {
+      T.downloadSetFile(T.setFilePayload(item.name, item.blocks, item.labels));
+    }, 'toolrail-settings-sharedexport');
+    exp.setAttribute('aria-label', sprintf(
+      /* translators: 1: set name, 2: "shared by <name>". */
+      __('Export the set %1$s, %2$s, as a file', 'editrail'),
+      item.name,
+      by
+    ));
+    li.appendChild(exp);
+
+    if (item.canDelete) {
+      var stop = T.settingsButton(__('Stop sharing', 'editrail'), function () {
+        // The row goes: focus to the next row's Load, else the one
+        // before, else the set name field above the lists.
+        var targets = neighbors.map(function (id) {
+          return '.toolrail-settings-sharedrow[data-shared-id="' + id + '"] .toolrail-settings-sharedload';
+        });
+        targets.push('#toolrail-settings-setname');
+        unshareSet(item, targets);
+      }, 'toolrail-settings-unshare');
+      stop.setAttribute('aria-label', sprintf(
+        /* translators: 1: set name, 2: "shared by <name>". */
+        __('Stop sharing the set %1$s, %2$s', 'editrail'),
+        item.name,
+        by
+      ));
+      li.appendChild(stop);
+    }
+    return li;
   }
 
   // -------------------------------------------------------------------
@@ -1618,11 +2658,14 @@ var DASHICON_NAMES = [
           // open settings search (its results) can change with the
           // catalog; anything else would be a rebuild for nothing, and
           // a rebuild moves focus when it was in the rail.
-          if (!loadSlots().some(isPatternSlot) && !T.settingsOpen) {
+          var pinsPattern = T.toolbars.some(function (tb) {
+            return loadSlots(tb).some(isPatternSlot);
+          });
+          if (!pinsPattern && !T.settingsOpen) {
             return;
           }
           window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-          T.rerender();
+          rerenderToolbars();
           if (T.settingsOpen) {
             T.refreshSettings('#toolrail-settings-search');
           }
@@ -1639,12 +2682,15 @@ var DASHICON_NAMES = [
    * deactivated) and patterns this site has not got — or has not fetched
    * yet — are SKIPPED, not deleted: reactivating, or the fetch landing,
    * restores them.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {Object[]} Its pinned slots as tool descriptors.
    */
-  function slotTools() {
+  function slotTools(tb) {
     // One parse of the metadata map per rebuild, not one per slot: the
     // rail rebuilds on every slot change and on every settings click.
     var metaMap = loadPinMeta();
-    return loadSlots().map(function (name) {
+    return loadSlots(tb).map(function (name) {
       if (isPatternSlot(name)) {
         var pattern = findPattern(name);
         if (!pattern) {
@@ -1752,9 +2798,19 @@ var DASHICON_NAMES = [
    * their flyouts), pinned slots, then registered top-level tools. Tools
    * whose `parent` names a built-in or registered top-level tool nest there;
    * an unknown parent falls back to top level rather than vanishing.
+   *
+   * That is the FIRST toolbar's model. An extra toolbar's model is its
+   * pinned slots alone: the built-in tools and the top-level provider
+   * tools are on the first toolbar only (owner decision 2026-11-14, #95).
+   * A provider tool whose `parent` is a pinned slot nests under that slot
+   * on each toolbar that shows it.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {Object} {tools, slots}.
    */
-  function railModel() {
-    var topLevel = BUILTIN_TOOLS.filter(function (t) {
+  function railModel(tb) {
+    var first = tb === mainToolbar;
+    var topLevel = (first ? BUILTIN_TOOLS : []).filter(function (t) {
       return !t.shelved;
     }).map(function (t) {
       return {
@@ -1775,9 +2831,12 @@ var DASHICON_NAMES = [
       };
     });
 
-    var slots = slotTools();
+    var slots = slotTools(tb);
 
     registered.forEach(function (t) {
+      if (!first && !(t.parent && slotForParent(slots, t.parent))) {
+        return;
+      }
       if (t.parent) {
         var host = null;
         topLevel.forEach(function (candidate) {
@@ -1792,6 +2851,16 @@ var DASHICON_NAMES = [
         }
         if (host) {
           host.children.push(t);
+          return;
+        }
+        // The parent can be a pin that only an extra toolbar shows. The
+        // tool is in that pin's flyout there, so it is not unknown. That
+        // holds while the toolbar is hidden too: the tool hides with its
+        // parent, and does not move to the first toolbar.
+        var elsewhere = T.toolbars.some(function (other) {
+          return other !== mainToolbar && !!slotForParent(slotTools(other), t.parent);
+        });
+        if (elsewhere) {
           return;
         }
         warn('tool "' + t.id + '" names unknown parent "' + t.parent + '" — rendering at top level.');
@@ -1815,6 +2884,25 @@ var DASHICON_NAMES = [
   }
 
   /**
+   * One top-level tool or pin of ONE toolbar's model, by id: the entry
+   * that toolbar's button was built from, with that toolbar's flyout.
+   *
+   * @param {Object} tb The toolbar.
+   * @param {string} id Tool id.
+   * @return {Object|null} The model entry, or null.
+   */
+  function modelTool(tb, id) {
+    var model = railModel(tb);
+    var all = model.tools.concat(model.slots);
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].id === id) {
+        return all[i];
+      }
+    }
+    return null;
+  }
+
+  /**
    * One tool by id, searched across top-level tools, pinned slots and
    * every flyout child.
    *
@@ -1823,15 +2911,22 @@ var DASHICON_NAMES = [
    */
   function findTool(id) {
     var found = null;
-    var model = railModel();
-    model.tools.concat(model.slots).forEach(function (t) {
-      if (t.id === id) {
-        found = t;
+    // Every SHOWN toolbar, the first one first. A hidden toolbar has no
+    // buttons, so its tools cannot be armed or found.
+    T.toolbars.forEach(function (tb) {
+      if (found || tb.hidden) {
+        return;
       }
-      (t.children || []).forEach(function (c) {
-        if (c.id === id) {
-          found = c;
+      var model = railModel(tb);
+      model.tools.concat(model.slots).forEach(function (t) {
+        if (t.id === id) {
+          found = t;
         }
+        (t.children || []).forEach(function (c) {
+          if (c.id === id) {
+            found = c;
+          }
+        });
       });
     });
     return found;
@@ -1849,11 +2944,18 @@ var DASHICON_NAMES = [
   T.migrateSlots = migrateSlots;
   T.loadSlots = loadSlots;
   T.saveSlots = saveSlots;
+  T.isPinnedOn = isPinnedOn;
   T.isPinned = isPinned;
+  T.isPinnedAnywhere = isPinnedAnywhere;
   T.pinBlock = pinBlock;
   T.unpinBlock = unpinBlock;
   T.moveSlot = moveSlot;
+  T.apiToolbar = apiToolbar;
+  T.unpinEverywhere = unpinEverywhere;
+  T.rerenderToolbars = rerenderToolbars;
+  T.rerenderMainForParents = rerenderMainForParents;
   T.PIN_META_LIMITS = PIN_META_LIMITS;
+  T.announcePinMetaChange = announcePinMetaChange;
   T.DASHICON_NAMES = DASHICON_NAMES;
   T.isDashiconName = isDashiconName;
   T.isValidPinIcon = isValidPinIcon;
@@ -1863,6 +2965,7 @@ var DASHICON_NAMES = [
   T.setPinMeta = setPinMeta;
   T.getPinData = getPinData;
   T.setPinData = setPinData;
+  T.clearPinMeta = clearPinMeta;
   T.loadConfigMeta = loadConfigMeta;
   T.normalizeSetMeta = normalizeSetMeta;
   T.setConfigMeta = setConfigMeta;
@@ -1875,9 +2978,18 @@ var DASHICON_NAMES = [
   T.reconcileSetsButton = reconcileSetsButton;
   T.configLoadedMessage = configLoadedMessage;
   T.setsMenuTool = setsMenuTool;
+  T.isToolbarsButtonShown = isToolbarsButtonShown;
+  T.reconcileToolbarsButton = reconcileToolbarsButton;
+  T.toolbarShownMessage = toolbarShownMessage;
+  T.toolbarsMenuTool = toolbarsMenuTool;
+  T.isSetSlotName = isSetSlotName;
+  T.refreshSharedSets = refreshSharedSets;
+  T.ownSharedCopy = ownSharedCopy;
+  T.listedSharedSets = listedSharedSets;
+  T.ownSetShareControls = ownSetShareControls;
+  T.buildSharedSetRow = buildSharedSetRow;
   T.PATTERN_SLOT_PREFIX = PATTERN_SLOT_PREFIX;
   T.USER_PATTERN_SLOT_PREFIX = USER_PATTERN_SLOT_PREFIX;
-  T.PATTERN_SLOT_PATTERN = PATTERN_SLOT_PATTERN;
   T.isPatternSlot = isPatternSlot;
   T.coreSelect = coreSelect;
   T.sessionUserPatterns = sessionUserPatterns;
@@ -1887,6 +2999,7 @@ var DASHICON_NAMES = [
   T.patternCatalogReady = patternCatalogReady;
   T.watchPatternCatalog = watchPatternCatalog;
   T.railModel = railModel;
+  T.modelTool = modelTool;
   T.findTool = findTool;
 
   // This file ran to its end. The next file checks this number.

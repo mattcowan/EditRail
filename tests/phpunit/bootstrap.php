@@ -184,16 +184,95 @@ if (!function_exists('update_user_meta')) {
     }
 }
 
+// --- Shared-set uninstall stubs (#98): a fake posts store keyed by TABLE
+// name ('wp_posts', 'wp_2_posts') => [ID => ['post_type' => …, 'post_status'
+// => …]], so each network site has its own table the way the real install
+// does. switch_to_blog() changes the current site and $wpdb->posts with it;
+// get_col() answers the one query the uninstall pass makes (IDs of one post
+// type in one table) and records it; wp_delete_post() records the call and
+// removes the row from the CURRENT site's table only.
+$GLOBALS['toolrail_test_posts']         = [];
+$GLOBALS['toolrail_test_blog_id']       = 1;
+$GLOBALS['toolrail_test_blog_stack']    = [];
+$GLOBALS['toolrail_test_switches']      = [];
+$GLOBALS['toolrail_test_deleted_posts'] = [];
+$GLOBALS['toolrail_test_queries']       = [];
+
 if (!class_exists('Toolrail_Test_WPDB')) {
     class Toolrail_Test_WPDB {
+        /** The current site's posts table, like core's $wpdb->posts. */
+        public $posts = 'wp_posts';
+
         /** wp_ for site 1, wp_N_ for any other site, like core. */
         public function get_blog_prefix($blog_id = null) {
             return ($blog_id === null || (int) $blog_id === 1) ? 'wp_' : 'wp_' . (int) $blog_id . '_';
+        }
+
+        /** Quote each %s argument the way core does, enough for the fake get_col(). */
+        public function prepare($query, ...$args) {
+            return vsprintf(str_replace('%s', "'%s'", $query), $args);
+        }
+
+        /** IDs of one post type in one fake table, for the uninstall query only. */
+        public function get_col($query) {
+            $GLOBALS['toolrail_test_queries'][] = $query;
+            if (!preg_match("/FROM (\\S+) WHERE post_type = '([^']*)'/", $query, $m)) {
+                return [];
+            }
+            $ids = [];
+            foreach ($GLOBALS['toolrail_test_posts'][$m[1]] ?? [] as $id => $row) {
+                if ($row['post_type'] === $m[2]) {
+                    $ids[] = (string) $id;
+                }
+            }
+            return $ids;
         }
     }
 }
 if (!isset($GLOBALS['wpdb'])) {
     $GLOBALS['wpdb'] = new Toolrail_Test_WPDB();
+}
+
+if (!function_exists('switch_to_blog')) {
+    /** Make another fake site current; $wpdb->posts follows. */
+    function switch_to_blog($blog_id) {
+        $GLOBALS['toolrail_test_blog_stack'][] = $GLOBALS['toolrail_test_blog_id'];
+        $GLOBALS['toolrail_test_switches'][]   = (int) $blog_id;
+        $GLOBALS['toolrail_test_blog_id']      = (int) $blog_id;
+        $GLOBALS['wpdb']->posts                = $GLOBALS['wpdb']->get_blog_prefix($blog_id) . 'posts';
+        return true;
+    }
+}
+
+if (!function_exists('restore_current_blog')) {
+    /** Go back to the site before the last switch_to_blog(). */
+    function restore_current_blog() {
+        $blog_id                          = array_pop($GLOBALS['toolrail_test_blog_stack']);
+        $GLOBALS['toolrail_test_blog_id'] = (int) $blog_id;
+        $GLOBALS['wpdb']->posts           = $GLOBALS['wpdb']->get_blog_prefix($blog_id) . 'posts';
+        return true;
+    }
+}
+
+if (!function_exists('wp_delete_post')) {
+    /** Remove a row from the current site's fake table; false when it is not there. */
+    function wp_delete_post($post_id, $force_delete = false) {
+        $table = $GLOBALS['wpdb']->posts;
+        $GLOBALS['toolrail_test_deleted_posts'][] = [$table, (int) $post_id, $force_delete];
+        if (!isset($GLOBALS['toolrail_test_posts'][$table][(int) $post_id])) {
+            return false;
+        }
+        $row = $GLOBALS['toolrail_test_posts'][$table][(int) $post_id];
+        unset($GLOBALS['toolrail_test_posts'][$table][(int) $post_id]);
+        return (object) $row;
+    }
+}
+
+if (!function_exists('wp_json_encode')) {
+    /** Core's wrapper; json_decode() output is always valid UTF-8, so plain json_encode() is enough here. */
+    function wp_json_encode($data, $options = 0, $depth = 512) {
+        return json_encode($data, $options, $depth);
+    }
 }
 
 // --- Asset registration stubs (#102): record what rail.php registers, in
@@ -229,4 +308,5 @@ if (!function_exists('wp_register_style')) {
 
 require_once TOOLRAIL_PLUGIN_DIR . 'includes/providers.php';
 require_once TOOLRAIL_PLUGIN_DIR . 'includes/rail.php';
+require_once TOOLRAIL_PLUGIN_DIR . 'includes/shared-sets.php';
 require_once TOOLRAIL_PLUGIN_DIR . 'includes/uninstall.php';

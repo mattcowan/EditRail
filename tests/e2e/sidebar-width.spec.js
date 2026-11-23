@@ -5,8 +5,9 @@
  *
  * Runs on post-new.php and NEVER saves a post; helpers.js has the rule.
  */
-const { test, expect } = require('@playwright/test');
 const {
+  test,
+  expect,
   AUTH,
   openNewPost,
   canvas,
@@ -177,6 +178,9 @@ test.describe('settings sidebar width (#28)', () => {
     expect(await getPref(page, 'toolrail-sidebar-width')).toBe('400');
     await expect(handle).toBeFocused();
     await expect.poll(() => politeText(page)).toContain('400 pixels');
+    // Kept (#113): the reload below must read the width from the account.
+    // Before the save lands, core's local copy is newer, and the reload
+    // would read that instead.
     await waitForSavedPref(page, 'toolrail-sidebar-width', (v) => v === '400');
     await waitForSavedPref(page, 'toolrail-sidebar-resize', (v) => v === '1');
 
@@ -316,7 +320,7 @@ test.describe('settings sidebar width (#28)', () => {
   });
 
   test('Toolbar settings shows the width in text and resets it with a button', async ({ page }) => {
-    test.slow(); // two waits for the server copy of the width, on a slow site
+    test.slow(); // two width saves, and the end-of-test wait for the last, on a slow site
     await openNewPost(page);
     await turnOn(page);
     await openSidebar(page);
@@ -343,20 +347,19 @@ test.describe('settings sidebar width (#28)', () => {
     await page.getByLabel('Width in pixels').fill('400');
     await page.getByLabel('Width in pixels').press('Enter');
     await expect(value).toHaveText('Width: 400 pixels.');
-    // The click reset already stored 280 on the server. Wait for 400 first,
-    // so the final wait for 280 can only pass on the keyboard reset's save.
-    await waitForSavedPref(page, 'toolrail-sidebar-width', (v) => v === '400');
+    // The click reset already stored 280. Check 400 first, so the check for
+    // 280 below can only pass on the keyboard reset's write. (The test's end
+    // waits for the account to save it: helpers.js, #113.)
+    await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('400');
     await reset.focus();
     await page.keyboard.press('Enter');
     await expect(value).toHaveText('Width: 280 pixels, default.');
     await expect(reset).toBeFocused();
-    // Let core's debounced save land before the page closes (see the typed
-    // width test below).
-    await waitForSavedPref(page, 'toolrail-sidebar-width', (v) => v === '280');
+    await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('280');
   });
 
   test('a typed width and the Narrower and Wider buttons set the width without a drag (WCAG 2.5.7)', async ({ page }) => {
-    test.slow(); // about twenty saved widths, then a wait for the server copy, on a slow site
+    test.slow(); // about twenty saved widths, then the end-of-test wait for the last, on a slow site
     await openNewPost(page);
     await turnOn(page);
     await openSidebar(page);
@@ -458,12 +461,9 @@ test.describe('settings sidebar width (#28)', () => {
     await expect.poll(() => getPref(page, 'toolrail-sidebar-width')).toBe('280');
     await expect(narrower).toBeFocused();
     await expect(narrower).toHaveAttribute('aria-disabled', 'true');
-
-    // Let core's debounced save of this burst land before the page
-    // closes. A late save reached the account after the next test's reset
-    // and turned the feature on there (2026-10-10).
-    await waitForSavedPref(page, 'toolrail-sidebar-width', (v) => v === '280');
-    await waitForSavedPref(page, 'toolrail-sidebar-resize', (v) => v === '1');
+    // The test's end waits for core's debounced save of this burst
+    // (helpers.js, #113). A late save from here reached the account after
+    // the next test's reset and turned the feature on there (2026-10-10).
   });
 
   test('below the 782px breakpoint the handle hides and core\'s full-screen sidebar is left alone', async ({ page }) => {

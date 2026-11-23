@@ -1,8 +1,8 @@
 /**
  * EditRail, part 4 of 7 (editor-rail-settings.js).
  *
- * The Toolbar settings dialog, saved-set import and export, and the
- * Help panel.
+ * The Toolbar settings dialog with its Shared sets list, saved-set
+ * import and export, and the Help panel.
  *
  * The public contract (window.toolrail) and the long API documentation
  * are in the header of assets/editor-rail.js, the last of the rail's
@@ -35,10 +35,23 @@
   var HIDE_CORE_INSERTER_KEY = T.HIDE_CORE_INSERTER_KEY;
   var WIDE_TOGGLE_KEY = T.WIDE_TOGGLE_KEY;
   var SETS_BUTTON_HIDDEN_KEY = T.SETS_BUTTON_HIDDEN_KEY;
+  var TOOLBARS_BUTTON_HIDDEN_KEY = T.TOOLBARS_BUTTON_HIDDEN_KEY;
+  var MAX_TOOLBARS = T.MAX_TOOLBARS;
   var readKey = T.readKey;
   var writeKey = T.writeKey;
   var DOCKS = T.DOCKS;
   var DOCK_LABELS = T.DOCK_LABELS;
+  var mainToolbar = T.mainToolbar;
+  var TOOLBAR_NAME_MAX = T.TOOLBAR_NAME_MAX;
+  var toolbarById = T.toolbarById;
+  var toolbarLabel = T.toolbarLabel;
+  var disarmedMessage = T.disarmedMessage;
+  var joinMessages = T.joinMessages;
+  var addToolbar = T.addToolbar;
+  var renameToolbar = T.renameToolbar;
+  var deleteToolbar = T.deleteToolbar;
+  var setToolbarHidden = T.setToolbarHidden;
+  var canvasNarrowMessage = T.canvasNarrowMessage;
   var renderCustomIcon = T.renderCustomIcon;
   var isWide = T.isWide;
   var isWideToggleShown = T.isWideToggleShown;
@@ -73,6 +86,7 @@
   var pinBlock = T.pinBlock;
   var unpinBlock = T.unpinBlock;
   var moveSlot = T.moveSlot;
+  var rerenderToolbars = T.rerenderToolbars;
   var PIN_META_LIMITS = T.PIN_META_LIMITS;
   var DASHICON_NAMES = T.DASHICON_NAMES;
   var isValidPinIcon = T.isValidPinIcon;
@@ -89,8 +103,14 @@
   var loadConfig = T.loadConfig;
   var deleteConfig = T.deleteConfig;
   var configLoadedMessage = T.configLoadedMessage;
+  var toolbarShownMessage = T.toolbarShownMessage;
+  var isSetSlotName = T.isSetSlotName;
+  var refreshSharedSets = T.refreshSharedSets;
+  var ownSharedCopy = T.ownSharedCopy;
+  var listedSharedSets = T.listedSharedSets;
+  var ownSetShareControls = T.ownSetShareControls;
+  var buildSharedSetRow = T.buildSharedSetRow;
   var PATTERN_SLOT_PREFIX = T.PATTERN_SLOT_PREFIX;
-  var PATTERN_SLOT_PATTERN = T.PATTERN_SLOT_PATTERN;
   var isPatternSlot = T.isPatternSlot;
   var allPatterns = T.allPatterns;
   var findPattern = T.findPattern;
@@ -105,10 +125,17 @@
   // -------------------------------------------------------------------
   // Toolbar settings dialog — choose which blocks show as quick slots,
   // reorder them, and save/load named sets. All of it is a per-user
-  // account preference, never site-wide settings or post data.
+  // account preference, never site-wide settings or post data. The one
+  // exception is a shared set (#98): the plugin's own record on the site,
+  // never an authored post (see the "Shared sets" block).
   // -------------------------------------------------------------------
 
   T.settingsOpen = false;
+  // The id of the toolbar the dialog's toolbar sections act on: its pins,
+  // its position, its tool names, and the saved set that loads into it
+  // (#95). Module state like editingSlot, so a rebuild keeps the choice.
+  // It goes back to the first toolbar when the chosen one is deleted.
+  T.settingsToolbarId = 'main';
   // The pinned slot whose inline Edit form is open ('' = none). Module
   // state, not DOM state, so a rebuild from elsewhere (a drag onto the
   // rail while the form is open) re-renders the form instead of
@@ -156,13 +183,50 @@
   }
 
   /**
+   * The toolbar the dialog's toolbar sections act on (settingsToolbarId).
+   *
+   * @return {Object} The toolbar; the first toolbar when the id is gone.
+   */
+  function settingsToolbar() {
+    return toolbarById(T.settingsToolbarId) || mainToolbar;
+  }
+
+  /**
+   * Place each open dialog again. The dialogs open past every toolbar on
+   * the first toolbar's edge (placeSurface's pastStack), so a different
+   * toolbar that arrives on that edge, leaves it, or changes width moves
+   * where they must sit. They hang in the first toolbar's region, which
+   * that change does not rebuild, so nothing else places them (#95).
+   *
+   * @return {void}
+   */
+  function placeOpenDialogs() {
+    var wrapper = document.getElementById(mainToolbar.regionId);
+    if (!wrapper) {
+      return;
+    }
+    var settings = T.settingsOpen ? settingsNode() : null;
+    if (settings && !settings.classList.contains('toolrail-adddialog')) {
+      placeSurface(mainToolbar, settings, gearButton(), wrapper, true);
+    }
+    var help = T.helpOpen ? helpNode() : null;
+    if (help) {
+      placeSurface(mainToolbar, help, helpButton() || gearButton(), wrapper, true);
+    }
+    var add = T.addDialogOpen ? T.addDialogNode() : null;
+    if (add) {
+      placeSurface(mainToolbar, add, gearButton(), wrapper, true);
+    }
+  }
+
+  /**
    * The rail's settings button — the dialog's anchor and its focus-return
    * target. Null before the rail is built.
    *
    * @return {HTMLElement|null} The button, or null.
    */
   function gearButton() {
-    var rail = document.getElementById('toolrail-rail');
+    var rail = document.getElementById(mainToolbar.railId);
     return rail ? rail.querySelector('[data-tool="settings"]') : null;
   }
 
@@ -196,14 +260,19 @@
     editFormError = '';
     iconBrowserOpen = false;
     iconBrowserQuery = '';
-    T.syncLayer();
+    T.syncLayers();
     // Drop any message that never got rendered — closing the dialog
     // before an in-flight file read resolves used to strand it here, and
     // it then surfaced out of context the NEXT time settings was opened.
     // The appearance section's transient follows the same rule.
-    settingsStatus = '';
+    T.settingsStatus = '';
     appearanceStatus = '';
     pinnedStatus = '';
+    toolbarsStatus = '';
+    // The next open starts on the first toolbar, whose gear opened it. A
+    // control that opens the dialog for a different toolbar chooses it
+    // itself (openSettingsFor).
+    T.settingsToolbarId = mainToolbar.id;
     document.removeEventListener('mousedown', onSettingsMousedown, true);
     document.removeEventListener('keydown', onSettingsKeydown, true);
     document.removeEventListener('focusin', onSettingsFocusin, true);
@@ -407,13 +476,17 @@
       '#toolrail-settings-search',
       '#toolrail-settings-setname',
       '#toolrail-settings-sidebarwidth-input',
+      '#toolrail-settings-toolbarname',
       '#toolrail-editform-title',
       '#toolrail-editform-description',
       '#toolrail-editform-icon'
     ];
     textFields.forEach(function (sel) {
       var field = node.querySelector(sel);
-      if (field) {
+      // The toolbar Name field belongs to one toolbar (data-toolbar). When
+      // the author chose a different toolbar, its typing is not carried
+      // into the next toolbar's field (#95).
+      if (field && (!field.dataset.toolbar || field.dataset.toolbar === T.settingsToolbarId)) {
         preserved[sel] = field.value;
       }
     });
@@ -482,14 +555,20 @@
    * Position picker. Dragging the rail's grip is the pointer affordance;
    * this radio group is the equivalent keyboard and screen-reader path,
    * so repositioning never depends on a drag.
+   *
+   * @param {function(string): string} scoped Adds the chosen toolbar's
+   *                                          name to a heading (#95).
+   * @return {HTMLElement} The fieldset.
    */
-  function buildPositionControl() {
+  function buildPositionControl(scoped) {
+    // The chosen toolbar's position (#95).
+    var tb = settingsToolbar();
     var fieldset = document.createElement('fieldset');
     fieldset.className = 'toolrail-settings-position';
 
     var legend = document.createElement('legend');
     legend.className = 'toolrail-settings-label';
-    legend.textContent = __('Toolbar position', 'editrail');
+    legend.textContent = scoped(__('Toolbar position', 'editrail'));
     fieldset.appendChild(legend);
 
     DOCKS.forEach(function (dock) {
@@ -498,7 +577,7 @@
       input.type = 'radio';
       input.name = 'toolrail-dock';
       input.value = dock;
-      input.checked = T.position.dock === dock;
+      input.checked = tb.position.dock === dock;
       input.dataset.dock = dock;
       input.addEventListener('change', function () {
         if (!input.checked) {
@@ -507,9 +586,16 @@
         // The dock change rebuilds the region, so the dialog is reopened
         // with focus back on the radio the author just chose. A refused
         // dock leaves the radio showing a position the rail is not in, so
-        // repaint the dialog from the real state instead.
-        if (!T.setDock(dock, { reopenSettings: true })) {
-          refreshSettings('input[data-dock="' + T.position.dock + '"]');
+        // repaint the dialog from the real state instead. An extra
+        // toolbar's region does not hold the dialog, so its move leaves
+        // the dialog open (setDock), and a repaint places it again.
+        var moved = T.setDock(tb, dock, { reopenSettings: true });
+        // A move can leave the canvas too narrow; the status line says so
+        // (owner decision 2026-11-16). After setDock: the first
+        // toolbar's move reopened the dialog, which clears the status.
+        toolbarsStatus = moved ? canvasNarrowMessage() : '';
+        if (!moved || tb !== mainToolbar || toolbarsStatus) {
+          refreshSettings('input[data-dock="' + tb.position.dock + '"]');
         }
       });
       row.appendChild(input);
@@ -538,23 +624,40 @@
    * mode (keyboard-first, like the position radios); the on-rail
    * chevron is opt-in sugar that spends toolbar space only when asked
    * for (owner decision 2026-08-27). Both persist per user.
+   *
+   * @param {function(string): string} scoped Adds the chosen toolbar's
+   *                                          name to a heading (#95).
+   * @return {HTMLElement|DocumentFragment} The fieldset; with several
+   *                                        toolbars, the fieldset and
+   *                                        the expand/contract row.
    */
-  function buildWideControl() {
+  function buildWideControl(scoped) {
     var fieldset = document.createElement('fieldset');
     fieldset.className = 'toolrail-settings-widegroup';
 
     var legend = document.createElement('legend');
     legend.className = 'toolrail-settings-label';
-    legend.textContent = __('Tool names', 'editrail');
+    legend.textContent = scoped(__('Tool names', 'editrail'));
     fieldset.appendChild(legend);
 
     var wideRow = settingsRow('label', 'toolrail-settings-positionrow');
     var wideInput = document.createElement('input');
     wideInput.type = 'checkbox';
     wideInput.id = 'toolrail-settings-wide';
-    wideInput.checked = isWide();
+    // Wide mode is one setting for each toolbar (#95): this checkbox is
+    // the chosen toolbar's.
+    var tb = settingsToolbar();
+    wideInput.checked = isWide(tb);
     wideInput.addEventListener('change', function () {
-      setWide(wideInput.checked);
+      setWide(tb, wideInput.checked);
+      // An extra toolbar on the first toolbar's edge just changed width.
+      placeOpenDialogs();
+      // A wider toolbar can leave the canvas too narrow (owner decision
+      // 2026-11-16); the status line says so. Nothing else to rebuild.
+      toolbarsStatus = wideInput.checked ? canvasNarrowMessage() : '';
+      if (toolbarsStatus) {
+        refreshSettings('#toolrail-settings-wide');
+      }
     });
     var wideText = settingsRow('span', '');
     wideText.textContent = __('Show tool names beside the icons (wide toolbar)', 'editrail');
@@ -571,23 +674,36 @@
       writeKey(WIDE_TOGGLE_KEY, toggleInput.checked ? '1' : '0');
       // The chevron enters or leaves the rail — rebuild it. Focus stays
       // on this checkbox (rerender only moves focus when it was IN the
-      // rail).
-      T.rerender();
+      // rail). One setting for every toolbar, and each has a chevron.
+      rerenderToolbars();
     });
     var toggleText = settingsRow('span', '');
-    toggleText.textContent = __('Show an expand/contract button on the toolbar', 'editrail');
+    // One setting for every toolbar (#95), so with several it says so.
+    toggleText.textContent = T.toolbars.length > 1
+      ? __('Show an expand/contract button on each toolbar', 'editrail')
+      : __('Show an expand/contract button on the toolbar', 'editrail');
     toggleRow.appendChild(toggleInput);
     toggleRow.appendChild(toggleText);
-    fieldset.appendChild(toggleRow);
 
     // Both preferences persist on every dock; the effect shows where
     // wide mode applies. Stated rather than disabling the controls —
     // a disabled checkbox hides its state.
     var hint = settingsRow('p', 'toolrail-settings-empty');
     hint.textContent = __('Tool names show on left, right and floating toolbars.', 'editrail');
-    fieldset.appendChild(hint);
 
-    return fieldset;
+    if (T.toolbars.length < 2) {
+      fieldset.appendChild(toggleRow);
+      fieldset.appendChild(hint);
+      return fieldset;
+    }
+    // With several toolbars the legend names the chosen toolbar, and the
+    // expand/contract checkbox is one setting for every toolbar, so it
+    // goes after the group, not inside it (review 2026-11-16, finding 7).
+    fieldset.appendChild(hint);
+    var out = document.createDocumentFragment();
+    out.appendChild(fieldset);
+    out.appendChild(toggleRow);
+    return out;
   }
 
   /**
@@ -760,6 +876,13 @@
   var pinnedStatus = '';
 
   /**
+   * The Toolbar section's transient outcome line (#95): a toolbar added,
+   * renamed, deleted, shown or hidden, or a refusal. Same contract as
+   * pinnedStatus.
+   */
+  var toolbarsStatus = '';
+
+  /**
    * Appearance picker: three contrast-verified presets plus a custom
    * background + text pair. A preset switch re-renders the dialog (the
    * color inputs enable only under Custom); the color inputs apply live
@@ -881,7 +1004,7 @@
    * is painted as visible text in the dialog and announced via speak().
    * Cleared on close so it cannot surface out of context later.
    */
-  var settingsStatus = '';
+  T.settingsStatus = '';
 
   /**
    * How many of these slots this site cannot render right now. A pattern
@@ -914,17 +1037,31 @@
     if (!Object.prototype.hasOwnProperty.call(map, name)) {
       return false;
     }
+    downloadSetFile(setFilePayload(name, map[name], loadConfigMeta()[name]));
+    return true;
+  }
+
+  /**
+   * The set file object for one set. One builder for an export, a shared
+   * set's export and a share (#98), so a shared set exports to the same
+   * file as the author's own.
+   *
+   * @param {string}      name   Set name.
+   * @param {Array}       blocks The set's slots.
+   * @param {Object|null} labels The set's label snapshot, or null.
+   * @return {Object} The payload.
+   */
+  function setFilePayload(name, blocks, labels) {
     var payload = {
       format: 'toolrail-set',
       version: 1,
       name: name,
-      blocks: map[name]
+      blocks: blocks
     };
     // The set's label snapshot (saveConfig / importConfigPayload) rides
     // along, keyed by slot name, so a set moved to another site keeps
     // its labels. The key is absent when the set has none, so a plain
     // set file is byte-for-byte what it was before 1.0.1.
-    var labels = loadConfigMeta()[name];
     if (labels) {
       var meta = {};
       Object.keys(labels).forEach(function (slot) {
@@ -932,6 +1069,17 @@
       });
       payload.meta = meta;
     }
+    return payload;
+  }
+
+  /**
+   * Start the download of one set file.
+   *
+   * @param {Object} payload A setFilePayload() result.
+   * @return {void}
+   */
+  function downloadSetFile(payload) {
+    var name = payload.name;
     var slug = name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'set';
     var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     var url = URL.createObjectURL(blob);
@@ -942,7 +1090,6 @@
     a.click();
     a.remove();
     window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-    return true;
   }
 
   /**
@@ -956,9 +1103,7 @@
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.blocks)) {
       return { ok: false, error: __('Not an EditRail set file — expected JSON with a "blocks" array.', 'editrail') };
     }
-    var valid = parsed.blocks.filter(function (n) {
-      return typeof n === 'string' && (BLOCK_NAME_PATTERN.test(n) || PATTERN_SLOT_PATTERN.test(n));
-    });
+    var valid = parsed.blocks.filter(isSetSlotName);
     var dropped = parsed.blocks.length - valid.length;
     // A set file is hand-editable and hand-writable, so it can repeat a
     // block name. Two slots sharing one `pin:<name>` tool id break the
@@ -1451,6 +1596,243 @@
    * @param {string}      searchValue The search text to restore.
    * @return {void}
    */
+  /**
+   * The Toolbar section (#95), shown while more than one toolbar exists:
+   * the chooser that decides which toolbar the sections below change, and
+   * for an extra toolbar its Name, Show and Delete controls. It comes
+   * before the sections it scopes, so reading order gives the scope first.
+   *
+   * @return {HTMLElement} The section.
+   */
+  function buildToolbarSection() {
+    var tb = settingsToolbar();
+    var section = settingsRow('div', 'toolrail-settings-toolbars');
+
+    var label = settingsRow('label', 'toolrail-settings-label');
+    label.setAttribute('for', 'toolrail-settings-toolbar');
+    label.textContent = __('Toolbar', 'editrail');
+    section.appendChild(label);
+    var select = document.createElement('select');
+    select.id = 'toolrail-settings-toolbar';
+    select.className = 'toolrail-settings-search';
+    select.setAttribute('aria-describedby', 'toolrail-settings-toolbar-hint');
+    T.toolbars.forEach(function (other) {
+      var option = document.createElement('option');
+      option.value = other.id;
+      option.textContent = other.hidden
+        ? sprintf(
+          /* translators: %s: the toolbar's name. */
+          __('%s (hidden)', 'editrail'),
+          toolbarLabel(other)
+        )
+        : toolbarLabel(other);
+      option.selected = other === tb;
+      select.appendChild(option);
+    });
+    select.addEventListener('change', function () {
+      T.settingsToolbarId = select.value;
+      // The Edit form is for a pin of the toolbar that was chosen.
+      editingSlot = '';
+      editFormError = '';
+      iconBrowserOpen = false;
+      iconBrowserQuery = '';
+      refreshSettings('#toolrail-settings-toolbar');
+    });
+    section.appendChild(select);
+    var hint = settingsRow('p', 'toolrail-settings-empty');
+    hint.id = 'toolrail-settings-toolbar-hint';
+    hint.textContent = __('Pinned tools, position, tool names and saved sets below apply to this toolbar.', 'editrail');
+    section.appendChild(hint);
+
+    if (tb !== mainToolbar) {
+      var nameLabel = settingsRow('label', 'toolrail-settings-label');
+      nameLabel.setAttribute('for', 'toolrail-settings-toolbarname');
+      nameLabel.textContent = __('Toolbar name', 'editrail');
+      section.appendChild(nameLabel);
+      var nameRow = settingsRow('div', 'toolrail-settings-saverow');
+      var nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.id = 'toolrail-settings-toolbarname';
+      nameInput.className = 'toolrail-settings-search';
+      nameInput.maxLength = TOOLBAR_NAME_MAX;
+      nameInput.value = tb.name;
+      // refreshSettings keeps typing only for the toolbar it was typed for.
+      nameInput.dataset.toolbar = tb.id;
+      nameInput.setAttribute('aria-describedby', 'toolrail-settings-toolbars-status');
+      nameRow.appendChild(nameInput);
+      var rename = function () {
+        var before = tb.name;
+        var result = renameToolbar(tb, nameInput.value);
+        if (result === 'renamed') {
+          toolbarsStatus = sprintf(
+            /* translators: 1: the old name, 2: the new name. */
+            __('Renamed the %1$s toolbar to %2$s.', 'editrail'),
+            before, tb.name
+          );
+        } else if (result === 'same') {
+          toolbarsStatus = sprintf(
+            /* translators: %s: the toolbar's name. */
+            __('The toolbar is already called %s.', 'editrail'),
+            tb.name
+          );
+        } else if (result === 'empty') {
+          toolbarsStatus = __('Type a name for the toolbar.', 'editrail');
+        } else {
+          toolbarsStatus = __('A different toolbar has that name. Type a different name.', 'editrail');
+        }
+        refreshSettings('#toolrail-settings-toolbarname');
+      };
+      nameInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          rename();
+        }
+      });
+      nameRow.appendChild(settingsButton(__('Rename', 'editrail'), rename, 'toolrail-settings-renametoolbar'));
+      section.appendChild(nameRow);
+
+      // Show or hide (step 3). The same state as the Toolbars menu's
+      // checked item on the first toolbar.
+      var shownRow = settingsRow('label', 'toolrail-settings-positionrow');
+      var shown = document.createElement('input');
+      shown.type = 'checkbox';
+      shown.id = 'toolrail-settings-toolbarshown';
+      shown.checked = !tb.hidden;
+      shown.addEventListener('change', function () {
+        var result = setToolbarHidden(tb, !shown.checked);
+        // One message: the show or hide, a disarm it caused, a canvas
+        // that is now too narrow (review 2026-11-16, finding 2).
+        toolbarsStatus = joinMessages([
+          toolbarShownMessage(tb),
+          result && result.disarmed ? disarmedMessage() : '',
+          tb.hidden ? '' : canvasNarrowMessage()
+        ]);
+        refreshSettings('#toolrail-settings-toolbarshown');
+      });
+      var shownText = settingsRow('span', '');
+      shownText.textContent = __('Show this toolbar', 'editrail');
+      shownRow.appendChild(shown);
+      shownRow.appendChild(shownText);
+      section.appendChild(shownRow);
+
+      var deleteRow = settingsRow('div', 'toolrail-settings-helprow');
+      var del = settingsButton(__('Delete this toolbar', 'editrail'), function () {
+        var name = tb.name;
+        var count = tb.slots.length;
+        var result = deleteToolbar(tb);
+        if (!result) {
+          return;
+        }
+        // Its pins go with it (owner decision 2026-11-14), so say so, and
+        // a disarm it caused in the same message.
+        toolbarsStatus = joinMessages([count
+          ? sprintf(
+            /* translators: 1: the toolbar's name, 2: number of pinned tools. */
+            _n(
+              'Deleted the %1$s toolbar and its %2$d pinned tool.',
+              'Deleted the %1$s toolbar and its %2$d pinned tools.',
+              count,
+              'editrail'
+            ),
+            name,
+            count
+          )
+          : sprintf(
+            /* translators: %s: the toolbar's name. */
+            __('Deleted the %s toolbar.', 'editrail'),
+            name
+          ), result.disarmed ? disarmedMessage() : '']);
+        refreshSettings(['#toolrail-settings-toolbar', '.toolrail-settings-addtoolbar']);
+      }, 'toolrail-settings-deletetoolbar');
+      del.setAttribute('aria-label', sprintf(
+        /* translators: %s: the toolbar's name. */
+        __('Delete the %s toolbar', 'editrail'),
+        tb.name
+      ));
+      deleteRow.appendChild(del);
+      section.appendChild(deleteRow);
+    }
+
+    section.appendChild(buildToolbarsStatus());
+    return section;
+  }
+
+  /**
+   * The Toolbar section's outcome line (toolbarsStatus): rendered as text
+   * where the controls are, and spoken. Built in the Toolbar section when
+   * it shows, else under "Add a toolbar".
+   *
+   * @return {HTMLElement} The line.
+   */
+  function buildToolbarsStatus() {
+    var status = settingsRow('p', 'toolrail-settings-status');
+    status.id = 'toolrail-settings-toolbars-status';
+    status.textContent = toolbarsStatus;
+    if (toolbarsStatus) {
+      speak(toolbarsStatus);
+    }
+    toolbarsStatus = '';
+    return status;
+  }
+
+  /**
+   * "Add a toolbar", and the checkbox for the first toolbar's Toolbars
+   * button (#95). Under the position group: where the toolbars are is
+   * what the author arranges there.
+   *
+   * @param {boolean} withStatus Build the outcome line here, because the
+   *                             Toolbar section is not shown.
+   * @return {HTMLElement} The group.
+   */
+  function buildToolbarAddRow(withStatus) {
+    var group = settingsRow('div', 'toolrail-settings-addtoolbarrow');
+    var row = settingsRow('div', 'toolrail-settings-helprow');
+    row.appendChild(settingsButton(__('Add a toolbar', 'editrail'), function () {
+      var tb = addToolbar();
+      if (!tb) {
+        toolbarsStatus = sprintf(
+          /* translators: %d: the largest number of toolbars. */
+          __('You have %d toolbars, which is the most there can be. Delete a toolbar to add a different one.', 'editrail'),
+          MAX_TOOLBARS
+        );
+        refreshSettings('.toolrail-settings-addtoolbar');
+        return;
+      }
+      // Choose the new toolbar, so the author can name it and pin to it
+      // at once.
+      T.settingsToolbarId = tb.id;
+      toolbarsStatus = joinMessages([sprintf(
+        /* translators: %s: the new toolbar's name. */
+        __('Added the %s toolbar beside the main toolbar. It is chosen below, and it has no tools yet.', 'editrail'),
+        tb.name
+      ), canvasNarrowMessage()]);
+      refreshSettings('#toolrail-settings-toolbarname');
+    }, 'toolrail-settings-addtoolbar'));
+    group.appendChild(row);
+
+    var buttonRow = settingsRow('label', 'toolrail-settings-positionrow');
+    var buttonToggle = document.createElement('input');
+    buttonToggle.type = 'checkbox';
+    buttonToggle.id = 'toolrail-settings-toolbarsbutton';
+    buttonToggle.checked = readKey(TOOLBARS_BUTTON_HIDDEN_KEY) !== '1';
+    buttonToggle.addEventListener('change', function () {
+      writeKey(TOOLBARS_BUTTON_HIDDEN_KEY, buttonToggle.checked ? '0' : '1');
+      // Focus stays on this checkbox: rerender() only moves focus when it
+      // was in the rail.
+      T.rerender(mainToolbar);
+    });
+    var buttonText = settingsRow('span', '');
+    buttonText.textContent = __('Show a Toolbars button on the main toolbar when you have more than one toolbar', 'editrail');
+    buttonRow.appendChild(buttonToggle);
+    buttonRow.appendChild(buttonText);
+    group.appendChild(buttonRow);
+
+    if (withStatus) {
+      group.appendChild(buildToolbarsStatus());
+    }
+    return group;
+  }
+
   function buildSettingsContent(node, searchValue) {
     var head = settingsRow('div', 'toolrail-settings-head');
     var title = settingsRow('h2', 'toolrail-settings-title');
@@ -1466,6 +1848,26 @@
     note.textContent = __('Pinned tools appear on the toolbar as quick-insert tools: any block type, and any pattern. They are saved to your account on this site, for you only.', 'editrail');
     node.appendChild(note);
 
+    // The toolbar the sections below change (#95). With more than one
+    // toolbar the chooser comes first, and each scoped heading names the
+    // chosen toolbar, so a screen-reader user hears which toolbar a
+    // control changes. With one toolbar the dialog reads as before.
+    var tb = settingsToolbar();
+    var several = T.toolbars.length > 1;
+    var scoped = function (text) {
+      return several
+        ? sprintf(
+          /* translators: 1: a section heading, 2: the toolbar's name. */
+          __('%1$s: %2$s', 'editrail'),
+          text,
+          toolbarLabel(tb)
+        )
+        : text;
+    };
+    if (several) {
+      node.appendChild(buildToolbarSection());
+    }
+
     // Pinned tools + Add a block come FIRST, directly under the note that
     // introduces them, and the position / tool names / appearance groups
     // follow (QA 2026-09-11, C2; owner decision the same day). Focus
@@ -1480,11 +1882,12 @@
     // list — right above the search that added it, owner decision
     // 2026-08-27) ---
     var pinnedHead = settingsRow('h3', 'toolrail-settings-subtitle');
-    pinnedHead.textContent = __('Pinned tools', 'editrail');
+    pinnedHead.textContent = scoped(__('Pinned tools', 'editrail'));
     node.appendChild(pinnedHead);
 
     var pinnedList = settingsRow('ul', 'toolrail-settings-pinned');
-    var slots = loadSlots();
+    // The chosen toolbar's pins (#95).
+    var slots = loadSlots(tb);
     if (!slots.length) {
       var empty = settingsRow('p', 'toolrail-settings-empty');
       empty.textContent = __('Nothing pinned yet.', 'editrail');
@@ -1532,7 +1935,7 @@
       // stays (or returns to the search), so without a message a blind
       // author had no way to know the action took (QA 2026-09-11, C4).
       var up = settingsButton('↑', function () {
-        if (moveSlot(name, -1)) {
+        if (moveSlot(tb, name, -1)) {
           pinnedStatus = sprintf(
             /* translators: 1: tool title, 2: new position, 3: number of pinned tools. */
             __('%1$s moved to position %2$d of %3$d.', 'editrail'),
@@ -1546,7 +1949,7 @@
       li.appendChild(up);
 
       var down = settingsButton('↓', function () {
-        if (moveSlot(name, 1)) {
+        if (moveSlot(tb, name, 1)) {
           pinnedStatus = sprintf(
             /* translators: 1: tool title, 2: new position, 3: number of pinned tools. */
             __('%1$s moved to position %2$d of %3$d.', 'editrail'),
@@ -1585,12 +1988,18 @@
       // speech-input user saying "click Remove" matched nothing. It also
       // matches the wording of the block menu's own Unpin item.
       var remove = settingsButton(__('Unpin', 'editrail'), function () {
-        unpinBlock(name);
-        pinnedStatus = sprintf(
-          /* translators: %s: tool title. */
-          __('%s unpinned from the toolbar.', 'editrail'),
-          label.textContent
-        );
+        unpinBlock(tb, name);
+        pinnedStatus = tb === mainToolbar
+          ? sprintf(
+            /* translators: %s: tool title. */
+            __('%s unpinned from the toolbar.', 'editrail'),
+            label.textContent
+          )
+          : sprintf(
+            /* translators: 1: tool title, 2: the toolbar's name. */
+            __('%1$s unpinned from the %2$s toolbar.', 'editrail'),
+            label.textContent, tb.name
+          );
         refreshSettings('#toolrail-settings-search');
       }, 'toolrail-settings-remove');
       remove.setAttribute('aria-label', sprintf(__('Unpin %s', 'editrail'), label.textContent));
@@ -1627,6 +2036,10 @@
     // restoring is never a reset. The migration stamp is untouched: its
     // meaning ("the one-time upgrade has run") is unrelated, and
     // clearing it would re-arm the upgrade path.
+    //
+    // The first toolbar's only (#95): the defaults are what a new account
+    // gets on that toolbar, and the corrupt-list check below reads its
+    // key. An extra toolbar starts empty and has no defaults to restore.
     var restoreRow = settingsRow('div', 'toolrail-settings-restorerow');
     restoreRow.appendChild(settingsButton(__('Restore default tools', 'editrail'), function () {
       // A corrupt stored list must not be silently replaced (review
@@ -1648,7 +2061,7 @@
           return;
         }
       }
-      var current = loadSlots();
+      var current = loadSlots(mainToolbar);
       var missing = DEFAULT_SLOTS.filter(function (name) {
         return current.indexOf(name) === -1;
       });
@@ -1658,9 +2071,9 @@
         refreshSettings('.toolrail-settings-restore');
         return;
       }
-      saveSlots(current.concat(missing));
+      saveSlots(mainToolbar, current.concat(missing));
       window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
-      T.rerender();
+      T.rerender(mainToolbar);
       pinnedStatus = sprintf(
         /* translators: %d: number of default tools restored. */
         _n('Restored %d default tool.', 'Restored %d default tools.', missing.length, 'editrail'),
@@ -1668,7 +2081,9 @@
       );
       refreshSettings('.toolrail-settings-restore');
     }, 'toolrail-settings-restore'));
-    node.appendChild(restoreRow);
+    if (tb === mainToolbar) {
+      node.appendChild(restoreRow);
+    }
 
     // --- Add a block ---
     var searchLabel = settingsRow('label', 'toolrail-settings-label');
@@ -1696,7 +2111,7 @@
     function renderResults() {
       results.textContent = '';
       var term = search.value.trim().toLowerCase();
-      var pinned = loadSlots();
+      var pinned = loadSlots(tb);
       // eslint-disable-next-line no-shadow -- `title` is the candidate's title; this helper never reads the dialog heading.
       var hits = function (title, name) {
         return String(title).toLowerCase().indexOf(term) !== -1 || String(name).toLowerCase().indexOf(term) !== -1;
@@ -1728,11 +2143,17 @@
       var resultButton = function (title, kindLabel, ariaLabel, onPin) {
         var btn = settingsButton(title, function () {
           onPin();
-          pinnedStatus = sprintf(
-            /* translators: %s: block or pattern title. */
-            __('%s pinned to the toolbar.', 'editrail'),
-            title
-          );
+          pinnedStatus = tb === mainToolbar
+            ? sprintf(
+              /* translators: %s: block or pattern title. */
+              __('%s pinned to the toolbar.', 'editrail'),
+              title
+            )
+            : sprintf(
+              /* translators: 1: block or pattern title, 2: the toolbar's name. */
+              __('%1$s pinned to the %2$s toolbar.', 'editrail'),
+              title, tb.name
+            );
           refreshSettings('#toolrail-settings-search');
         }, 'toolrail-settings-result');
         btn.setAttribute('aria-label', ariaLabel);
@@ -1746,7 +2167,7 @@
           /* translators: %s: block title. */
           __('Pin the %s block to the toolbar', 'editrail'),
           t.title
-        ), function () { pinBlock(t.name); });
+        ), function () { pinBlock(tb, t.name); });
         btn.dataset.block = t.name;
         results.appendChild(btn);
       });
@@ -1755,7 +2176,7 @@
           /* translators: %s: pattern title. */
           __('Pin the %s pattern to the toolbar', 'editrail'),
           p.title
-        ), function () { pinBlock(p.id); });
+        ), function () { pinBlock(tb, p.id); });
         btn.dataset.pattern = p.id;
         results.appendChild(btn);
       });
@@ -1765,9 +2186,10 @@
 
     // --- Toolbar position, tool names, appearance ---
     node.appendChild(settingsDivider());
-    node.appendChild(buildPositionControl());
+    node.appendChild(buildPositionControl(scoped));
+    node.appendChild(buildToolbarAddRow(!several));
     node.appendChild(settingsDivider());
-    node.appendChild(buildWideControl());
+    node.appendChild(buildWideControl(scoped));
     node.appendChild(settingsDivider());
     node.appendChild(buildAppearanceControl());
     node.appendChild(settingsDivider());
@@ -1789,17 +2211,24 @@
     // persistent regions that outlive any rebuild of ours.
     var status = settingsRow('p', 'toolrail-settings-status');
     status.id = 'toolrail-settings-status';
-    status.textContent = settingsStatus;
+    status.textContent = T.settingsStatus;
     node.appendChild(status);
-    if (settingsStatus) {
-      speak(settingsStatus);
+    if (T.settingsStatus) {
+      speak(T.settingsStatus);
     }
-    settingsStatus = '';
+    T.settingsStatus = '';
 
     var saveRow = settingsRow('div', 'toolrail-settings-saverow');
     var nameLabel = settingsRow('label', 'toolrail-settings-label');
     nameLabel.setAttribute('for', 'toolrail-settings-setname');
-    nameLabel.textContent = __('Save the current set as', 'editrail');
+    // A set is one toolbar's pins (#95): with several, the label names it.
+    nameLabel.textContent = several
+      ? sprintf(
+        /* translators: %s: the toolbar's name. */
+        __('Save the pins of %s as a set named', 'editrail'),
+        toolbarLabel(tb)
+      )
+      : __('Save the current set as', 'editrail');
     node.appendChild(nameLabel);
 
     var nameInput = document.createElement('input');
@@ -1813,14 +2242,14 @@
     // one-field form is expected to.
     var saveSet = function () {
       var trimmed = nameInput.value.trim();
-      if (saveConfig(trimmed)) {
-        settingsStatus = sprintf(
+      if (saveConfig(trimmed, tb)) {
+        T.settingsStatus = sprintf(
           /* translators: %s: set name. */
           __('Saved the set "%s".', 'editrail'),
           trimmed
         );
       } else {
-        settingsStatus = __('Type a name for the set.', 'editrail');
+        T.settingsStatus = __('Type a name for the set.', 'editrail');
       }
       refreshSettings('#toolrail-settings-setname');
     };
@@ -1842,25 +2271,58 @@
         var label = settingsRow('span', 'toolrail-settings-pinnedname');
         label.textContent = cfg;
         li.appendChild(label);
+        // The user's own shared copy of this set (#98), if any. Text,
+        // never a mark alone: "Shared" beside the name.
+        var copy = ownSharedCopy(cfg);
+        if (copy) {
+          var sharedTag = settingsRow('span', 'toolrail-settings-tag');
+          sharedTag.textContent = __('Shared', 'editrail');
+          li.appendChild(sharedTag);
+        }
+        var shareControls = ownSetShareControls(cfg, copy);
+        if (shareControls.length) {
+          // The extra buttons do not fit on one line in the dialog's
+          // width; this row may wrap.
+          li.classList.add('toolrail-settings-wraprow');
+        }
         var load = settingsButton(__('Load', 'editrail'), function () {
-          loadConfig(cfg);
-          settingsStatus = configLoadedMessage(cfg);
+          // Into the chosen toolbar (#95). A stored change can delete it
+          // while the dialog is open: then the first toolbar, and the
+          // message says which, as the block-menu pin does (PR #126 review).
+          var into = T.toolbars.indexOf(tb) === -1 ? mainToolbar : tb;
+          loadConfig(cfg, into);
+          T.settingsStatus = configLoadedMessage(cfg, into);
           refreshSettings('#toolrail-settings-search');
         }, 'toolrail-settings-load');
-        load.setAttribute('aria-label', sprintf(__('Load the set %s', 'editrail'), cfg));
+        load.setAttribute('aria-label', several
+          ? sprintf(
+            /* translators: 1: set name, 2: the toolbar's name. */
+            __('Load the set %1$s into %2$s', 'editrail'),
+            cfg,
+            toolbarLabel(tb)
+          )
+          : sprintf(__('Load the set %s', 'editrail'), cfg));
         li.appendChild(load);
         var exp = settingsButton(__('Export', 'editrail'), function () {
           exportConfig(cfg);
         }, 'toolrail-settings-export');
         exp.setAttribute('aria-label', sprintf(__('Export the set %s as a file', 'editrail'), cfg));
         li.appendChild(exp);
+        shareControls.forEach(function (btn) {
+          li.appendChild(btn);
+        });
         var del = settingsButton(__('Delete', 'editrail'), function () {
           deleteConfig(cfg);
-          settingsStatus = sprintf(
+          T.settingsStatus = sprintf(
             /* translators: %s: set name. */
             __('Deleted the set "%s".', 'editrail'),
             cfg
           );
+          if (copy) {
+            // A delete removes the author's own set only; the shared copy
+            // is the site's, and now shows under "Shared sets" (#98).
+            T.settingsStatus += ' ' + __('Its shared copy stays shared until you stop sharing it.', 'editrail');
+          }
           refreshSettings('#toolrail-settings-setname');
         }, 'toolrail-settings-delset');
         del.setAttribute('aria-label', sprintf(__('Delete the set %s', 'editrail'), cfg));
@@ -1869,6 +2331,30 @@
         setList.appendChild(li);
       });
       node.appendChild(setList);
+    }
+
+    // --- Shared sets (#98): what other users share, and the user's own
+    // copies whose set they have deleted. Absent when there is none, so
+    // a site with no shared set shows the dialog it showed before.
+    var listed = listedSharedSets();
+    if (listed.length) {
+      var sharedHead = settingsRow('h4', 'toolrail-settings-label');
+      sharedHead.id = 'toolrail-settings-shared-head';
+      sharedHead.textContent = __('Shared sets', 'editrail');
+      node.appendChild(sharedHead);
+      var sharedList = settingsRow('ul', 'toolrail-settings-sets');
+      sharedList.setAttribute('aria-labelledby', 'toolrail-settings-shared-head');
+      listed.forEach(function (item, i) {
+        var neighbors = [];
+        if (listed[i + 1]) {
+          neighbors.push(listed[i + 1].id);
+        }
+        if (listed[i - 1]) {
+          neighbors.push(listed[i - 1].id);
+        }
+        sharedList.appendChild(buildSharedSetRow(item, neighbors, tb));
+      });
+      node.appendChild(sharedList);
     }
 
     // --- Import ---
@@ -1901,7 +2387,7 @@
         speak(message);
         return;
       }
-      settingsStatus = message;
+      T.settingsStatus = message;
       refreshSettings('#toolrail-settings-import');
     }
 
@@ -1936,10 +2422,14 @@
       writeKey(SETS_BUTTON_HIDDEN_KEY, setsButtonToggle.checked ? '0' : '1');
       // Focus stays on this checkbox: rerender() only moves focus when
       // it was in the rail.
-      T.rerender();
+      T.rerender(mainToolbar);
     });
     var setsButtonText = settingsRow('span', '');
-    setsButtonText.textContent = __('Show a Saved sets button on the toolbar when you have a saved set', 'editrail');
+    // A shared set shows the button too (#98). The longer text only when
+    // there is one, so the dialog is unchanged on a site with none.
+    setsButtonText.textContent = listed.length
+      ? __('Show a Saved sets button on the toolbar when you have a saved set or another user shares one', 'editrail')
+      : __('Show a Saved sets button on the toolbar when you have a saved set', 'editrail');
     setsButtonRow.appendChild(setsButtonToggle);
     setsButtonRow.appendChild(setsButtonText);
     node.appendChild(setsButtonRow);
@@ -1980,7 +2470,7 @@
     helpRow.appendChild(settingsButton(__('Open toolbar help', 'editrail'), function () {
       // openHelp closes this dialog on purpose — the panel and the
       // dialog are sibling surfaces anchored to the same rail.
-      var wrapper = document.getElementById('toolrail-region');
+      var wrapper = document.getElementById(mainToolbar.regionId);
       if (wrapper) {
         openHelp(wrapper);
       }
@@ -1996,7 +2486,7 @@
       writeKey(HELP_HIDDEN_KEY, hideHelp.checked ? '1' : '0');
       // Rebuild the rail with/without the "?" tool. Focus stays on this
       // checkbox — rerender() only moves focus when it was in the rail.
-      T.rerender();
+      T.rerender(mainToolbar);
     });
     var hideHelpText = settingsRow('span', '');
     hideHelpText.textContent = __('Hide the Help button from the toolbar (help stays available here)', 'editrail');
@@ -2017,6 +2507,11 @@
       closeSettings(true);
       return;
     }
+    // The dialog always hangs in the FIRST toolbar's region, whichever
+    // toolbar's button opened it: its gear is the focus-return target,
+    // and a rebuild of an extra toolbar must not take the dialog with it
+    // (#95).
+    wrapper = document.getElementById(mainToolbar.regionId) || wrapper;
     closeFlyout(false);
     closeHelp(false);
 
@@ -2033,17 +2528,21 @@
     buildSettingsContent(node, '');
     wrapper.appendChild(node);
     T.settingsOpen = true;
-    T.syncLayer();
+    T.syncLayers();
 
     var gear = gearButton();
     if (gear) {
       gear.setAttribute('aria-expanded', 'true');
     }
-    placeSurface(node, gear, wrapper);
+    placeSurface(mainToolbar, node, gear, wrapper, true);
     document.addEventListener('mousedown', onSettingsMousedown, true);
     document.addEventListener('keydown', onSettingsKeydown, true);
     document.addEventListener('focusin', onSettingsFocusin, true);
     window.addEventListener('toolrail:tools-updated', onToolsUpdatedWhileOpen);
+    // Shared sets may have changed since the list last came (#98). Not
+    // awaited: the dialog is complete without it, and it redraws only
+    // when the list did change.
+    refreshSharedSets();
 
     if (focusSelector) {
       var initial = focusableIn(node, focusSelector);
@@ -2053,6 +2552,28 @@
       }
     }
     node.querySelector('#toolrail-settings-search').focus();
+  }
+
+  /**
+   * Open Toolbar settings with a toolbar chosen, or choose it in the open
+   * dialog. For the controls that act on one toolbar from outside the
+   * dialog: an empty extra toolbar's "Add tools" button and the Toolbars
+   * menu (#95). openSettings() alone would CLOSE an open dialog.
+   *
+   * @param {Object} tb            The toolbar to choose.
+   * @param {string} focusSelector The control to focus.
+   * @return {void}
+   */
+  function openSettingsFor(tb, focusSelector) {
+    T.settingsToolbarId = tb.id;
+    if (T.settingsOpen) {
+      refreshSettings(focusSelector);
+      return;
+    }
+    var wrapper = document.getElementById(mainToolbar.regionId);
+    if (wrapper) {
+      openSettings(wrapper, focusSelector);
+    }
   }
 
   // -------------------------------------------------------------------
@@ -2082,7 +2603,7 @@
    * @return {HTMLElement|null} The button, or null.
    */
   function helpButton() {
-    var rail = document.getElementById('toolrail-rail');
+    var rail = document.getElementById(mainToolbar.railId);
     return rail ? rail.querySelector('[data-tool="help"]') : null;
   }
 
@@ -2116,7 +2637,7 @@
       node.remove();
     }
     T.helpOpen = false;
-    T.syncLayer();
+    T.syncLayers();
     document.removeEventListener('mousedown', onHelpMousedown, true);
     document.removeEventListener('keydown', onHelpKeydown, true);
     document.removeEventListener('focusin', onHelpFocusin, true);
@@ -2219,6 +2740,16 @@
         ]
       },
       {
+        title: __('Selecting several blocks', 'editrail'),
+        body: [
+          __('While Select is active, drag from empty canvas space to draw a rectangle: the space beside the content, around the title, or below the last block. Every block the rectangle touches is selected. A drag that starts in a block\'s text selects text, as before.', 'editrail'),
+          __('Ctrl+click (Cmd+click on a Mac) adds or removes one block, and Alt+click removes one. With the keyboard: select a block and press Ctrl+Space to add it or to remove it, then move to a different block and press Ctrl+Space again.', 'editrail'),
+          __('Some operating systems use Ctrl+Space for a different function, and the editor does not get the key. In that case, use "Add to selection" or "Remove from selection" in the block\'s options menu. It does the same thing as Ctrl+Space.', 'editrail'),
+          __('When the selected blocks have a gap between them, they get a dashed outline, and a bar under the canvas has Move up, Move down, Duplicate, Group, Delete and Clear selection. While no tool is armed, press Ctrl+Enter (Cmd+Enter on a Mac) to go to the bar, and Escape to go back to the canvas. Each action is one undo step, and a locked block stays where it is.', 'editrail'),
+          __('Escape in the canvas clears the selection. So does a click on a block or on empty space.', 'editrail')
+        ]
+      },
+      {
         title: __('Pinning tools', 'editrail'),
         body: [
           __('Pin any block type or pattern as a quick-insert tool: search under "Add a block or pattern" in Toolbar settings, drag a block or pattern from the inserter onto the toolbar, or choose "Pin to toolbar" in a block\'s options menu.', 'editrail'),
@@ -2239,7 +2770,9 @@
         title: __('Moving the toolbar', 'editrail'),
         body: [
           __('Drag the toolbar by its grip and release near an edge to dock it there, or let go anywhere to float it over the editor.', 'editrail'),
-          __('The keyboard path: pick a position under "Toolbar position" in Toolbar settings.', 'editrail')
+          __('The keyboard path: pick a position under "Toolbar position" in Toolbar settings.', 'editrail'),
+          // More than one toolbar (#95).
+          __('To add a toolbar, use "Add a toolbar" in Toolbar settings. Each toolbar has its own name, pinned tools and position. To change a toolbar, choose it under "Toolbar" at the top of Toolbar settings. The Toolbars button on the main toolbar shows or hides each added toolbar.', 'editrail')
         ]
       },
       {
@@ -2261,6 +2794,8 @@
         title: __('Keyboard', 'editrail'),
         body: [
           __('The toolbar is one Tab stop. Arrow keys move between tools, following the toolbar\'s orientation; Home and End jump to the ends.', 'editrail'),
+          // More than one toolbar (#95).
+          __('Each toolbar that you add is one more Tab stop. Arrow keys stay inside one toolbar.', 'editrail'),
           __('ArrowRight opens a tool\'s flyout on a vertical toolbar; ArrowDown opens it on a horizontal one. Escape closes any open panel.', 'editrail'),
           __('Enter arms an insert tool, and a second Enter disarms it. While a tool is armed, Ctrl+Enter (Cmd+Enter on a Mac) inserts its block after the selected block.', 'editrail')
         ]
@@ -2270,7 +2805,9 @@
         body: [
           __('Save the current pinned arrangement as a named set in Toolbar settings, and load a set to switch arrangements.', 'editrail'),
           __('When you have a saved set, the Saved sets button on the toolbar opens a list of your sets. Choose a set to load it. A check mark shows the set that matches the toolbar now. You can hide the button in Toolbar settings.', 'editrail'),
-          __('Export a set as a small JSON file and import it on another site. Blocks the site does not have stay in the set and appear when their plugin or theme is active.', 'editrail')
+          __('Export a set as a small JSON file and import it on another site. Blocks the site does not have stay in the set and appear when their plugin or theme is active.', 'editrail'),
+          // #98. Says "if you can share", because a Contributor cannot.
+          __('Share a set with the other users of this site with Share beside the set in Toolbar settings, if your role can publish posts. Sets that other users share show under "Shared sets" and in the Saved sets list, with the name of the user who shared them. A load changes only your own toolbar.', 'editrail')
         ]
       },
       {
@@ -2330,13 +2867,13 @@
 
     wrapper.appendChild(node);
     T.helpOpen = true;
-    T.syncLayer();
+    T.syncLayers();
 
     var btn = helpButton();
     if (btn) {
       btn.setAttribute('aria-expanded', 'true');
     }
-    placeSurface(node, btn || gearButton(), wrapper);
+    placeSurface(mainToolbar, node, btn || gearButton(), wrapper, true);
     document.addEventListener('mousedown', onHelpMousedown, true);
     document.addEventListener('keydown', onHelpKeydown, true);
 
@@ -2361,16 +2898,23 @@
   // simply never read again.
 
   // Shared with the other files of the rail (see editor-rail-core.js).
+  T.settingsNode = settingsNode;
+  T.settingsToolbar = settingsToolbar;
+  T.placeOpenDialogs = placeOpenDialogs;
   T.gearButton = gearButton;
   T.closeSettings = closeSettings;
   T.settingsRow = settingsRow;
   T.settingsButton = settingsButton;
   T.focusableIn = focusableIn;
   T.refreshSettings = refreshSettings;
+  T.BLOCK_NAME_PATTERN = BLOCK_NAME_PATTERN;
   T.missingBlockCount = missingBlockCount;
   T.exportConfig = exportConfig;
+  T.setFilePayload = setFilePayload;
+  T.downloadSetFile = downloadSetFile;
   T.importConfigPayload = importConfigPayload;
   T.openSettings = openSettings;
+  T.openSettingsFor = openSettingsFor;
   T.isHelpHidden = isHelpHidden;
   T.closeHelp = closeHelp;
   T.openHelp = openHelp;

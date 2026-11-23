@@ -118,6 +118,27 @@
   // The Saved sets button's data-tool id (#93). Rail chrome, not a
   // registered tool, so allToolIds() reserves it.
   var SETS_TOOL_ID = 'saved-sets';
+  // The extra toolbars (#95): one JSON value, {version, toolbars: [...]}.
+  // The first toolbar is NOT in it. It keeps the keys it always had
+  // (POSITION_KEY, SLOTS_KEY, WIDE_KEY), so an account from an older
+  // version shows the same toolbar in the same place with no migration.
+  var TOOLBARS_KEY = 'toolrail-toolbars';
+  var TOOLBARS_BUTTON_HIDDEN_KEY = 'toolrail-toolbars-button-hidden';
+  // The Toolbars button's data-tool id. Rail chrome, like SETS_TOOL_ID.
+  var TOOLBAR_LIST_TOOL_ID = 'toolbar-list';
+  // The one button of an extra toolbar that has no pinned tool yet.
+  var ADD_TOOLS_TOOL_ID = 'toolbar-add-tools';
+  // The first toolbar plus three. Each docked toolbar takes its width
+  // from the canvas, so the number has to stop somewhere.
+  var MAX_TOOLBARS = 4;
+  // The narrowest content area (the editor's canvas region) the rail
+  // stays quiet about (owner decision 2026-11-16: say so, refuse
+  // nothing). 600px is core's own small breakpoint ($break-small), the
+  // width under which core lays the editor out for a phone; a canvas
+  // narrower than that is a phone layout on a desktop. Measured on the
+  // test site, WordPress 7.1.3 at 1280 x 800 with the settings sidebar
+  // open: one toolbar leaves 947px, four wide toolbars on one edge 200px.
+  var MIN_CANVAS_WIDTH = 600;
   var PREFS_SCOPE = 'toolrail';
   var SHAPE_FILL = '#b9b9b9';
 
@@ -482,21 +503,811 @@
     return pos;
   }
 
-  // Defaults until boot() re-loads from storage — reads must wait for the
-  // editor to attach the preferences persistence layer, and nothing
-  // consumes `position` before mount anyway.
-  T.position = { dock: DEFAULT_DOCK, x: 24, y: 24 };
-
   /**
-   * Persist the current dock and floating offsets.
+   * The state of ONE toolbar, at its start values (#95). A function that
+   * reads or changes this state takes the toolbar as its first argument,
+   * so the code that builds, places and moves a toolbar names no
+   * particular one. The first toolbar is mainToolbar, below; the author
+   * can add up to three more (`toolbars`).
+   *
+   * A value that belongs to one toolbar goes here, with its start value.
+   * Two kinds do not, on purpose:
+   *
+   *  - The toolbar's NODES. They are looked up by id on every use
+   *    (regionId, railId): the editor's re-render can remove the region
+   *    at any time, and "not in the document" is how mount() learns that
+   *    it must build a new one. A kept reference would outlive the node.
+   *  - The roving tab stop. It has no variable: it is the one
+   *    .toolrail-tool with tabIndex 0 inside the toolbar's rail node, and
+   *    buildRail binds the two listeners that move it to that node.
+   *
+   * The FIRST toolbar's pins and wide mode are not here either: they stay
+   * in the keys they always had (SLOTS_KEY, WIDE_KEY) and are read from
+   * storage on every use, so loadSlots() and isWide() ask the store for
+   * the first toolbar and this object for the others.
+   *
+   * State that is ONE FOR THE PAGE stays outside. Where that choice was
+   * not obvious, the reason is beside the variable: the armed tool
+   * (activeTool), the open flyout (openFlyout), a toolbar drag in flight
+   * (drag), a tool drag in flight (railDragActive) and the pressed-state
+   * signature (lastPaintedSignature). The flyout and the drag each record
+   * the toolbar they belong to. The rest is shared by its nature: the
+   * tool registry (`registered`) is what providers register, not what one
+   * toolbar shows; the settings, help and add-to-toolbar dialogs are one
+   * surface each, opened from the main toolbar's buttons and hung in its
+   * region; the Section overview is a mode of the canvas; and the
+   * appearance and the saved sets are stored preferences with no variable
+   * here.
+   *
+   * @param {string} id       The toolbar's name in code.
+   * @param {string} regionId The id of its region node.
+   * @param {string} railId   The id of its role="toolbar" node.
+   * @return {Object} A fresh toolbar state.
    */
-  function savePosition() {
-    writeKey(POSITION_KEY, JSON.stringify(T.position));
+  function newToolbar(id, regionId, railId) {
+    return {
+      // The toolbar's name in code: 'main' for the first toolbar, and the
+      // stored id of an extra toolbar (TOOLBARS_KEY), which is also the
+      // tail of its two node ids and its region's data-toolbar value.
+      id: id,
+      // An extra toolbar's own values, as stored in its record: the name
+      // the author gave it (its accessible name), its pinned slots, its
+      // wide mode, and whether the author has hidden it. The first
+      // toolbar does not use these: it has no name of its own, it cannot
+      // be hidden, and its pins and wide mode are in their own keys.
+      name: '',
+      slots: [],
+      wide: false,
+      hidden: false,
+      // The ids of the toolbar's two nodes: the positioned region that
+      // hangs in the editor's skeleton, and the role="toolbar" rail
+      // inside it.
+      regionId: regionId,
+      railId: railId,
+      // The dock and the floating offsets. Defaults until boot() re-loads
+      // from storage — reads must wait for the editor to attach the
+      // preferences persistence layer, and nothing consumes `position`
+      // before mount anyway.
+      position: { dock: DEFAULT_DOCK, x: 24, y: 24 },
+      // An extra toolbar's floating offsets as STORED in its record.
+      // `position` holds the painted offsets, which applyFloatPosition()
+      // clamps into the window; only a move of this toolbar
+      // (savePosition) or a stored change (syncToolbars) changes these,
+      // so a save for a different toolbar never stores a clamp. The first
+      // toolbar does not use them: only its own moves write its key.
+      stored: { x: 24, y: 24 },
+      // Every React root created for a pinned-block icon, so the previous
+      // generation can be unmounted. A discarded root keeps its fiber tree
+      // alive, and the rail rebuilds on every slot change (the ↑/↓ buttons
+      // in the settings dialog rebuild it per click) — so these accumulate
+      // fast unless they are disposed. buildRail() is the ONLY producer
+      // and always creates a complete new set, which makes it the correct
+      // disposal point. Per toolbar, because that set is one rail's: a
+      // shared list would let one toolbar's rebuild unmount the icons of
+      // a different toolbar.
+      iconRoots: [],
+      // The tools section's ResizeObserver, disposed on the same rule as
+      // the icon roots: buildRail is the only producer, so it disconnects
+      // the previous generation before creating the next.
+      scrollObserver: null
+    };
   }
 
-  /** Top and bottom docks lay the rail out as a horizontal bar. */
-  function isVertical() {
-    return T.position.dock !== 'top' && T.position.dock !== 'bottom';
+  // The first toolbar. Its two ids are public: extension plugins read the
+  // --toolrail-* tokens off #toolrail-region, and the browser tests name
+  // #toolrail-rail. It holds Select, the Section overview, the provider
+  // tools, Help and Toolbar settings, so it is never hidden or deleted.
+  var mainToolbar = newToolbar('main', 'toolrail-region', 'toolrail-rail');
+
+  // Every toolbar, the first one first. The order is the Tab order and
+  // the order on a shared edge (see placeToolbarRegions).
+  T.toolbars = [mainToolbar];
+
+  // The stored extra toolbars as syncToolbars() last applied them (the
+  // JSON of the validated records), so a preference change that is not
+  // about toolbars costs one read and one compare.
+  var toolbarsSynced = '[]';
+
+  var TOOLBAR_ID_PATTERN = /^[a-z0-9]{1,12}$/;
+  var TOOLBAR_NAME_MAX = 40;
+
+  /**
+   * Persist a toolbar's dock and floating offsets.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {void}
+   */
+  function savePosition(tb) {
+    if (tb === mainToolbar) {
+      writeKey(POSITION_KEY, JSON.stringify(tb.position));
+    } else {
+      // This toolbar moved: its painted offsets become its stored ones.
+      tb.stored = { x: tb.position.x, y: tb.position.y };
+      saveToolbars();
+    }
+  }
+
+  /**
+   * @param {string} id A toolbar id ('main' or a stored id).
+   * @return {Object|null} The toolbar, or null.
+   */
+  function toolbarById(id) {
+    for (var i = 0; i < T.toolbars.length; i++) {
+      if (T.toolbars[i].id === id) {
+        return T.toolbars[i];
+      }
+    }
+    return null;
+  }
+
+  /**
+   * What the author calls a toolbar: its own name, or "Main toolbar" for
+   * the first one. For lists, headings and messages. The first toolbar's
+   * ACCESSIBLE name stays "Tools" (buildRail).
+   *
+   * @param {Object} tb The toolbar.
+   * @return {string} The name.
+   */
+  function toolbarLabel(tb) {
+    return tb === mainToolbar ? __('Main toolbar', 'editrail') : tb.name;
+  }
+
+  /**
+   * A toolbar name as it is stored: a string, with runs of white space
+   * as one space, trimmed, and not longer than TOOLBAR_NAME_MAX.
+   *
+   * @param {*} value A candidate name.
+   * @return {string} The clean name; '' when there is none.
+   */
+  function cleanToolbarName(value) {
+    if (typeof value !== 'string') {
+      return '';
+    }
+    return value.replace(/\s+/g, ' ').trim().slice(0, TOOLBAR_NAME_MAX).trim();
+  }
+
+  /**
+   * Whether a name is in use. A toolbar's name is its accessible name, so
+   * two toolbars must not have the same one. The compare ignores case. The
+   * first toolbar's two names, "Tools" and "Main toolbar", are taken too.
+   *
+   * @param {string}   name  A clean name.
+   * @param {string[]} taken The names of the other extra toolbars.
+   * @return {boolean}
+   */
+  function toolbarNameTaken(name, taken) {
+    var wanted = name.toLowerCase();
+    return [__('Tools', 'editrail'), __('Main toolbar', 'editrail')].concat(taken).some(function (other) {
+      return other.toLowerCase() === wanted;
+    });
+  }
+
+  /**
+   * A name that no other toolbar has: the name itself, or the name with
+   * the first free number after it ("Animation 2").
+   *
+   * @param {string}   name  A clean name.
+   * @param {string[]} taken The names of the other extra toolbars.
+   * @return {string} The free name.
+   */
+  function uniqueToolbarName(name, taken) {
+    var candidate = name;
+    for (var n = 2; toolbarNameTaken(candidate, taken); n++) {
+      candidate = name.slice(0, TOOLBAR_NAME_MAX - String(n).length - 1).trim() + ' ' + n;
+    }
+    return candidate;
+  }
+
+  /**
+   * The name a new toolbar gets: "Toolbar 2" for the second toolbar, and
+   * the next free number after that.
+   *
+   * @param {string[]} taken The names of the other extra toolbars.
+   * @return {string} The name.
+   */
+  function defaultToolbarName(taken) {
+    for (var n = taken.length + 2; ; n++) {
+      var name = sprintf(
+        /* translators: %d: the toolbar's number, 2 or more. */
+        __('Toolbar %d', 'editrail'),
+        n
+      );
+      if (!toolbarNameTaken(name, taken)) {
+        return name;
+      }
+    }
+  }
+
+  /**
+   * The stored value of TOOLBARS_KEY as an object, or null when it is not
+   * there, cannot be parsed, or is not a version this code knows.
+   *
+   * A value from a LATER version of the plugin therefore shows no extra
+   * toolbars here, and the first change that saves the list (an added
+   * toolbar) replaces it with a version 1 list. A downgrade can lose the
+   * extra toolbars that way. That is accepted: the first toolbar and its
+   * keys are never touched.
+   *
+   * @return {Object|null} {version: 1, toolbars: Array}, or null.
+   */
+  function readToolbarStore() {
+    try {
+      var raw = readKey(TOOLBARS_KEY);
+      var parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === 'object' && parsed.version === 1 && Array.isArray(parsed.toolbars)) {
+        return parsed;
+      }
+    } catch (e) {
+      /* Unparseable or unavailable storage: no extra toolbars. */
+    }
+    return null;
+  }
+
+  /**
+   * Which stored records the reader uses, and which it leaves out. Used:
+   * an object with a valid id ('main' is not one) that no record before
+   * it has, while there is room (MAX_TOOLBARS - 1). Left out: everything
+   * else, in stored order: a bad or repeated id, a non-object, a record
+   * past the maximum. One rule for the reader and the writer, so the
+   * writer can keep exactly what the reader did not show.
+   *
+   * @param {Array} list The stored `toolbars` array.
+   * @return {{accepted: Object[], leftOut: Array}} The two lists.
+   */
+  function splitToolbarRecords(list) {
+    // A prototype-less map: an id such as 'constructor' passes the id
+    // pattern and must not read as already seen (review 2026-11-16,
+    // finding 6).
+    var ids = Object.create(null);
+    var accepted = [];
+    var leftOut = [];
+    list.forEach(function (rec) {
+      var usable = accepted.length < MAX_TOOLBARS - 1 && !!rec && typeof rec === 'object'
+        && typeof rec.id === 'string' && TOOLBAR_ID_PATTERN.test(rec.id)
+        && rec.id !== mainToolbar.id && !ids[rec.id];
+      if (usable) {
+        ids[rec.id] = true;
+        accepted.push(rec);
+      } else {
+        leftOut.push(rec);
+      }
+    });
+    return { accepted: accepted, leftOut: leftOut };
+  }
+
+  /**
+   * The stored extra toolbars, each field validated before it is trusted,
+   * in stored order. A record with a bad or repeated id is not shown.
+   * Every other bad field gets its default: an unknown dock becomes the
+   * left dock, a missing name becomes "Toolbar N", and a name another
+   * toolbar has gets a number. Records past the maximum are left out,
+   * not deleted: nothing is written here, and saveToolbars() writes the
+   * left-out records back as they were.
+   *
+   * @return {Object[]} {id, name, dock, x, y, slots, wide, hidden} each.
+   */
+  function loadToolbarRecords() {
+    var store = readToolbarStore();
+    var out = [];
+    var names = [];
+    splitToolbarRecords(store ? store.toolbars : []).accepted.forEach(function (rec) {
+      var name = cleanToolbarName(rec.name);
+      name = name ? uniqueToolbarName(name, names) : defaultToolbarName(names);
+      names.push(name);
+      out.push({
+        id: rec.id,
+        name: name,
+        dock: DOCKS.indexOf(rec.dock) !== -1 ? rec.dock : DEFAULT_DOCK,
+        x: typeof rec.x === 'number' && isFinite(rec.x) ? rec.x : 24,
+        y: typeof rec.y === 'number' && isFinite(rec.y) ? rec.y : 24,
+        slots: T.normalizeSlots(rec.slots),
+        wide: rec.wide === true,
+        hidden: rec.hidden === true
+      });
+    });
+    return out;
+  }
+
+  /**
+   * Write every extra toolbar back from its object. The ONE writer of
+   * TOOLBARS_KEY: a caller changes the toolbar object first and then calls
+   * this, so the stored list and the objects cannot disagree. A field of
+   * a stored record that this code does not know is kept.
+   *
+   * The records the reader left out (splitToolbarRecords) are written back
+   * unchanged, after the toolbars this page shows. Without that, the first
+   * change deleted records past the maximum, with their pins (review
+   * 2026-11-16, finding 3). A repeated id is left out the same way: it
+   * stays, as stored, after the toolbar that has that id, and the reader
+   * keeps not showing it. A record the reader DID show and that is no
+   * longer in `toolbars` was deleted by the author, and goes.
+   *
+   * @return {void}
+   */
+  function saveToolbars() {
+    var store = readToolbarStore();
+    var split = splitToolbarRecords(store ? store.toolbars : []);
+    var stored = Object.create(null);
+    split.accepted.forEach(function (rec) {
+      stored[rec.id] = rec;
+    });
+    var list = T.toolbars.filter(function (tb) {
+      return tb !== mainToolbar;
+    }).map(function (tb) {
+      var rec = {};
+      Object.keys(stored[tb.id] || {}).forEach(function (key) {
+        if (key !== '__proto__') {
+          rec[key] = stored[tb.id][key];
+        }
+      });
+      rec.id = tb.id;
+      rec.name = tb.name;
+      rec.dock = tb.position.dock;
+      // The STORED offsets, not the painted ones: applyFloatPosition()
+      // clamps tb.position into a narrow window, and a save made for a
+      // different toolbar wrote that clamp as this toolbar's place
+      // (PR #126 review, CodeRabbit). savePosition() updates them when
+      // the author moves this toolbar.
+      rec.x = tb.stored.x;
+      rec.y = tb.stored.y;
+      rec.slots = tb.slots.slice();
+      rec.wide = tb.wide;
+      rec.hidden = tb.hidden;
+      return rec;
+    });
+    // A left-out record with the id of a toolbar the author just deleted
+    // (shown before, not in `toolbars` now) is a duplicate of it. Kept, it
+    // would be the next record the reader accepts for that id, and the
+    // deleted toolbar would come back with its pins (PR #126 review,
+    // CodeRabbit). It goes with the toolbar. Other left-out records stay.
+    var known = Object.create(null);
+    T.toolbars.forEach(function (tb) {
+      known[tb.id] = true;
+    });
+    var leftOut = split.leftOut.filter(function (rec) {
+      var id = rec && typeof rec === 'object' ? rec.id : null;
+      return !(typeof id === 'string' && stored[id] && !known[id]);
+    });
+    writeKey(TOOLBARS_KEY, JSON.stringify({ version: 1, toolbars: list.concat(leftOut) }));
+    // This page's own change is already in the objects, so the next
+    // syncToolbars() has nothing to do for it. The signature is built
+    // from the objects, not read back: when a delete makes room for a
+    // left-out record, the store now shows one more toolbar than this
+    // page, and the next sync must find that difference and add it.
+    toolbarsSynced = JSON.stringify(T.toolbars.slice(1).map(function (tb) {
+      return {
+        id: tb.id,
+        name: tb.name,
+        dock: tb.position.dock,
+        x: tb.stored.x,
+        y: tb.stored.y,
+        slots: tb.slots,
+        wide: tb.wide,
+        hidden: tb.hidden
+      };
+    }));
+  }
+
+  /**
+   * Tell extensions that a toolbar was added, removed, renamed, moved,
+   * shown or hidden.
+   *
+   * Every change but a rename can move the canvas, so it also fires
+   * toolrail:position-changed, first. That event's payload is ALWAYS the
+   * first toolbar's position: a listener that reads it as "where the
+   * toolbar is" gets what getDock() says, and a listener that reads it as
+   * "the layout moved, measure again" measures again. The new event says
+   * which toolbar changed (#95).
+   *
+   * @param {string} id     The toolbar's id; '' when the stored list
+   *                        changed from outside this page.
+   * @param {string} change 'added', 'removed', 'renamed', 'position',
+   *                        'shown', 'hidden' or 'synced'.
+   * @return {void}
+   */
+  function announceToolbarsChange(id, change) {
+    if (change !== 'renamed') {
+      var first = mainToolbar.position;
+      window.dispatchEvent(new CustomEvent('toolrail:position-changed', {
+        detail: { dock: first.dock, x: first.x, y: first.y }
+      }));
+    }
+    window.dispatchEvent(new CustomEvent('toolrail:toolbars-changed', {
+      detail: { toolbar: id, change: change }
+    }));
+  }
+
+  /**
+   * Take a toolbar's region out of the document for good, and release
+   * what its last build holds. setDock removes a region too, but builds
+   * it again at once, and that build does the release. A hidden or
+   * deleted toolbar gets no next build.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {void}
+   */
+  function removeToolbarRegion(tb) {
+    if (T.openFlyout && T.openFlyout.toolbar === tb) {
+      T.closeFlyout(false);
+    }
+    if (T.drag && T.drag.toolbar === tb) {
+      T.finishDrag();
+    }
+    T.releaseToolDragOf(tb);
+    disposeIconRoots(tb);
+    if (tb.scrollObserver) {
+      tb.scrollObserver.disconnect();
+      tb.scrollObserver = null;
+    }
+    var region = document.getElementById(tb.regionId);
+    if (region) {
+      region.remove();
+    }
+  }
+
+  /**
+   * Return the rail to Select when the armed tool has no button left on
+   * any shown toolbar, and say so. A toolbar that the author hides or
+   * deletes can take the armed tool with it; without this the canvas
+   * keeps the armed cursor and no button shows as pressed.
+   *
+   * A caller that announces its own change passes `quiet` and puts
+   * disarmedMessage() into its one message: two speak() calls in one
+   * task leave only the second in the live region, so the disarm was
+   * never heard (review 2026-11-16, finding 2).
+   *
+   * @param {boolean} quiet Do not speak; the caller does.
+   * @return {boolean} True when it disarmed.
+   */
+  function disarmIfToolGone(quiet) {
+    if (T.activeTool !== 'select' && !T.findTool(T.activeTool)) {
+      T.setActiveTool('select');
+      if (!quiet) {
+        speak(disarmedMessage());
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /** @return {string} The sentence for a disarm the author did not ask for. */
+  function disarmedMessage() {
+    return __('Tool disarmed. Select is active.', 'editrail');
+  }
+
+  /**
+   * One message from a change's own message and the sentences it adds
+   * (a disarm, a narrow canvas), for one speak() call.
+   *
+   * @param {string[]} parts Sentences; empty ones are left out.
+   * @return {string} The message.
+   */
+  function joinMessages(parts) {
+    return parts.filter(function (part) {
+      return !!part;
+    }).join(' ');
+  }
+
+  /**
+   * Make the toolbar objects and their regions agree with the stored
+   * list. The one path for every change that did not start in this page's
+   * own code: the first read at boot, core's late attach of the saved
+   * preferences, and a write from a different tab that a later attach
+   * brings in. This page's own changes update the object before they
+   * write, so they find nothing to do here.
+   *
+   * A changed toolbar's region is built again whole. Its position alone
+   * is applied in place.
+   *
+   * @return {boolean} True when a toolbar was added, removed or rebuilt.
+   */
+  function syncToolbars() {
+    var records = loadToolbarRecords();
+    var signature = JSON.stringify(records);
+    if (signature === toolbarsSynced) {
+      return false;
+    }
+    toolbarsSynced = signature;
+
+    var changed = false;
+    // Offsets alone changed: no rebuild, but the layout moved, so
+    // listeners still hear of it (PR #126 review, CodeRabbit).
+    var moved = false;
+    var next = [mainToolbar];
+    records.forEach(function (rec) {
+      var tb = toolbarById(rec.id);
+      // A drag owns the position until it ends, and saves it then.
+      var dragging = !!T.drag && T.drag.toolbar === tb;
+      if (!tb) {
+        tb = newToolbar(rec.id, 'toolrail-region-' + rec.id, 'toolrail-rail-' + rec.id);
+        changed = true;
+      } else if (tb.name !== rec.name || tb.wide !== rec.wide || tb.hidden !== rec.hidden
+        || JSON.stringify(tb.slots) !== JSON.stringify(rec.slots)
+        || (!dragging && tb.position.dock !== rec.dock)) {
+        removeToolbarRegion(tb);
+        changed = true;
+        // removeToolbarRegion() ends a drag of this toolbar. A drag that
+        // ended no longer owns the position, so the stored one applies
+        // (PR #126 review, CodeRabbit).
+        dragging = !!T.drag && T.drag.toolbar === tb;
+      } else if (!dragging && (tb.stored.x !== rec.x || tb.stored.y !== rec.y)) {
+        moved = true;
+      }
+      tb.name = rec.name;
+      tb.slots = rec.slots;
+      tb.wide = rec.wide;
+      tb.hidden = rec.hidden;
+      tb.stored = { x: rec.x, y: rec.y };
+      if (!dragging) {
+        tb.position.dock = rec.dock;
+        tb.position.x = rec.x;
+        tb.position.y = rec.y;
+      }
+      next.push(tb);
+    });
+    T.toolbars.forEach(function (tb) {
+      if (next.indexOf(tb) === -1) {
+        removeToolbarRegion(tb);
+        changed = true;
+      }
+    });
+    var reordered = next.some(function (tb, i) {
+      return T.toolbars[i] !== tb;
+    });
+    T.toolbars = next;
+
+    if (changed || reordered) {
+      // The chosen toolbar in Toolbar settings can be one that is gone.
+      if (!toolbarById(T.settingsToolbarId)) {
+        T.settingsToolbarId = mainToolbar.id;
+      }
+      // An open Toolbars menu shows the old list: a checked item would
+      // now do the opposite of what it says. Close it, and keep the
+      // focus on its button when the focus was in it (PR #126 review,
+      // CodeRabbit).
+      if (T.openFlyout && T.openFlyout.parentBtn.dataset.tool === TOOLBAR_LIST_TOOL_ID) {
+        T.closeFlyout(T.openFlyout.node.contains(document.activeElement));
+      }
+      T.mountToolbars();
+      T.syncLayers();
+      // A provider tool under a pin of a changed toolbar can move to or
+      // from the first toolbar's top level.
+      T.rerenderMainForParents(null);
+      // The first toolbar shows the Toolbars button only while an extra
+      // toolbar exists.
+      T.reconcileToolbarsButton();
+      disarmIfToolGone();
+    }
+    // Paint every floating toolbar BEFORE the events below, so a
+    // listener that measures the layout sees the new boxes (PR #126
+    // review, CodeRabbit). A toolbar whose offsets alone changed keeps
+    // its region.
+    T.toolbars.forEach(T.applyFloatPosition);
+    if (changed || reordered || moved) {
+      announceToolbarsChange('', 'synced');
+    }
+    if (changed || reordered) {
+      if (T.settingsOpen) {
+        T.refreshSettings();
+      }
+      T.placeOpenDialogs();
+    }
+    return changed || reordered;
+  }
+
+  /**
+   * Add a toolbar: empty, with the next free name, beside the first
+   * toolbar on the same edge (a floating one a little down and right of
+   * it, so the two do not start one on the other). Refused at
+   * MAX_TOOLBARS.
+   *
+   * @return {Object|null} The new toolbar, or null when the maximum is
+   *                       reached.
+   */
+  function addToolbar() {
+    if (T.toolbars.length >= MAX_TOOLBARS) {
+      return null;
+    }
+    // Skip the ids of stored records too: a left-out record that
+    // saveToolbars() keeps must not be shadowed by a new toolbar that
+    // takes its id.
+    var store = readToolbarStore();
+    var used = Object.create(null);
+    (store ? store.toolbars : []).forEach(function (rec) {
+      if (rec && typeof rec === 'object' && typeof rec.id === 'string') {
+        used[rec.id] = true;
+      }
+    });
+    var n = 1;
+    while (toolbarById('t' + n) || used['t' + n]) {
+      n++;
+    }
+    var id = 't' + n;
+    var tb = newToolbar(id, 'toolrail-region-' + id, 'toolrail-rail-' + id);
+    tb.name = defaultToolbarName(T.toolbars.slice(1).map(function (other) {
+      return other.name;
+    }));
+    tb.position.dock = mainToolbar.position.dock;
+    tb.position.x = mainToolbar.position.x + 24 * T.toolbars.length;
+    tb.position.y = mainToolbar.position.y + 24 * T.toolbars.length;
+    tb.stored = { x: tb.position.x, y: tb.position.y };
+    T.toolbars.push(tb);
+    saveToolbars();
+    T.mount(tb);
+    T.syncLayers();
+    T.reconcileToolbarsButton();
+    // A dialog open past the first toolbar's edge now has one more
+    // toolbar to clear.
+    T.placeOpenDialogs();
+    announceToolbarsChange(tb.id, 'added');
+    return tb;
+  }
+
+  /**
+   * Give an extra toolbar a new name. The name is its accessible name,
+   * so an empty name and a name another toolbar has are refused.
+   *
+   * @param {Object} tb    An extra toolbar.
+   * @param {string} value The name the author typed.
+   * @return {string} 'renamed', 'same', 'empty' or 'taken'.
+   */
+  function renameToolbar(tb, value) {
+    var name = cleanToolbarName(value);
+    if (!name) {
+      return 'empty';
+    }
+    if (name === tb.name) {
+      return 'same';
+    }
+    var others = T.toolbars.filter(function (other) {
+      return other !== mainToolbar && other !== tb;
+    }).map(function (other) {
+      return other.name;
+    });
+    if (toolbarNameTaken(name, others)) {
+      return 'taken';
+    }
+    tb.name = name;
+    saveToolbars();
+    // The name is on the region and, built in, on the rail: its accessible
+    // name and an empty toolbar's "Add tools to <name>" button, which kept
+    // the old name until a rebuild (review 2026-11-16, finding 4). The
+    // rebuild moves focus only when focus was in that rail, and a rename
+    // comes from the dialog.
+    var region = document.getElementById(tb.regionId);
+    if (region) {
+      region.setAttribute('aria-label', regionLabel(tb));
+    }
+    T.rerender(tb);
+    announceToolbarsChange(tb.id, 'renamed');
+    return 'renamed';
+  }
+
+  /**
+   * Delete an extra toolbar. Its pins go with it; a pin's own name,
+   * description and icon are cleared only when no other toolbar shows
+   * that pin.
+   *
+   * The armed tool is put back to Select when it went with the toolbar,
+   * without a word: the caller says it in its own message.
+   *
+   * @param {Object} tb An extra toolbar.
+   * @return {Object|boolean} {disarmed} when it was deleted; else false.
+   */
+  function deleteToolbar(tb) {
+    var index = T.toolbars.indexOf(tb);
+    if (tb === mainToolbar || index === -1) {
+      return false;
+    }
+    var slots = tb.slots.slice();
+    T.toolbars.splice(index, 1);
+    saveToolbars();
+    removeToolbarRegion(tb);
+    slots.forEach(function (name) {
+      if (!T.isPinnedAnywhere(name) && T.clearPinMeta(name)) {
+        T.announcePinMetaChange(name);
+      }
+    });
+    if (T.settingsToolbarId === tb.id) {
+      T.settingsToolbarId = mainToolbar.id;
+    }
+    T.rerenderMainForParents(tb);
+    T.mountToolbars();
+    T.syncLayers();
+    T.reconcileToolbarsButton();
+    var disarmed = disarmIfToolGone(true);
+    T.placeOpenDialogs();
+    window.dispatchEvent(new CustomEvent('toolrail:tools-updated'));
+    announceToolbarsChange(tb.id, 'removed');
+    return { disarmed: disarmed };
+  }
+
+  /**
+   * Show or hide an extra toolbar. A hidden toolbar has no region in the
+   * document, so it has no Tab stop and no landmark, and the canvas gets
+   * its room back. Its record keeps everything else. A disarm is silent;
+   * the caller says it in its own message.
+   *
+   * @param {Object}  tb     An extra toolbar.
+   * @param {boolean} hidden Whether to hide it.
+   * @return {Object|boolean} {disarmed} when the state changed; else false.
+   */
+  function setToolbarHidden(tb, hidden) {
+    if (tb === mainToolbar || tb.hidden === !!hidden) {
+      return false;
+    }
+    tb.hidden = !!hidden;
+    saveToolbars();
+    var disarmed = false;
+    if (tb.hidden) {
+      removeToolbarRegion(tb);
+      disarmed = disarmIfToolGone(true);
+    } else {
+      T.mount(tb);
+    }
+    T.syncLayers();
+    T.placeOpenDialogs();
+    announceToolbarsChange(tb.id, tb.hidden ? 'hidden' : 'shown');
+    return { disarmed: disarmed };
+  }
+
+  /**
+   * The sentence to add to an author's change when it left the canvas
+   * narrower than MIN_CANVAS_WIDTH, or ''. Nothing is refused (owner
+   * decision 2026-11-16): the author hears it and decides. Called only
+   * after a change the author made in the rail's own controls (add, dock
+   * or move, wide on, show), never on page load or a window resize.
+   *
+   * Width only. The top and bottom docks never take tool names, so a
+   * stack of horizontal bars is at most MAX_TOOLBARS × 53px tall.
+   *
+   * @return {string} The sentence, or ''.
+   */
+  function canvasNarrowMessage() {
+    // Only while more than one toolbar is SHOWN: a hidden toolbar takes no
+    // width, and with one toolbar the rail acts as it did before #95 and
+    // "hide or move a toolbar" names nothing the author can do (review
+    // 2026-11-16, round 2).
+    var shown = T.toolbars.filter(function (tb) {
+      return !tb.hidden;
+    }).length;
+    var content = T.contentRegion();
+    var width = content ? Math.round(content.getBoundingClientRect().width) : 0;
+    if (shown < 2 || !content || width >= MIN_CANVAS_WIDTH) {
+      return '';
+    }
+    return sprintf(
+      /* translators: 1: the canvas width in pixels, 2: the smallest width that keeps blocks easy to edit. */
+      __('The content area is now %1$d pixels wide, less than %2$d. To give it more room, hide or move a toolbar, or turn off tool names.', 'editrail'),
+      width,
+      MIN_CANVAS_WIDTH
+    );
+  }
+
+  /**
+   * The accessible name of a toolbar's region.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {string} The name.
+   */
+  function regionLabel(tb) {
+    return tb === mainToolbar
+      ? __('Tool rail', 'editrail')
+      : sprintf(
+        /* translators: %s: the toolbar's name. */
+        __('Tool rail: %s', 'editrail'),
+        tb.name
+      );
+  }
+
+  /**
+   * Top and bottom docks lay the rail out as a horizontal bar.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {boolean} True for a left, right or floating toolbar.
+   */
+  function isVertical(tb) {
+    return tb.position.dock !== 'top' && tb.position.dock !== 'bottom';
   }
 
   /**
@@ -520,43 +1331,95 @@
   }
 
   /**
-   * Where the region belongs for the current dock, as a parent plus the
-   * node to insert before (null = append). Returns null when the editor
-   * chrome for that dock is not on the page yet — mount() then retries.
+   * The node a toolbar's region hangs in for its current dock. Returns
+   * null when the editor chrome for that dock is not on the page yet —
+   * mount() then retries.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {HTMLElement|null} The parent, or null.
    */
-  function dockPlacement() {
+  function dockParent(tb) {
     var body = skeletonBody();
     var editor = skeletonEditor();
-    switch (T.position.dock) {
-      case 'right':
-      case 'float':
-        return body ? { parent: body, before: null } : null;
+    switch (tb.position.dock) {
       case 'top':
-        return editor && body && body.parentNode === editor
-          ? { parent: editor, before: body }
-          : null;
+        return editor && body && body.parentNode === editor ? editor : null;
       case 'bottom':
-        return editor ? { parent: editor, before: null } : null;
+        return editor || null;
       default:
-        return body ? { parent: body, before: body.firstChild } : null;
+        return body || null;
     }
   }
 
   /**
-   * Whether the region already sits where dockPlacement() wants it, so
-   * mount() can skip a needless move on every observer pass.
+   * Put every toolbar's region where its dock hangs, and move only the
+   * regions that are not there, so mount() can run on every observer pass.
    *
-   * @param {HTMLElement} region The rail region.
-   * @param {Object}      place  A dockPlacement() result.
-   * @return {boolean} True when no move is needed.
+   * The places are decided for ALL toolbars in one pass, not one toolbar
+   * at a time (#95). Each of the right, bottom and floating docks wants
+   * its region at the END of its parent. Two toolbars that each asked
+   * "am I the last child?" would move each other on every pass, and each
+   * move is a mutation that starts the next pass. So the order is fixed
+   * here: the first toolbar keeps the place it always had, against the
+   * editor's edge, and each later toolbar on the same edge sits between
+   * the one before it and the canvas. The order in the document is then
+   * the order on screen on every edge:
+   *
+   *   left   → the first children of __body, first toolbar first
+   *   right  → the last children of __body, first toolbar last
+   *   float  → at the end of __body, before the right-docked toolbars
+   *   top    → directly before __body in __editor, first toolbar first
+   *   bottom → the last children of __editor, first toolbar last
+   *
+   * A region that already has its place is not touched: moving a node
+   * drops the focus inside it.
+   *
+   * @param {Object|null}      pendingTb   A toolbar whose region is built
+   *                                       but not in the document yet.
+   * @param {HTMLElement|null} pendingNode That region.
+   * @return {Object[]} The toolbars whose region was inserted or moved.
    */
-  function isPlacedCorrectly(region, place) {
-    if (region.parentNode !== place.parent) {
-      return false;
+  function placeToolbarRegions(pendingTb, pendingNode) {
+    var body = skeletonBody();
+    var editor = skeletonEditor();
+    var groups = { left: [], right: [], top: [], bottom: [], float: [] };
+    var moved = [];
+    T.toolbars.forEach(function (tb) {
+      var node = tb === pendingTb ? pendingNode : document.getElementById(tb.regionId);
+      if (node && dockParent(tb)) {
+        groups[tb.position.dock].push({ tb: tb, node: node });
+      }
+    });
+
+    // Each entry must sit directly in front of the one after it, and the
+    // last one directly in front of `end` (null = the end of the parent).
+    function settleBefore(parent, entries, end) {
+      var before = end;
+      for (var i = entries.length - 1; i >= 0; i--) {
+        if (entries[i].node.parentNode !== parent || entries[i].node.nextSibling !== before) {
+          parent.insertBefore(entries[i].node, before);
+          moved.push(entries[i].tb);
+        }
+        before = entries[i].node;
+      }
     }
-    // A left dock's `before` resolves to the region itself once it is the
-    // first child — that is the placed state, not a move.
-    return place.before === region || region.nextSibling === place.before;
+
+    // The left dock counts from the START of the parent. A region that
+    // is the first child is in its place; that is not a move.
+    groups.left.forEach(function (entry, i) {
+      if (body.childNodes[i] !== entry.node) {
+        body.insertBefore(entry.node, body.childNodes[i] || null);
+        moved.push(entry.tb);
+      }
+    });
+    if (body) {
+      settleBefore(body, groups.float.concat(groups.right.slice().reverse()), null);
+    }
+    if (editor) {
+      settleBefore(editor, groups.top, body);
+      settleBefore(editor, groups.bottom.slice().reverse(), null);
+    }
+    return moved;
   }
 
   // -------------------------------------------------------------------
@@ -575,37 +1438,33 @@
     gear: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 9a3 3 0 110 6 3 3 0 010-6zm-1.7-6h3.4l.5 2.4c.6.2 1.1.5 1.6.9l2.3-.8 1.7 3-1.8 1.6a6.7 6.7 0 010 1.8l1.8 1.6-1.7 3-2.3-.8c-.5.4-1 .7-1.6.9l-.5 2.4h-3.4l-.5-2.4a6.6 6.6 0 01-1.6-.9l-2.3.8-1.7-3 1.8-1.6a6.7 6.7 0 010-1.8L4.2 8.5l1.7-3 2.3.8c.5-.4 1-.7 1.6-.9L10.3 3z"/></svg>',
     help: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 4a5 5 0 015 5c0 2.3-1.5 3.3-2.7 4.1-.9.7-1.3 1.1-1.3 2.2h-2c0-2 1-2.9 2-3.7 1.1-.8 2-1.4 2-2.6a3 3 0 00-6 0H7a5 5 0 015-5zm-1 13h2v2.5h-2z"/></svg>',
     sets: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 3l9 4.5-9 4.5-9-4.5L12 3zm0 2.2L7.5 7.5 12 9.8l4.5-2.3L12 5.2zM3 12l2.2-1.1L12 14.3l6.8-3.4L21 12l-9 4.5L3 12zm0 4.5l2.2-1.1 6.8 3.4 6.8-3.4 2.2 1.1-9 4.5-9-4.5z"/></svg>',
-    chevron: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8.6 5.4L10 4l8 8-8 8-1.4-1.4L15.2 12z"/></svg>'
+    chevron: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8.6 5.4L10 4l8 8-8 8-1.4-1.4L15.2 12z"/></svg>',
+    toolbars: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M4 4h6v16H4V4zm2 2v12h2V6H6zm8-2h6v16h-6V4zm2 2v12h2V6h-2z"/></svg>',
+    add: '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>'
   };
 
-  // Every React root created for a pinned-block icon, so the previous
-  // generation can be unmounted. A discarded root keeps its fiber tree
-  // alive, and the rail rebuilds on every slot change (the ↑/↓ buttons in
-  // the settings dialog rebuild it per click) — so these accumulate fast
-  // unless they are disposed. buildRail() is the ONLY producer and always
-  // creates a complete new set, which makes it the correct disposal point.
-  var iconRoots = [];
-
-  // The tools section's ResizeObserver, disposed on the same rule as the
-  // icon roots: buildRail is the only producer, so it disconnects the
-  // previous generation before creating the next.
-  T.railScrollObserver = null;
+  // The pinned-icon React roots and the tools section's ResizeObserver
+  // of one rail generation are the toolbar's own (iconRoots and
+  // scrollObserver in newToolbar).
 
   /**
    * Unmount every React root from the previous rail generation. A
    * discarded root keeps its fiber tree alive, so leaving these behind
    * leaks one tree per rebuild — and the settings dialog rebuilds the rail
    * on each reorder click.
+   *
+   * @param {Object} tb The toolbar whose rail is being replaced.
+   * @return {void}
    */
-  function disposeIconRoots() {
-    iconRoots.forEach(function (root) {
+  function disposeIconRoots(tb) {
+    tb.iconRoots.forEach(function (root) {
       try {
         root.unmount();
       } catch (e) {
         /* Already gone with its container — nothing to release. */
       }
     });
-    iconRoots = [];
+    tb.iconRoots = [];
   }
 
   /**
@@ -614,8 +1473,14 @@
    * component} (inline-SVG block.json icons arrive as the last) — the
    * React shapes render through wp.element so a pinned third-party block
    * shows its real icon instead of a generic glyph.
+   *
+   * @param {Object}      tb   The toolbar the icon is built for; it owns
+   *                           the React root.
+   * @param {HTMLElement} span The icon span.
+   * @param {*}           icon The block type's icon.
+   * @return {void}
    */
-  function renderBlockIcon(span, icon) {
+  function renderBlockIcon(tb, span, icon) {
     var src = icon && typeof icon === 'object' && 'src' in icon ? icon.src : icon;
     if (typeof src === 'string' && src !== '') {
       span.className += ' dashicons dashicons-' + src;
@@ -626,7 +1491,7 @@
         var node = typeof src === 'function' ? wp.element.createElement(src) : src;
         var root = wp.element.createRoot(span);
         root.render(node);
-        iconRoots.push(root);
+        tb.iconRoots.push(root);
         return;
       } catch (e) {
         /* Fall through to the generic glyph. */
@@ -661,8 +1526,16 @@
   // mode changes nothing for assistive tech.
   // -------------------------------------------------------------------
 
-  function isWide() {
-    return readKey(WIDE_KEY) === '1';
+  /**
+   * Whether a toolbar shows tool names. One setting for each toolbar
+   * (owner decision 2026-11-14, #95): the first toolbar's is the WIDE_KEY
+   * preference it always was, an extra toolbar's is in its own record.
+   *
+   * @param {Object} tb The toolbar.
+   * @return {boolean}
+   */
+  function isWide(tb) {
+    return tb === mainToolbar ? readKey(WIDE_KEY) === '1' : tb.wide;
   }
 
   /**
@@ -672,21 +1545,33 @@
    * Toolbar settings — where the "Show tool names" checkbox is the
    * canonical (and keyboard) path to wide mode either way, making the
    * chevron pure quick-access sugar, like the drag grip is for docking.
+   *
+   * ONE setting for all toolbars, where wide mode itself is one for each
+   * (#95): this is a choice about the toolbars' chrome, not about one
+   * toolbar's content, and a checkbox for each toolbar would be three
+   * more controls for a shortcut.
    */
   function isWideToggleShown() {
     return readKey(WIDE_TOGGLE_KEY) === '1';
   }
 
   /**
-   * Turn wide (labeled) mode on or off: persist it, reflect it on the
-   * region, and re-clamp a floating palette, whose width just changed.
+   * Turn wide (labeled) mode on or off for one toolbar: persist it,
+   * reflect it on the region, and re-clamp a floating palette, whose
+   * width just changed.
    *
+   * @param {Object}  tb The toolbar.
    * @param {boolean} on Whether tool names show.
    * @return {void}
    */
-  function setWide(on) {
-    writeKey(WIDE_KEY, on ? '1' : '0');
-    var region = document.getElementById('toolrail-region');
+  function setWide(tb, on) {
+    if (tb === mainToolbar) {
+      writeKey(WIDE_KEY, on ? '1' : '0');
+    } else {
+      tb.wide = !!on;
+      saveToolbars();
+    }
+    var region = document.getElementById(tb.regionId);
     if (region) {
       if (on) {
         region.dataset.wide = 'true';
@@ -703,7 +1588,7 @@
     }
     // The region's width just changed; a floating palette re-clamps so
     // widening it cannot push it off the editor.
-    T.applyFloatPosition();
+    T.applyFloatPosition(tb);
   }
 
   // -------------------------------------------------------------------
@@ -1586,14 +2471,22 @@
    * properties. Dark (or an unresolvable custom pair) clears them, which
    * hands every token back to the stylesheet defaults.
    *
-   * @param {HTMLElement} [region] Defaults to the mounted region.
+   * @param {HTMLElement} [region] Defaults to every mounted region: the
+   *                               appearance is one for all toolbars
+   *                               (#95; colors for each toolbar are a
+   *                               different issue).
    * @param {Object}      [tokens] Override token set — used by the color
    *                               inputs to preview a pair live without
    *                               persisting each intermediate value.
    */
   function applyAppearance(region, tokens) {
-    region = region || document.getElementById('toolrail-region');
     if (!region) {
+      T.toolbars.forEach(function (tb) {
+        var own = document.getElementById(tb.regionId);
+        if (own) {
+          applyAppearance(own, tokens);
+        }
+      });
       return;
     }
     if (tokens === undefined) {
@@ -1626,6 +2519,10 @@
   T.SET_META_KEY = SET_META_KEY;
   T.SETS_BUTTON_HIDDEN_KEY = SETS_BUTTON_HIDDEN_KEY;
   T.SETS_TOOL_ID = SETS_TOOL_ID;
+  T.TOOLBARS_BUTTON_HIDDEN_KEY = TOOLBARS_BUTTON_HIDDEN_KEY;
+  T.TOOLBAR_LIST_TOOL_ID = TOOLBAR_LIST_TOOL_ID;
+  T.ADD_TOOLS_TOOL_ID = ADD_TOOLS_TOOL_ID;
+  T.MAX_TOOLBARS = MAX_TOOLBARS;
   T.SHAPE_FILL = SHAPE_FILL;
   T.prefsSelect = prefsSelect;
   T.readKey = readKey;
@@ -1638,11 +2535,26 @@
   T.RAIL_BAND = RAIL_BAND;
   T.DOCK_LABELS = DOCK_LABELS;
   T.loadPosition = loadPosition;
+  T.mainToolbar = mainToolbar;
+  T.TOOLBAR_NAME_MAX = TOOLBAR_NAME_MAX;
   T.savePosition = savePosition;
+  T.toolbarById = toolbarById;
+  T.toolbarLabel = toolbarLabel;
+  T.saveToolbars = saveToolbars;
+  T.announceToolbarsChange = announceToolbarsChange;
+  T.disarmedMessage = disarmedMessage;
+  T.joinMessages = joinMessages;
+  T.syncToolbars = syncToolbars;
+  T.addToolbar = addToolbar;
+  T.renameToolbar = renameToolbar;
+  T.deleteToolbar = deleteToolbar;
+  T.setToolbarHidden = setToolbarHidden;
+  T.canvasNarrowMessage = canvasNarrowMessage;
+  T.regionLabel = regionLabel;
   T.isVertical = isVertical;
   T.skeletonBody = skeletonBody;
-  T.dockPlacement = dockPlacement;
-  T.isPlacedCorrectly = isPlacedCorrectly;
+  T.dockParent = dockParent;
+  T.placeToolbarRegions = placeToolbarRegions;
   T.ICONS = ICONS;
   T.disposeIconRoots = disposeIconRoots;
   T.renderBlockIcon = renderBlockIcon;

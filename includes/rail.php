@@ -70,7 +70,9 @@ function toolrail_rail_scripts() {
             'file' => 'assets/editor-rail-core.js',
             // wp-preferences registers the core/preferences store the rail
             // persists its per-user state into (position, pins, saved sets).
-            'deps' => ['wp-data', 'wp-preferences', 'wp-blocks', 'wp-i18n', 'wp-a11y', 'wp-element', 'wp-components', 'wp-plugins', 'wp-block-editor'],
+            // wp-api-fetch carries the shared-set requests (includes/shared-sets.php);
+            // the editor loads it anyway, so it adds no script to the page.
+            'deps' => ['wp-data', 'wp-preferences', 'wp-blocks', 'wp-i18n', 'wp-a11y', 'wp-element', 'wp-components', 'wp-plugins', 'wp-block-editor', 'wp-api-fetch'],
         ],
         'toolrail-editor-rail-registry' => [
             'file' => 'assets/editor-rail-registry.js',

@@ -8,6 +8,16 @@
  * produces ordinary core blocks — deactivating this plugin changes nothing
  * about how authored content renders or edits.
  *
+ * CANVAS SELECTION (#14): with Select active, a rectangle dragged from
+ * empty canvas space, Ctrl+click, Alt+click and Ctrl+Space select several
+ * blocks. "Add to selection" / "Remove from selection" in the block
+ * Options menu is the same toggle as Ctrl+Space, for an author whose
+ * operating system takes that key. Neighbors at one level become the
+ * WordPress selection; a set with a gap is kept by the rail for the
+ * editor session, outlined, and given a bar of group actions that are
+ * core's own. See the "Canvas selection" block for the rules. Nothing
+ * about it is saved.
+ *
  * MOUNT STRATEGY (proven in an early prototype): the rail is
  * inserted into the editor's own skeleton so it participates in the editor's
  * flex layout rather than overlapping the canvas; a debounced
@@ -23,6 +33,30 @@
  * the equivalent keyboard path. Surfaces open away from the docked edge — a
  * top rail opens its flyouts downward, a bottom rail upward. See the
  * "Rail position" block in editor-rail-core.js for where each dock hangs.
+ *
+ * MORE THAN ONE TOOLBAR (#95): the author can add up to three toolbars
+ * to the first one, each with its own name, pins, position and wide mode,
+ * and show or hide each. The first toolbar keeps #toolrail-region,
+ * #toolrail-rail, the name "Tools", Select, the Section overview, the
+ * provider tools, Help, Saved sets and Toolbar settings. An extra
+ * toolbar is #toolrail-region-<id> / #toolrail-rail-<id>, its pins only.
+ *   window.toolrail.getToolbars() → [{id, name, dock, x, y, hidden}],
+ *     the first toolbar first, id 'main'.
+ *   getDock(id) / getPosition(id) / setDock(dock, id), pinBlock(slot,
+ *   id) / unpinBlock(slot, id) / isPinned(slot, id) / moveSlot(slot,
+ *   delta, id), saveConfig(name, id) / loadConfig(name, id): the id is
+ *   OPTIONAL and last. Without it each call means what it meant with one
+ *   toolbar (the first toolbar), except that isPinned() and a pinBlock()
+ *   refusal count a pin on any SHOWN toolbar, unpinBlock() unpins from
+ *   every shown toolbar and moveSlot() acts on the first shown toolbar
+ *   with the pin. A hidden toolbar's pins do not count and are kept.
+ *   An unknown id: false, or null for a getter.
+ *   'toolrail:position-changed' keeps its {dock, x, y}, always the FIRST
+ *   toolbar's, and also fires when an extra toolbar is added, removed,
+ *   moved, shown or hidden (each moves the canvas). Then
+ *   'toolrail:toolbars-changed' fires with {toolbar: id, change}, change
+ *   one of 'added', 'removed', 'renamed', 'position', 'shown', 'hidden',
+ *   'synced' (the stored list changed from outside; toolbar is '').
  *
  * REGISTRATION API (the provider contract):
  *   window.toolrail.registerTool({
@@ -101,11 +135,12 @@
  *                            settings sidebar width, appearance
  *   editor-rail-registry.js  shape output, built-in tools, registerTool,
  *                            quick slots, pin metadata, the Saved sets
- *                            button, the pattern catalog
+ *                            button, shared sets, the pattern catalog
  *   editor-rail-tools.js     armed-tool state, availability, canvas
- *                            insertion, flyouts
- *   editor-rail-settings.js  the Toolbar settings dialog, set import and
- *                            export, the Help panel
+ *                            insertion, canvas selection, flyouts
+ *   editor-rail-settings.js  the Toolbar settings dialog and its Shared
+ *                            sets list, set import and export, the Help
+ *                            panel
  *   editor-rail-overview.js  the Section overview, drag to reorder,
  *                            marquee select
  *   editor-rail-dom.js       moving the rail, the DOM build, drag between
@@ -145,15 +180,21 @@
   var markPrefsReady = T.markPrefsReady;
   var migrateLocalToPrefs = T.migrateLocalToPrefs;
   var loadPosition = T.loadPosition;
+  var mainToolbar = T.mainToolbar;
+  var toolbarLabel = T.toolbarLabel;
+  var syncToolbars = T.syncToolbars;
 
   // From editor-rail-registry.js.
   var warn = T.warn;
   var registerTool = T.registerTool;
   var migrateSlots = T.migrateSlots;
+  var isPinnedOn = T.isPinnedOn;
   var isPinned = T.isPinned;
   var pinBlock = T.pinBlock;
   var unpinBlock = T.unpinBlock;
   var moveSlot = T.moveSlot;
+  var apiToolbar = T.apiToolbar;
+  var unpinEverywhere = T.unpinEverywhere;
   var getPinMeta = T.getPinMeta;
   var setPinMeta = T.setPinMeta;
   var getPinData = T.getPinData;
@@ -163,6 +204,7 @@
   var loadConfig = T.loadConfig;
   var deleteConfig = T.deleteConfig;
   var reconcileSetsButton = T.reconcileSetsButton;
+  var refreshSharedSets = T.refreshSharedSets;
   var allPatterns = T.allPatterns;
   var watchPatternCatalog = T.watchPatternCatalog;
 
@@ -170,6 +212,8 @@
   var railMode = T.railMode;
   var setActiveTool = T.setActiveTool;
   var canvasDoc = T.canvasDoc;
+  var csel = T.csel;
+  var canvasSelectMenuAction = T.canvasSelectMenuAction;
 
   // From editor-rail-settings.js.
   var exportConfig = T.exportConfig;
@@ -326,20 +370,96 @@
   // Public API
   // -------------------------------------------------------------------
 
+  // The pin, set and position calls take an OPTIONAL toolbar id as their
+  // last argument (#95). Without one they mean what they meant with one
+  // toolbar: the first toolbar, except where a pin on any SHOWN toolbar
+  // must count (isPinned, a pin of a block that is already pinned, unpin,
+  // move). A hidden toolbar's pins do not count without an id (owner
+  // decision 2026-11-16, D4); with its id, every call acts on it. An id
+  // that names no toolbar is refused: false, or null for a getter.
   window.toolrail = {
     registerTool: registerTool,
-    pinBlock: pinBlock,
-    unpinBlock: unpinBlock,
+    /**
+     * @param {string} blockName Block type or pattern slot name.
+     * @param {string} [id]      A toolbar id; the first toolbar without.
+     * @return {boolean} True when the toolbar changed. Without an id,
+     *                   false when any SHOWN toolbar already has the pin,
+     *                   the same rule as the block menu's item.
+     */
+    pinBlock: function (blockName, id) {
+      var tb = apiToolbar(id);
+      if (!tb || ((id === undefined || id === null) && isPinned(blockName))) {
+        return false;
+      }
+      return pinBlock(tb, blockName);
+    },
+    /**
+     * @param {string} blockName Block type or pattern slot name.
+     * @param {string} [id]      A toolbar id; every SHOWN toolbar
+     *                           without (a hidden one keeps its pin).
+     * @return {boolean} True when a toolbar changed.
+     */
+    unpinBlock: function (blockName, id) {
+      if (id === undefined || id === null) {
+        return unpinEverywhere(blockName);
+      }
+      var tb = apiToolbar(id);
+      return tb ? unpinBlock(tb, blockName) : false;
+    },
     getPatterns: allPatterns,
     openAddToToolbar: openAddToToolbar,
-    isPinned: isPinned,
-    moveSlot: moveSlot,
+    /**
+     * @param {string} blockName Block type or pattern slot name.
+     * @param {string} [id]      A toolbar id; any SHOWN toolbar without.
+     * @return {boolean}
+     */
+    isPinned: function (blockName, id) {
+      if (id === undefined || id === null) {
+        return isPinned(blockName);
+      }
+      var tb = apiToolbar(id);
+      return tb ? isPinnedOn(tb, blockName) : false;
+    },
+    /**
+     * @param {string} blockName Block type or pattern slot name.
+     * @param {number} delta     -1 or 1.
+     * @param {string} [id]      A toolbar id; without one, the first
+     *                           SHOWN toolbar that has the pin.
+     * @return {boolean} True when the slot moved.
+     */
+    moveSlot: function (blockName, delta, id) {
+      var tb = apiToolbar(id);
+      if (id === undefined || id === null) {
+        tb = T.toolbars.filter(function (other) {
+          return !other.hidden && isPinnedOn(other, blockName);
+        })[0] || mainToolbar;
+      }
+      return tb ? moveSlot(tb, blockName, delta) : false;
+    },
     getPinMeta: getPinMeta,
     setPinMeta: setPinMeta,
     getPinData: getPinData,
     setPinData: setPinData,
-    saveConfig: saveConfig,
-    loadConfig: loadConfig,
+    /**
+     * @param {string} name  Set name.
+     * @param {string} [id]  The toolbar whose pins are saved; the first
+     *                       toolbar without.
+     * @return {boolean} True when saved.
+     */
+    saveConfig: function (name, id) {
+      var tb = apiToolbar(id);
+      return tb ? saveConfig(name, tb) : false;
+    },
+    /**
+     * @param {string} name  Set name.
+     * @param {string} [id]  The toolbar the set loads into; the first
+     *                       toolbar without.
+     * @return {boolean} True when the set existed and was applied.
+     */
+    loadConfig: function (name, id) {
+      var tb = apiToolbar(id);
+      return tb ? loadConfig(name, tb) : false;
+    },
     deleteConfig: deleteConfig,
     getConfigs: loadConfigs,
     exportConfig: exportConfig,
@@ -369,9 +489,41 @@
     getMode: railMode,
     prefs: extPrefs,
     getCanvasGeometry: getCanvasGeometry,
-    getDock: function () { return T.position.dock; },
-    setDock: function (dock) { return setDock(dock); },
-    getPosition: function () { return { dock: T.position.dock, x: T.position.x, y: T.position.y }; }
+    getDock: function (id) {
+      var tb = apiToolbar(id);
+      return tb ? tb.position.dock : null;
+    },
+    setDock: function (dock, id) {
+      var tb = apiToolbar(id);
+      return tb ? setDock(tb, dock) : false;
+    },
+    getPosition: function (id) {
+      var tb = apiToolbar(id);
+      if (!tb) {
+        return null;
+      }
+      var position = tb.position;
+      return { dock: position.dock, x: position.x, y: position.y };
+    },
+    /**
+     * Every toolbar, the first one first (id 'main'), in the order of
+     * the Tab order and of a shared edge (#95). A copy: changing it
+     * changes nothing.
+     *
+     * @return {Object[]} {id, name, dock, x, y, hidden} each.
+     */
+    getToolbars: function () {
+      return T.toolbars.map(function (tb) {
+        return {
+          id: tb.id,
+          name: toolbarLabel(tb),
+          dock: tb.position.dock,
+          x: tb.position.x,
+          y: tb.position.y,
+          hidden: tb.hidden
+        };
+      });
+    }
   };
 
   // -------------------------------------------------------------------
@@ -389,6 +541,13 @@
 
     wp.plugins.registerPlugin('toolrail-pin', {
       render: function () {
+        // The data registry, for canvas selection's one-undo-step moves
+        // (runCanvasSelectBatch). wp.data exports no batch(); a rendered
+        // component is the public way to reach the registry. Called on
+        // every render or on none, so the hook order never changes.
+        if (typeof wp.data.useRegistry === 'function') {
+          csel.registry = wp.data.useRegistry();
+        }
         return el(wp.blockEditor.BlockSettingsMenuControls, null, function (fillProps) {
           var clientIds = (fillProps && fillProps.selectedClientIds) || [];
           if (!clientIds.length) {
@@ -408,10 +567,13 @@
             items.push(el(wp.components.MenuItem, {
               key: 'toolrail-pin',
               onClick: function () {
+                // Pin to the first toolbar; unpin from every toolbar,
+                // because the item says "Unpin" when ANY toolbar shows
+                // the block (owner decision 2026-11-14, #95).
                 if (pinned) {
-                  unpinBlock(name);
+                  unpinEverywhere(name);
                 } else {
-                  pinBlock(name);
+                  pinBlock(mainToolbar, name);
                 }
                 close();
               }
@@ -433,6 +595,21 @@
                 }, 0);
               }
             }, __('Save as pattern and pin to toolbar…', 'editrail')));
+          }
+          // Canvas selection's toggle, for an author whose operating
+          // system takes Ctrl+Space (canvasSelectMenuAction). Last, so the
+          // pin items keep their places. The toggle runs before the menu
+          // closes: core's focus return then finds the kept set already
+          // made, and the one announcement is the toggle's own.
+          var cselAction = canvasSelectMenuAction(clientIds);
+          if (cselAction) {
+            items.push(el(wp.components.MenuItem, {
+              key: 'toolrail-csel',
+              onClick: function () {
+                cselAction.run();
+                close();
+              }
+            }, cselAction.remove ? __('Remove from selection', 'editrail') : __('Add to selection', 'editrail')));
           }
           return items.length ? el(wp.element.Fragment, null, items) : null;
         });
@@ -512,10 +689,13 @@
           markPrefsReady();
         }
         // An attach that keeps both stamps needs no repair, but it can
-        // still replace the saved sets under the rail (PR #97 review).
+        // still replace the saved sets under the rail (PR #97 review),
+        // and the extra toolbars (#95). syncToolbars() costs one read and
+        // one compare when the toolbars did not change.
         repairing = true;
         try {
           reconcileSetsButton();
+          syncToolbars();
         } finally {
           repairing = false;
         }
@@ -526,14 +706,16 @@
         migrateLocalToPrefs();
         migrateSlots();
         var restored = loadPosition();
-        T.position.dock = restored.dock;
-        T.position.x = restored.x;
-        T.position.y = restored.y;
-        var existingRegion = document.getElementById('toolrail-region');
+        mainToolbar.position.dock = restored.dock;
+        mainToolbar.position.x = restored.x;
+        mainToolbar.position.y = restored.y;
+        var existingRegion = document.getElementById(mainToolbar.regionId);
         if (existingRegion) {
           existingRegion.remove();
         }
-        mount();
+        mount(mainToolbar);
+        // The attach also brings the extra toolbars the account has.
+        syncToolbars();
       } finally {
         repairing = false;
       }
@@ -566,8 +748,11 @@
     // the account preferences FIRST, then read position and run the slot
     // migration against the lifted state.
     migrateLocalToPrefs();
-    T.position = loadPosition();
+    mainToolbar.position = loadPosition();
     migrateSlots();
+    // The extra toolbars (#95). With none stored this changes nothing and
+    // builds nothing; start() mounts whatever it read.
+    syncToolbars();
     // These writes can still lose a race with the preferences store's
     // own async attach — watchPersistenceAttach() catches and repairs
     // that if it happens.
@@ -575,6 +760,9 @@
     registerPinMenuItem();
     start();
     watchPatternCatalog();
+    // The shared sets (#98), once per page. Not awaited: the rail is up
+    // without them, and a failed request leaves it as it is.
+    refreshSharedSets();
   }
 
   if (window._wpLoadBlockEditor && typeof window._wpLoadBlockEditor.then === 'function') {
@@ -586,6 +774,9 @@
   } else {
     document.addEventListener('DOMContentLoaded', boot);
   }
+  // Shared with the other files of the rail (see editor-rail-core.js).
+  T.getCanvasGeometry = getCanvasGeometry;
+
   // Every file has run, and each keeps its own T. Take the namespace
   // off `window`: the rail was one closed file before #102, and no
   // other script should read or change its internals. An extension

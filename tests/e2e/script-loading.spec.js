@@ -15,8 +15,7 @@
  * It does not use openNewPost(): that helper waits for the rail, and here
  * there is none.
  */
-const { test, expect } = require('@playwright/test');
-const { AUTH } = require('./helpers');
+const { test, expect, AUTH } = require('./helpers');
 
 test.use({ storageState: AUTH });
 

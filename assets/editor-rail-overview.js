@@ -29,6 +29,7 @@
   var _n = T._n;
   var sprintf = T.sprintf;
   var speak = T.speak;
+  var mainToolbar = T.mainToolbar;
   var skeletonBody = T.skeletonBody;
 
   // From editor-rail-tools.js.
@@ -321,7 +322,7 @@
    * @return {HTMLElement|null} The button, or null.
    */
   function overviewButton() {
-    var rail = document.getElementById('toolrail-rail');
+    var rail = document.getElementById(mainToolbar.railId);
     return rail ? rail.querySelector('[data-tool="overview"]') : null;
   }
 
@@ -3457,7 +3458,7 @@
       // guard protects the rail's own focus, nothing more).
       if (reselected && typeof window.requestAnimationFrame === 'function') {
         var reassertFocus = function () {
-          var rail = document.getElementById('toolrail-rail');
+          var rail = document.getElementById(mainToolbar.railId);
           var fresh = overviewButton();
           if (fresh && (!rail || !rail.contains(document.activeElement))) {
             fresh.focus();
