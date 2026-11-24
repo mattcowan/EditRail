@@ -70,7 +70,9 @@ Every action has a keyboard path, and screen readers hear every state change. Dr
 
 ## How it works
 
-**The toolbar is plain DOM inside the editor's own layout.** `assets/editor-rail.js` inserts the toolbar into the editor's skeleton, so the canvas reflows around it and is not under it. The toolbar lives outside the React tree, and a debounced MutationObserver puts it back when the editor re-renders. That is why it survives the round trip through the code editor.
+**The toolbar is plain DOM inside the editor's own layout.** `assets/editor-rail-dom.js` inserts the toolbar into the editor's skeleton, so the canvas reflows around it and is not under it. The toolbar lives outside the React tree, and a debounced MutationObserver puts it back when the editor re-renders. That is why it survives the round trip through the code editor.
+
+**The JavaScript is seven files that load in a fixed order.** `includes/rail.php` registers them, and each file is a dependency of the next. `assets/editor-rail.js` is the last file. It sets `window.toolrail` and starts the toolbar. Its handle, `toolrail-editor-rail`, is the handle that a provider depends on. While they load, the files share names through `window.toolrailInternal`. This object is private: its names can change in any release. The last file removes it from `window` when all seven files have run, so an extension cannot use it. The header comment of each file tells which part of the toolbar it holds. The start of each file lists the names that it uses from the files before it.
 
 **Each toolbar is one region in that layout.** On a shared edge the main toolbar is against the edge, and each added toolbar is nearer the canvas. The order in the document is the order on screen, so the Tab order follows it. The places of all toolbars are set in one pass. Two toolbars that each want to be the last child of the same parent would otherwise move each other on every observer pass. The main toolbar keeps its old preference keys. The added toolbars are one value, `toolrail-toolbars`, so data from an older version shows the same single toolbar. A second new key, `toolrail-toolbars-button-hidden`, holds the choice to hide the Toolbars button.
 
@@ -86,7 +88,7 @@ Every action has a keyboard path, and screen readers hear every state change. Dr
 
 **The sidebar width is an opt-in stylesheet override.** It is off until the author turns it on in Toolbar settings; while it is off there is no handle and no override. The handle sits in the sidebar region of the editor's skeleton, next to the canvas. A width other than core's 280px sets one custom property and one body class, and the stylesheet overrides the sidebar's width from there. At 280px, and below the 782px breakpoint where core shows the sidebar full screen, nothing is overridden. The canvas and a docked toolbar are in the same flex row, so they take the space that is left.
 
-**The plugin emits nothing for the front end.** It registers one script and one stylesheet, for the post editor only. It has no shortcodes, no blocks of its own, and no output on the public site. Its only REST routes are the shared-set routes, and they refuse a visitor who is not logged in.
+**The plugin emits nothing for the front end.** It registers seven scripts and one stylesheet, for the post editor only. It has no shortcodes, no blocks of its own, and no output on the public site. Its only REST routes are the shared-set routes, and they refuse a visitor who is not logged in.
 
 ## Extending
 
@@ -200,6 +202,8 @@ npx wp-env stop
 ```
 
 To use your own WordPress site, copy `.env.example` to `.env` and set `TOOLRAIL_URL`, `TOOLRAIL_ADMIN_USER` and `TOOLRAIL_ADMIN_PASS`. A variable set on the command line wins over `.env`. `docs/releasing.md` lists every variable.
+
+One test loads a tool provider from `tests/e2e/fixtures/mu-plugins/e2e-provider.php`. wp-env loads it as a must-use plugin. On your own site, copy the file to `wp-content/mu-plugins/`, or the test is skipped. The file does nothing unless a test sets its cookie.
 
 The screen-reader journeys need more setup. Do these three steps once on the machine:
 
