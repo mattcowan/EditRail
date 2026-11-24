@@ -50,8 +50,10 @@ jobs:
           # No step needs the token after the checkout. Do not leave it
           # where composer, npm or the tests could read it.
           persist-credentials: false
-      # v2 is a moving tag, so the comment gives the date of the pinned commit.
-      - uses: shivammathur/setup-php@b604ade2a87db23f8871b7182e69ec5e75effb45 # v2 (2026-08-28)
+      # Pinned to a release. The comment names the release tag, so
+      # Dependabot proposes the next release. A comment without a version
+      # makes it propose the newest commit on main instead.
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.2'
           tools: composer
@@ -78,8 +80,8 @@ jobs:
           cache: npm
       - id: npm
         run: npm ci
-      # v2 is a moving tag, so the comment gives the date of the pinned commit.
-      - uses: shivammathur/setup-php@b604ade2a87db23f8871b7182e69ec5e75effb45 # v2 (2026-08-28)
+      # Pinned to a release, as in the PHPUnit job.
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: '8.2'
           tools: composer
