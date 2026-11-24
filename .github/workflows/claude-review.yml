@@ -97,11 +97,15 @@ jobs:
           # SHA). The action splits claude_args with shell-quote, so the text
           # has no dollar signs, backticks or inner double quotes.
           #
-          # acceptEdits: a tool call that no rule allows is denied. From
-          # v1.0.278 the action starts in auto mode, where a safety check
-          # decides those calls (src/modes/permission-mode.ts). The last
-          # --permission-mode wins, and claude_args comes after the action's
-          # own, so this keeps the mode this workflow was proven with.
+          # acceptEdits: file edits inside the checkout are allowed with no
+          # rule, so an edit can change what the review reads later in the
+          # run; the read-only token above still stops a push. Any other tool
+          # call that no rule allows is denied. From v1.0.278 (PR #109; the
+          # pin above is older) the action starts in auto mode, where a
+          # safety check decides those calls (src/modes/permission-mode.ts).
+          # The last --permission-mode wins, and claude_args comes after the
+          # action's own, so this keeps the mode this workflow was proven
+          # with.
           claude_args: >-
             --permission-mode acceptEdits
             --disallowedTools
