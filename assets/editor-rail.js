@@ -35,8 +35,8 @@
  * "Rail position" block in editor-rail-core.js for where each dock hangs.
  *
  * MORE THAN ONE TOOLBAR (#95): the author can add up to three toolbars
- * to the first one, each with its own name, pins, position and wide mode,
- * and show or hide each. The first toolbar keeps #toolrail-region,
+ * to the first one, each with its own name, pins, position, wide mode
+ * and colors (#96), and show or hide each. The first toolbar keeps #toolrail-region,
  * #toolrail-rail, the name "Tools", Select, the Section overview, the
  * provider tools, Help, Saved sets and Toolbar settings. An extra
  * toolbar is #toolrail-region-<id> / #toolrail-rail-<id>, its pins only.
