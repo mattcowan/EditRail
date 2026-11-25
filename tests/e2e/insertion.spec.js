@@ -128,6 +128,9 @@ test.describe('regressions', () => {
         .resetBlocks([createBlock('core/paragraph', { content: 'ALPHA' })]);
     });
     await expect.poll(async () => (await blockNames(page)).length).toBe(1);
+    // openNewPost waits for the rail, which can be up before the canvas
+    // iframe has a body (#121). The dispatches below need that body.
+    await expect(canvas(page).locator('.is-root-container')).toBeVisible({ timeout: 20000 });
 
     // Paragraph is the DEFAULT block type, so every block this inserts is
     // an unmodified default paragraph — indistinguishable, by shape alone,
@@ -175,6 +178,9 @@ test.describe('regressions', () => {
         .resetBlocks([createBlock('core/paragraph', { content: 'ALPHA' })]);
     });
     await expect.poll(async () => (await blockNames(page)).length).toBe(1);
+    // openNewPost waits for the rail, which can be up before the canvas
+    // iframe has a body (#121). The dispatches below need that body.
+    await expect(canvas(page).locator('.is-root-container')).toBeVisible({ timeout: 20000 });
 
     // Arm a tool, insert, then start a NEW gesture and create an unmodified
     // default paragraph inside the 80ms backstop window. Under Select that
