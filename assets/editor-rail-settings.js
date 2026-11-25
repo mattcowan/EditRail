@@ -2754,6 +2754,8 @@
         body: [
           __('Pin any block type or pattern as a quick-insert tool: search under "Add a block or pattern" in Toolbar settings, drag a block or pattern from the inserter onto the toolbar, or choose "Pin to toolbar" in a block\'s options menu.', 'editrail'),
           __('Drop a block from the canvas onto the toolbar to pin its type, or to save it as a pattern with its settings and contents and pin that. "Save as pattern and pin to toolbar…" in the block\'s options menu does the same.', 'editrail'),
+          // More than one toolbar (#128).
+          __('When more than one toolbar is shown, that dialog starts with a "Toolbar" choice. It selects the toolbar that you dropped the block on, or the main toolbar when you open the dialog from the block\'s options menu. To pin to a different toolbar, choose it there first.', 'editrail'),
           __('Remove a pin with Unpin in Toolbar settings, or "Unpin from toolbar" in the block\'s options menu.', 'editrail'),
           __('Edit, beside a pinned tool in Toolbar settings, gives that tool your own name, description or icon — useful when you pin several patterns. Empty fields use the block\'s own.', 'editrail')
         ]
