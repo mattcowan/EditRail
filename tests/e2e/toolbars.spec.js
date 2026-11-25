@@ -1247,9 +1247,12 @@ test.describe('PR #126 review fixes (#95)', () => {
     // A stored change deletes the toolbar the block was dropped on.
     await seedByDispatch(page, []);
     await expect(page.locator('#toolrail-region-t1')).toHaveCount(0);
-    await dialog.locator('.toolrail-adddialog-pintype').click();
-    await expect(dialog).toHaveCount(0);
-    await expect.poll(() => liveText(page)).toBe('Quote is already pinned on the main toolbar.');
+    // The dialog follows the stored change (#128 review): the choice
+    // falls back to the main toolbar, which has Quote already, so the
+    // dialog says so before any click and offers no pin button.
+    await expect(dialog.locator('#toolrail-adddialog-toolbar')).toHaveValue('main');
+    await expect(dialog).toContainText('The Quote block type is already pinned.');
+    await expect(dialog.locator('.toolrail-adddialog-pintype')).toHaveCount(0);
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/quote"]')).toHaveCount(1);
   });
 });
@@ -1518,5 +1521,43 @@ test.describe('choose the toolbar in "Add to toolbar" (#128)', () => {
     await expect.poll(() => liveText(page)).toBe('Saved "Paragraph" as a pattern and pinned it to the main toolbar.');
     await expect(page.locator('#toolrail-rail [data-tool="pin:pattern:user:987654"]')).toHaveCount(1);
     expect(await page.evaluate(() => window.toolrail.isPinned('pattern:user:987654', 't1'))).toBe(false);
+  });
+
+  test('the toolbar choice follows a stored change while the dialog is open', async ({ page }) => {
+    await openNewPost(page);
+    await seedByDispatch(page, [
+      record('t1', 'Animation', { slots: [] }),
+      record('t2', 'Layout', { slots: [] }),
+    ]);
+    await expect(page.locator('#toolrail-region-t2')).toBeVisible();
+    const dialog = await openFromBlockMenu(page);
+    const choice = dialog.locator('#toolrail-adddialog-toolbar');
+    await choice.selectOption('t1');
+    await expect(dialog.locator('.toolrail-adddialog-pintype')).toHaveCount(1);
+
+    // A different tab hides the chosen toolbar and renames the other one.
+    await seedByDispatch(page, [
+      record('t1', 'Animation', { slots: [], hidden: true }),
+      record('t2', 'Motion', { slots: [] }),
+    ]);
+    await expect.poll(() => optionTexts(dialog)).toEqual(['Main toolbar', 'Motion']);
+    await expect(choice).toHaveValue('main');
+    // The block type section now answers for the main toolbar, which has
+    // Paragraph as a default pin.
+    await expect(dialog).toContainText('The Paragraph block type is already pinned.');
+
+    // A toolbar shown again from the other tab is offered again.
+    await seedByDispatch(page, [
+      record('t1', 'Animation', { slots: [] }),
+      record('t2', 'Motion', { slots: [] }),
+    ]);
+    await expect.poll(() => optionTexts(dialog)).toEqual(['Main toolbar', 'Animation', 'Motion']);
+    await expect(choice).toHaveValue('main');
+
+    // The choice still works after the rebuild.
+    await choice.selectOption('t1');
+    await dialog.locator('.toolrail-adddialog-pintype').click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => liveText(page)).toBe('Paragraph pinned to the Animation toolbar.');
   });
 });

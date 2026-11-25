@@ -450,4 +450,58 @@ test.describe('EditRail with NVDA', () => {
     // NVDA drops the quotation marks: it says `Loaded basic ..`.
     expect(h.spoke(spoken, /Loaded\W+basic/), 'the load is announced').toBe(true);
   });
+
+  test('"Add to toolbar" (#128): the Toolbar select is heard first, a change is heard, and the pin message names the toolbar', async ({ page, nvda }) => {
+    await open(page);
+    // An extra toolbar with no pins, and one paragraph, built with
+    // Playwright before NVDA listens.
+    await page.evaluate(() => {
+      wp.data.dispatch('core/preferences').set('toolrail', 'toolrail-toolbars', JSON.stringify({ version: 1, toolbars: [
+        { id: 't1', name: 'Animation', dock: 'left', x: 40, y: 40, slots: [], wide: false, hidden: false },
+      ] }));
+      wp.data.dispatch('core/block-editor').resetBlocks([wp.blocks.createBlock('core/paragraph', { content: 'Pin me' })]);
+    });
+    await page.waitForSelector('#toolrail-region-t1', { timeout: 10000 });
+    await page.frameLocator('iframe[name="editor-canvas"]').locator('[data-type="core/paragraph"]').first().click();
+    await page.keyboard.press('Escape');
+    await page.locator('.block-editor-block-toolbar button[aria-label="Options"]').click();
+    await page.locator('.components-menu-item__button, .components-menu-item__item', { hasText: 'Save as pattern and pin to toolbar' }).first().click();
+    const DIALOG = '.toolrail-adddialog';
+    const SELECT = '#toolrail-adddialog-toolbar';
+    await page.waitForSelector(SELECT, { timeout: 5000 });
+    const focusTitles = await h.focusBrowser(page, nvda);
+    const log = {};
+
+    log.focusAtOpen = await h.describeFocus(page);
+    log.reportAtOpen = await reportFocus(nvda);
+    // Focus mode, so ArrowDown changes the select and does not move
+    // NVDA's browse cursor.
+    log.modeToggle = await h.ensureFocusMode(nvda, async () => {
+      await nvda.press('ArrowDown'); await h.delay(600);
+      return (await page.locator(SELECT).inputValue()) === 't1';
+    });
+    if ((await page.locator(SELECT).inputValue()) !== 't1') {
+      await page.locator(SELECT).focus(); await h.delay(300);
+      log.arrowDown = await press(nvda, 'ArrowDown', 900);
+    } else {
+      log.arrowDown = await nvda.lastSpokenPhrase();
+    }
+    log.valueAfterArrow = await page.locator(SELECT).inputValue();
+    log.tab = await press(nvda, 'Tab', 900);
+    log.focusAfterTab = await h.describeFocus(page);
+    log.enter = await press(nvda, 'Enter', 1500);
+    log.dialogOpenAfterPin = await page.locator(DIALOG).count();
+    log.pinnedOnT1 = await page.locator('#toolrail-region-t1 [data-tool="pin:core/paragraph"]').count();
+    log.liveRegion = await page.evaluate(() => (document.getElementById('a11y-speak-polite') || {}).textContent || '');
+    const spoken = await h.saveSpeechLog(nvda, 'add-to-toolbar-choice', { focusTitles, ...log });
+
+    expect(log.focusAtOpen && log.focusAtOpen.id, 'focus starts on the Toolbar select').toBe('toolrail-adddialog-toolbar');
+    expect(log.reportAtOpen, 'the select is heard with its label and value').toMatch(/Toolbar.*Main toolbar|Main toolbar.*Toolbar/i);
+    expect(log.valueAfterArrow).toBe('t1');
+    expect(h.spoke(spoken, /Animation/), 'the new choice is heard').toBe(true);
+    expect(log.focusAfterTab && (log.focusAfterTab.className || log.focusAfterTab.text || ''), 'Tab goes to the pin button').toMatch(/pintype|Pin the Paragraph/i);
+    expect(log.dialogOpenAfterPin).toBe(0);
+    expect(log.pinnedOnT1, 'the pin goes to the chosen toolbar').toBe(1);
+    expect(h.spoke(spoken, /pinned to the Animation toolbar/i), 'the message names the toolbar').toBe(true);
+  });
 });

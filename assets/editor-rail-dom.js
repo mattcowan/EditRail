@@ -1586,6 +1586,10 @@
     return document.querySelector('.toolrail-adddialog');
   }
 
+  // The open "Add to toolbar" dialog's toolbars-changed listener, or null
+  // (#128). closeAddDialog() removes it.
+  var addDialogToolbarsListener = null;
+
   /**
    * @param {string} refocusClientId Canvas block to hand focus back to
    *                                 (the keyboard path came from its
@@ -1601,6 +1605,10 @@
     document.removeEventListener('mousedown', onAddDialogMousedown, true);
     document.removeEventListener('keydown', onAddDialogKeydown, true);
     document.removeEventListener('focusin', onAddDialogFocusin, true);
+    if (addDialogToolbarsListener) {
+      window.removeEventListener('toolrail:toolbars-changed', addDialogToolbarsListener);
+      addDialogToolbarsListener = null;
+    }
     if (refocusClientId) {
       var doc = canvasDoc();
       var el = doc ? doc.querySelector('[data-block="' + attrValue(refocusClientId) + '"]') : null;
@@ -1846,6 +1854,24 @@
       return { tb: target, named: choose };
     }
 
+    /**
+     * Fill the toolbar select: one option for each toolbar in `list`, with
+     * the current target selected.
+     *
+     * @param {Object[]} list The toolbars to offer (pinnableToolbars()).
+     * @return {void}
+     */
+    function fillToolbarOptions(list) {
+      toolbarSelect.textContent = '';
+      list.forEach(function (tb) {
+        var option = document.createElement('option');
+        option.value = tb.id;
+        option.textContent = toolbarLabel(tb);
+        option.selected = tb === target;
+        toolbarSelect.appendChild(option);
+      });
+    }
+
     // --- Which toolbar (more than one toolbar shown only, #128). It
     // comes first, so reading order gives the scope before the actions,
     // the same as the Toolbar section of Toolbar settings. ---
@@ -1858,18 +1884,13 @@
       toolbarSelect = document.createElement('select');
       toolbarSelect.id = 'toolrail-adddialog-toolbar';
       toolbarSelect.className = 'toolrail-settings-search';
-      choices.forEach(function (tb) {
-        var option = document.createElement('option');
-        option.value = tb.id;
-        option.textContent = toolbarLabel(tb);
-        option.selected = tb === target;
-        toolbarSelect.appendChild(option);
-      });
+      fillToolbarOptions(choices);
       toolbarSelect.addEventListener('change', function () {
         // An option for a toolbar deleted since the dialog opened finds
         // nothing; pinTarget() then sends the pin to the first toolbar.
         target = toolbarById(toolbarSelect.value) || mainToolbar;
         buildTypeSection();
+        toolbarSignature = choiceSignature(pinnableToolbars());
       });
       node.appendChild(toolbarSelect);
     }
@@ -1962,6 +1983,57 @@
     buildTypeSection();
     node.appendChild(typeBox);
 
+    /**
+     * Keep the toolbar choice true while the dialog is open (#128 review).
+     * A stored change from another tab can add, rename, hide or delete a
+     * toolbar, and syncToolbars() then fires toolrail:toolbars-changed.
+     * The options are built again from pinnableToolbars(). A chosen
+     * toolbar that is no longer offered gives way to the first toolbar.
+     * The block type section is built again only when what it shows can
+     * have changed, so an unrelated change (a move) does not move focus.
+     * pinTarget() still checks again at the moment of the pin.
+     *
+     * @return {void}
+     */
+    function refreshToolbarChoices() {
+      if (!toolbarSelect || !toolbarSelect.isConnected) {
+        return;
+      }
+      var now = pinnableToolbars();
+      if (now.indexOf(target) === -1) {
+        target = mainToolbar;
+      }
+      var signature = choiceSignature(now);
+      if (signature === toolbarSignature) {
+        return;
+      }
+      toolbarSignature = signature;
+      var focusInType = typeBox.contains(document.activeElement);
+      fillToolbarOptions(now);
+      buildTypeSection();
+      if (focusInType) {
+        // The button that had focus is gone with the old section.
+        (typeBox.querySelector('.toolrail-adddialog-pintype') || toolbarSelect).focus();
+      }
+    }
+
+    /**
+     * What the toolbar select and the block type section show: the
+     * offered toolbars with their names, the choice, and whether the
+     * block type is pinned on it.
+     *
+     * @param {Object[]} list The offered toolbars.
+     * @return {string} A string that changes when any of these change.
+     */
+    function choiceSignature(list) {
+      return JSON.stringify([
+        list.map(function (tb) { return [tb.id, toolbarLabel(tb)]; }),
+        target.id,
+        single ? isPinnedOn(target, single.name) : null
+      ]);
+    }
+    var toolbarSignature = toolbarSelect ? choiceSignature(choices) : null;
+
     // --- Save as a pattern and pin it ---
     var patHead = settingsRow('h3', 'toolrail-settings-subtitle');
     patHead.textContent = __('Pattern', 'editrail');
@@ -2000,7 +2072,7 @@
         saveBtn.disabled = true;
         if (toolbarSelect) {
           // The save is async: a change of toolbar while it runs would
-          // pin to a toolbar the author did not have chosen at Save.
+          // pin to a toolbar the author had not chosen at Save.
           toolbarSelect.disabled = true;
         }
         status.textContent = __('Saving…', 'editrail');
@@ -2064,6 +2136,10 @@
     document.addEventListener('mousedown', onAddDialogMousedown, true);
     document.addEventListener('keydown', onAddDialogKeydown, true);
     document.addEventListener('focusin', onAddDialogFocusin, true);
+    if (toolbarSelect) {
+      addDialogToolbarsListener = refreshToolbarChoices;
+      window.addEventListener('toolrail:toolbars-changed', addDialogToolbarsListener);
+    }
     // With a toolbar choice, focus goes to it first: the author hears
     // which toolbar gets the pin before any action, and the block menu's
     // keyboard path reaches an extra toolbar with one arrow key (#128).
