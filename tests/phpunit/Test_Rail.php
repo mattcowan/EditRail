@@ -99,8 +99,11 @@ class Test_Rail extends WP_UnitTestCase {
             $this->assertSame('editrail', $GLOBALS['toolrail_test_script_translations'][$handle]['domain'], $handle . ' text domain');
             $this->assertSame('', $GLOBALS['toolrail_test_script_translations'][$handle]['path'], $handle . ' must read the language pack folder');
         }
-        // Proves that the search above works: every rail file holds strings today.
-        $this->assertSame(count(toolrail_rail_scripts()), $with_strings);
+        // Proves that the search above works, with a file known to hold
+        // strings. A later file with no strings needs no call, so the count
+        // is not tied to the number of rail files.
+        $this->assertGreaterThan(0, $with_strings);
+        $this->assertArrayHasKey('toolrail-editor-rail-settings', $GLOBALS['toolrail_test_script_translations']);
     }
 
     public function test_the_style_keeps_the_public_handle() {

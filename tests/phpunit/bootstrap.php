@@ -297,8 +297,16 @@ if (!function_exists('wp_register_script')) {
 $GLOBALS['toolrail_test_script_translations'] = [];
 
 if (!function_exists('wp_set_script_translations')) {
-    /** Record the text domain set for a script handle (#120). */
+    /**
+     * Record the text domain set for a script handle (#120). Like core
+     * (WP_Scripts::set_translations()), a handle that is not registered yet
+     * gets nothing and returns false, so a call made before
+     * wp_register_script() fails the test the same way it fails on a site.
+     */
     function wp_set_script_translations($handle, $domain = 'default', $path = '') {
+        if (!isset($GLOBALS['toolrail_test_scripts'][$handle])) {
+            return false;
+        }
         $GLOBALS['toolrail_test_script_translations'][$handle] = [
             'domain' => $domain,
             'path'   => $path,
