@@ -2514,7 +2514,7 @@
   // Marquee select — a drag from EMPTY overlay space draws a rectangle;
   // every box it touches is selected on release (issue #21). Pointer
   // sugar like the box drag: the keyboard's path to the same selection
-  // is Shift+Arrow / Ctrl+Space in onOverviewKeydown. Coordinates are
+  // is Shift+Arrow / Ctrl+Space / Ctrl+Enter in onOverviewKeydown. Coordinates are
   // viewport-space, so a wheel-pan mid-marquee just changes which boxes
   // the fixed rectangle touches — the next mousemove re-hit-tests.
   // -------------------------------------------------------------------
@@ -2729,7 +2729,8 @@
    * focus, and it must still be cancellable).
    *
    * Shift+Arrow extends the selection from the focused box and
-   * Ctrl+Space (Cmd+Space) toggles it (issue #21) — both live here so
+   * Ctrl+Space or Ctrl+Enter (Cmd+Space or Cmd+Enter) toggles it
+   * (issues #21 and #119) — both live here so
    * the pick buttons need no per-box key handlers.
    */
   function onOverviewKeydown(e) {
@@ -2825,11 +2826,26 @@
       return;
     }
 
-    if ((e.ctrlKey || e.metaKey) && (e.key === ' ' || e.key === 'Spacebar')) {
-      // preventDefault on KEYDOWN: buttons click on Space keyup, and
-      // the toggle must not also flip the disclosure.
+    // Ctrl+Enter (Cmd+Enter) is the same toggle as Ctrl+Space (issue
+    // #119). The operating system can take Ctrl+Space or Cmd+Space
+    // before the page sees it (a search shortcut, the switch between
+    // input sources, an input method for East Asian scripts), and the
+    // toggle is the only keyboard way to select boxes that do not touch.
+    // A button in the controls strip cannot replace it: a plain pick on
+    // an unselected box resets the selection to that box
+    // (selectOverviewBox), so the strip of a box that is not a member
+    // never shows while a selection exists. Shift+Enter is not used: a
+    // button clicks on it with shiftKey set, which is the range click.
+    var isToggleKey = e.key === ' ' || e.key === 'Spacebar' || e.key === 'Enter';
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && isToggleKey) {
+      // preventDefault on KEYDOWN: buttons click on Space keyup and on
+      // Enter keydown, and the toggle must not also flip the disclosure.
       e.preventDefault();
       e.stopPropagation();
+      if (e.repeat) {
+        // A held key is one decision, not a run of toggles.
+        return;
+      }
       T.ov.lastTouched = clientId;
       toggleOverviewSelectionId(clientId);
       // Rebuild (strip content tracks the selection), focus kept on
