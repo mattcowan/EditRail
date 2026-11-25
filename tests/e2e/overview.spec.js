@@ -2758,8 +2758,11 @@ test.describe('overview follows a dock change (#118)', () => {
       await expect.poll(() => overviewAlignment(page)).toMatchObject({ left: 0, right: 0, bottom: 0, dock });
     }
 
-    // The overview still opens aligned after the dock changes.
-    await page.keyboard.press('Escape');
+    // The overview still opens aligned after the dock changes. "Done"
+    // closes it: focus is on the rail's settings button since the
+    // settings dialog closed, and Escape exits only from inside the
+    // overlay (onOverviewKeydown).
+    await page.locator('#toolrail-overview [data-ov-action="close"]').click();
     await expect(page.locator('#toolrail-overview')).toHaveCount(0);
     await page.evaluate(() => window.toolrail.setDock('left'));
     await page.locator('#toolrail-rail [data-tool="overview"]').click();

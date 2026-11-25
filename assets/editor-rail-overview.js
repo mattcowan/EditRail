@@ -3141,9 +3141,12 @@
     window.addEventListener('resize', onOverviewViewportChange);
     // A toolbar that moves to another edge can move the canvas and keep
     // its size, so no resize event and no ResizeObserver entry come
-    // (#118). Every dock change, from the settings, the API or a drag,
-    // goes through setDock, which fires this event. A toolbar that is
-    // added, hidden or deleted fires it too, and can also move the canvas.
+    // (#118). Every dock change fires this event: the settings, the API
+    // and a drag go through setDock, and a change of the stored toolbars
+    // from another tab fires it as 'synced' (syncToolbars in
+    // editor-rail-core.js) without setDock. Keep the listener here, not in
+    // setDock. A toolbar that is added, hidden or deleted fires it too,
+    // and can also move the canvas.
     window.addEventListener('toolrail:toolbars-changed', onOverviewViewportChange);
     // The window resize listener cannot see editor chrome appearing
     // INSIDE the content region (the autosave notice arrives via React
