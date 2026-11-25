@@ -3139,6 +3139,12 @@
     document.addEventListener('keydown', onOverviewKeydown, true);
     document.addEventListener('scroll', onOverviewViewportChange, true);
     window.addEventListener('resize', onOverviewViewportChange);
+    // A toolbar that moves to another edge can move the canvas and keep
+    // its size, so no resize event and no ResizeObserver entry come
+    // (#118). Every dock change, from the settings, the API or a drag,
+    // goes through setDock, which fires this event. A toolbar that is
+    // added, hidden or deleted fires it too, and can also move the canvas.
+    window.addEventListener('toolrail:toolbars-changed', onOverviewViewportChange);
     // The window resize listener cannot see editor chrome appearing
     // INSIDE the content region (the autosave notice arrives via React
     // with no window event) — observe the visual editor's own box for
@@ -3390,6 +3396,7 @@
     document.removeEventListener('keydown', onOverviewKeydown, true);
     document.removeEventListener('scroll', onOverviewViewportChange, true);
     window.removeEventListener('resize', onOverviewViewportChange);
+    window.removeEventListener('toolrail:toolbars-changed', onOverviewViewportChange);
     if (T.ov.resizeObserver) {
       T.ov.resizeObserver.disconnect();
     }
