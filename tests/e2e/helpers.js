@@ -517,12 +517,17 @@ function canvas(page) {
 }
 
 /**
- * Open core's settings sidebar on the Post tab when it is closed, and wait
- * until it shows. WordPress keeps the open state in the account
- * (`isComplementaryAreaVisible` in the `core` preferences), so a test that
- * measures the sidebar or the canvas width cannot trust the state that an
- * earlier test left (#130). A new account has the sidebar open, so this
- * changes nothing on CI's fresh accounts.
+ * Open core's settings sidebar when it is closed, and wait until it shows
+ * at its full width. A closed sidebar opens on the Post tab. An open
+ * sidebar stays on the tab it shows. WordPress keeps the open state in the
+ * account (`isComplementaryAreaVisible` in the `core` preferences), so a
+ * test that measures the sidebar or the canvas width cannot trust the
+ * state that an earlier test left (#130). A new account has the sidebar
+ * open, so this changes nothing on CI's fresh accounts.
+ *
+ * Needs WordPress 6.6 or later: it reads and enables the `core` scope only.
+ * WordPress 6.5 used `core/edit-post` (see sidebarStoreOpen() in
+ * assets/editor-rail-core.js).
  *
  * @param {import('@playwright/test').Page} page A page of the test's context.
  * @return {Promise<void>}
