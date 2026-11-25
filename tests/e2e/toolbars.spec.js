@@ -3,8 +3,8 @@
  *
  * The first toolbar keeps its old keys, ids and behavior. Each extra
  * toolbar is a record in `toolrail-toolbars`, with its own name, pins,
- * position, wide mode and colors (#96), and its own region (`#toolrail-region-<id>`)
- * and rail (`#toolrail-rail-<id>`).
+ * position, wide mode and colors (#96), and its own region
+ * (`#toolrail-region-<id>`) and rail (`#toolrail-rail-<id>`).
  *
  * Runs on post-new.php and NEVER saves a post; helpers.js has the rule.
  */
@@ -1508,5 +1508,28 @@ test.describe('colors for each toolbar (#96)', () => {
     await page.reload();
     await expect(page.locator('#toolrail-region-t1')).toHaveCount(1, { timeout: 20000 });
     expect((await regionTokens(page, ['toolrail-region-t1']))[0]['--toolrail-bg']).toBe('#dcdcde');
+  });
+
+  test('stored colors this version cannot read are kept through a save', async ({ page }) => {
+    await openNewPost(page);
+    // A mode from a later version, and a value that is not a record.
+    const later = { mode: 'high-contrast', bg: '#000000', fg: '#ffffff' };
+    await seedByDispatch(page, [
+      record('t1', 'Animation', { appearance: later }),
+      record('t2', 'Layout', { appearance: [] }),
+    ]);
+    await expect(page.locator('#toolrail-region-t2')).toHaveCount(1);
+
+    // A pin on each toolbar makes the rail write the toolbar list.
+    await page.evaluate(() => {
+      window.toolrail.pinBlock('core/heading', 't1');
+      window.toolrail.pinBlock('core/heading', 't2');
+    });
+    await expect.poll(async () => (await storedRecord(page, 't2')).slots).toContain('core/heading');
+    await expect.poll(async () => (await storedRecord(page, 't1')).slots).toContain('core/heading');
+
+    // Neither value became this version's dark default.
+    expect((await storedRecord(page, 't1')).appearance).toEqual(later);
+    expect((await storedRecord(page, 't2')).appearance).toEqual([]);
   });
 });

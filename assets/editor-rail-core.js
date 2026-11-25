@@ -792,9 +792,10 @@
    * left-out records back as they were.
    *
    * A record's colors (#96) are read with the same rules as the first
-   * toolbar's (normalizeAppearance). A record with no colors, or with a
-   * value that is not an object, gets null: it shows the first toolbar's
-   * colors.
+   * toolbar's (normalizeAppearance), but only when the value is an object
+   * with a mode this version knows. Any other value (none, an array, a
+   * mode from a later version) gets null: the toolbar shows the first
+   * toolbar's colors, and saveToolbars() keeps the stored value as it is.
    *
    * @return {Object[]} {id, name, dock, x, y, slots, wide, hidden,
    *                    appearance} each.
@@ -817,6 +818,8 @@
         wide: rec.wide === true,
         hidden: rec.hidden === true,
         appearance: rec.appearance && typeof rec.appearance === 'object'
+          && !Array.isArray(rec.appearance)
+          && APPEARANCE_MODES.indexOf(rec.appearance.mode) !== -1
           ? normalizeAppearance(rec.appearance) : null
       });
     });

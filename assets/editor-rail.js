@@ -36,10 +36,11 @@
  *
  * MORE THAN ONE TOOLBAR (#95): the author can add up to three toolbars
  * to the first one, each with its own name, pins, position, wide mode
- * and colors (#96), and show or hide each. The first toolbar keeps #toolrail-region,
- * #toolrail-rail, the name "Tools", Select, the Section overview, the
- * provider tools, Help, Saved sets and Toolbar settings. An extra
- * toolbar is #toolrail-region-<id> / #toolrail-rail-<id>, its pins only.
+ * and colors (#96), and show or hide each. The first toolbar keeps
+ * #toolrail-region, #toolrail-rail, the name "Tools", Select, the Section
+ * overview, the provider tools, Help, Saved sets and Toolbar settings.
+ * An extra toolbar is #toolrail-region-<id> / #toolrail-rail-<id>, its
+ * pins only.
  *   window.toolrail.getToolbars() → [{id, name, dock, x, y, hidden}],
  *     the first toolbar first, id 'main'.
  *   getDock(id) / getPosition(id) / setDock(dock, id), pinBlock(slot,
