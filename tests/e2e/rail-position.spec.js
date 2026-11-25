@@ -199,6 +199,7 @@ test.describe('rail position', () => {
 
       const stored = () => window.wp.data.select('core/preferences').get('toolrail', 'toolrail-position');
       const storedBefore = stored();
+      const positionBefore = window.toolrail.getPosition();
 
       fire(grip, 'mousedown', g.left + 6, g.top + 6);
       fire(document, 'mousemove', 500, 400);
@@ -207,6 +208,9 @@ test.describe('rail position', () => {
 
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
       return {
+        // The offsets in memory go back too, not only the dock. A later
+        // "Float" without offsets must not use the abandoned drag place.
+        positionRestored: JSON.stringify(window.toolrail.getPosition()) === JSON.stringify(positionBefore),
         midDrag,
         // The tear-off and the Escape write nothing; only a release saves (#129).
         storedMidUnchanged: storedMid === storedBefore,
@@ -220,6 +224,7 @@ test.describe('rail position', () => {
     expect(result.midDrag).toBe('float');
     expect(result.storedMidUnchanged).toBe(true);
     expect(result.storedAfterUnchanged).toBe(true);
+    expect(result.positionRestored).toBe(true);
     expect(result.afterEscape).toBe('left');
     expect(result.previewCleanedUp).toBe(true);
     expect(result.bodyClean).toBe(true);
@@ -276,6 +281,22 @@ test.describe('rail position', () => {
 
     // Escape puts the toolbar back where it was and writes nothing.
     expect(result.after).toEqual(result.before);
+    expect(await getPref(page, 'toolrail-position')).toBe(stored);
+
+    // A click on the grip with no movement is a release that moved
+    // nothing. It must not write the clamp either.
+    const clicked = await page.evaluate(() => {
+      const grip = document.querySelector('#toolrail-region .toolrail-grip');
+      const g = grip.getBoundingClientRect();
+      const fire = (el, type, x, y) => el.dispatchEvent(
+        new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 })
+      );
+      const before = window.toolrail.getPosition();
+      fire(grip, 'mousedown', g.left + 6, g.top + 6);
+      fire(document, 'mouseup', g.left + 6, g.top + 6);
+      return { before, after: window.toolrail.getPosition() };
+    });
+    expect(clicked.after).toEqual(clicked.before);
     expect(await getPref(page, 'toolrail-position')).toBe(stored);
 
     // In a wide window, the toolbar is at the position the author chose.

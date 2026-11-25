@@ -490,7 +490,8 @@
       grabX: e.clientX - rect.left,
       grabY: e.clientY - rect.top,
       candidate: position.dock,
-      torn: position.dock === 'float'
+      torn: position.dock === 'float',
+      moved: false
     };
 
     syncLayers();
@@ -514,6 +515,7 @@
     }
     e.preventDefault();
     var tb = T.drag.toolbar;
+    T.drag.moved = true;
 
     // Tear a docked rail off on first movement so it follows the pointer,
     // the way a docked palette in a graphics editor does.
@@ -559,7 +561,11 @@
 
   /**
    * Release the rail into the dock the snap preview was showing, or leave
-   * it floating at the position it was dragged to.
+   * it floating at the position it was dragged to. A release with no
+   * movement (a click on the grip) changes nothing and saves nothing: the
+   * offsets in memory can hold applyFloatPosition()'s clamp for a narrow
+   * window, and a save would write that clamp over the place the author
+   * chose (#129).
    */
   function onDragEnd() {
     if (!T.drag) {
@@ -567,9 +573,13 @@
     }
     var tb = T.drag.toolbar;
     var candidate = T.drag.candidate;
+    var moved = T.drag.moved;
     var x = tb.position.x;
     var y = tb.position.y;
     finishDrag();
+    if (!moved) {
+      return;
+    }
     setDock(tb, candidate === 'float' ? 'float' : candidate, { x: x, y: y });
     // A drop on an edge can leave the canvas too narrow (owner decision
     // 2026-11-16). The drag says nothing else.
@@ -584,6 +594,11 @@
    * saves nothing (#129). The start values are the PAINTED offsets, which
    * applyFloatPosition() clamps into a narrow window. A save here would
    * write that clamp over the place the author chose.
+   *
+   * The offsets go back first, for every start dock: setDock() applies
+   * {x, y} only for a float, and a drag that started docked has written
+   * the pointer's place into them. A later "Float" with no offsets would
+   * otherwise use the abandoned place.
    */
   function onDragKey(e) {
     if (e.key !== 'Escape' || !T.drag) {
@@ -596,6 +611,8 @@
     var startX = T.drag.startX;
     var startY = T.drag.startY;
     finishDrag();
+    tb.position.x = startX;
+    tb.position.y = startY;
     setDock(tb, startDock, { x: startX, y: startY, save: false });
   }
 
