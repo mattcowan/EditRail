@@ -2514,9 +2514,10 @@
   // Marquee select — a drag from EMPTY overlay space draws a rectangle;
   // every box it touches is selected on release (issue #21). Pointer
   // sugar like the box drag: the keyboard's path to the same selection
-  // is Shift+Arrow / Ctrl+Space / Ctrl+Enter in onOverviewKeydown. Coordinates are
-  // viewport-space, so a wheel-pan mid-marquee just changes which boxes
-  // the fixed rectangle touches — the next mousemove re-hit-tests.
+  // is Shift+Arrow / Ctrl+Space / Ctrl+Enter in onOverviewKeydown.
+  // Coordinates are viewport-space, so a wheel-pan mid-marquee just
+  // changes which boxes the fixed rectangle touches — the next mousemove
+  // re-hit-tests.
   // -------------------------------------------------------------------
 
   function startOverviewMarquee(e) {
@@ -2834,10 +2835,13 @@
     // A button in the controls strip cannot replace it: a plain pick on
     // an unselected box resets the selection to that box
     // (selectOverviewBox), so the strip of a box that is not a member
-    // never shows while a selection exists. Shift+Enter is not used: a
-    // button clicks on it with shiftKey set, which is the range click.
-    var isToggleKey = e.key === ' ' || e.key === 'Spacebar' || e.key === 'Enter';
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && isToggleKey) {
+    // never shows while a selection exists. Ctrl+Shift+Enter is left to
+    // the button: it clicks on Enter with shiftKey set, which is the
+    // range click. Space keeps every modifier it had before #119, so
+    // Ctrl+Shift+Space and Ctrl+Alt+Space (AltGr) still toggle here.
+    var isSpace = e.key === ' ' || e.key === 'Spacebar';
+    var isToggleKey = isSpace || (e.key === 'Enter' && !e.shiftKey);
+    if ((e.ctrlKey || e.metaKey) && isToggleKey) {
       // preventDefault on KEYDOWN: buttons click on Space keyup and on
       // Enter keydown, and the toggle must not also flip the disclosure.
       e.preventDefault();

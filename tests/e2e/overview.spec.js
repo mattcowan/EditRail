@@ -797,6 +797,28 @@ test.describe('section overview (R6)', () => {
     await page.keyboard.press('Control+ ');
     await expect(ovSelectedBoxes(page)).toHaveCount(2);
     await expect.poll(async () => ovAnnouncement(page)).toContain('2 blocks selected.');
+
+    const selectedIds = () => ovSelectedBoxes(page).evaluateAll((boxes) =>
+      boxes.map((b) => b.dataset.clientid)
+    );
+
+    // A held key is one toggle. Playwright sends repeat: true on the
+    // second and third keydown of a key that is already down.
+    await page.keyboard.down('Control');
+    await page.keyboard.down('Enter');
+    await page.keyboard.down('Enter');
+    await page.keyboard.down('Enter');
+    await page.keyboard.up('Enter');
+    await page.keyboard.up('Control');
+    await expect.poll(selectedIds).toEqual([ids[0]]);
+    expect(await focusedBox()).toEqual({ action: 'pick', box: ids[2] });
+
+    // Shift is left out for Enter only (Shift+Enter is the range click).
+    // Ctrl+Shift+Space toggles one box, as it did before #119: a range
+    // from the anchor would also take the boxes between.
+    await overviewBoxButton(page, ids[4], 'pick').focus();
+    await page.keyboard.press('Control+Shift+ ');
+    await expect.poll(selectedIds).toEqual([ids[0], ids[4]]);
   });
 
   test('Escape exits the overview in one press, even with a selection open (owner decision 2026-09-01)', async ({ page }) => {
