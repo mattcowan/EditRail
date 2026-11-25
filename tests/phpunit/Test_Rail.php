@@ -19,12 +19,14 @@ class Test_Rail extends WP_UnitTestCase {
         parent::setUp();
         $GLOBALS['toolrail_test_scripts'] = [];
         $GLOBALS['toolrail_test_styles']  = [];
+        $GLOBALS['toolrail_test_script_translations'] = [];
         toolrail_register_rail_assets();
     }
 
     protected function tearDown(): void {
         $GLOBALS['toolrail_test_scripts'] = [];
         $GLOBALS['toolrail_test_styles']  = [];
+        $GLOBALS['toolrail_test_script_translations'] = [];
         parent::tearDown();
     }
 
@@ -79,6 +81,26 @@ class Test_Rail extends WP_UnitTestCase {
         foreach (['wp-data', 'wp-preferences', 'wp-blocks', 'wp-i18n', 'wp-a11y', 'wp-element', 'wp-components', 'wp-plugins', 'wp-block-editor'] as $dep) {
             $this->assertContains($dep, $first['deps']);
         }
+    }
+
+    public function test_every_rail_script_that_holds_strings_loads_its_translations() {
+        // A language pack cannot translate a file's strings unless its
+        // handle calls wp_set_script_translations() (#120). Read each file
+        // for a string in the 'editrail' text domain, so a new file with
+        // strings and no call fails here.
+        $with_strings = 0;
+        foreach (toolrail_rail_scripts() as $handle => $script) {
+            $source = file_get_contents(TOOLRAIL_PLUGIN_DIR . $script['file']);
+            if (!preg_match("/'editrail'\s*\)/", $source)) {
+                continue;
+            }
+            $with_strings++;
+            $this->assertArrayHasKey($handle, $GLOBALS['toolrail_test_script_translations'], $handle . ' holds strings but loads no translations');
+            $this->assertSame('editrail', $GLOBALS['toolrail_test_script_translations'][$handle]['domain'], $handle . ' text domain');
+            $this->assertSame('', $GLOBALS['toolrail_test_script_translations'][$handle]['path'], $handle . ' must read the language pack folder');
+        }
+        // Proves that the search above works: every rail file holds strings today.
+        $this->assertSame(count(toolrail_rail_scripts()), $with_strings);
     }
 
     public function test_the_style_keeps_the_public_handle() {

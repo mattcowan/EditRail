@@ -294,6 +294,19 @@ if (!function_exists('wp_register_script')) {
     }
 }
 
+$GLOBALS['toolrail_test_script_translations'] = [];
+
+if (!function_exists('wp_set_script_translations')) {
+    /** Record the text domain set for a script handle (#120). */
+    function wp_set_script_translations($handle, $domain = 'default', $path = '') {
+        $GLOBALS['toolrail_test_script_translations'][$handle] = [
+            'domain' => $domain,
+            'path'   => $path,
+        ];
+        return true;
+    }
+}
+
 if (!function_exists('wp_register_style')) {
     /** Record a style registration; the last one for a handle wins. */
     function wp_register_style($handle, $src, $deps = [], $ver = false, $media = 'all') {
