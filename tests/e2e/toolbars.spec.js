@@ -14,6 +14,7 @@ const {
   AUTH,
   openNewPost,
   canvas,
+  openSettingsSidebar,
   clickBelowContent,
   waitForSavedPref,
   getPref,
@@ -615,6 +616,7 @@ test.describe('second-toolbar twins of the single-toolbar tests (#95)', () => {
 
   test('a floating extra toolbar stays above the side panel while a dialog is open, and the dialog paints above it', async ({ page }) => {
     await openNewPost(page);
+    await openSettingsSidebar(page);
     await page.locator('#toolrail-rail [data-tool="settings"]').click();
     const dialog = page.locator('.toolrail-settings');
     await expect(dialog).toBeVisible();
@@ -662,6 +664,7 @@ test.describe('second-toolbar twins of the single-toolbar tests (#95)', () => {
 
   test('a floating first toolbar stays above the side panel while an extra toolbar\'s flyout is open', async ({ page }) => {
     await openNewPost(page);
+    await openSettingsSidebar(page);
     const x = await page.evaluate(() => {
       const body = document.querySelector('.interface-interface-skeleton__body').getBoundingClientRect();
       const s = document.querySelector('.interface-interface-skeleton__sidebar').getBoundingClientRect();
@@ -673,6 +676,9 @@ test.describe('second-toolbar twins of the single-toolbar tests (#95)', () => {
       'toolrail-toolbars': JSON.stringify({ version: 1, toolbars: [record('t1', 'Animation')] }),
     });
     await expect(page.locator('#toolrail-rail-t1')).toBeVisible({ timeout: 20000 });
+    // The reload can bring the sidebar back closed when core's save of the
+    // open state had not landed yet. x was measured with it open.
+    await openSettingsSidebar(page);
     await page.evaluate(() => window.toolrail.registerTool({
       id: 'spec:quote-child', label: 'Quote child', parent: 'pin:core/quote', insertBlock: 'core/quote',
     }));
@@ -831,6 +837,7 @@ test.describe('owner decisions of 2026-11-16 (#95)', () => {
   test('a change that leaves the canvas too narrow says so, in one message; a page load says nothing', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await openNewPost(page);
+    await openSettingsSidebar(page);
     await fourWideOnTheLeft(page);
     // Stored data that arrives without an author's change says nothing.
     expect(await liveText(page)).not.toContain('content area');
@@ -855,6 +862,7 @@ test.describe('owner decisions of 2026-11-16 (#95)', () => {
   test('at a window wide enough, the same change says nothing about the canvas', async ({ page }) => {
     await page.setViewportSize({ width: 1920, height: 900 });
     await openNewPost(page);
+    await openSettingsSidebar(page);
     await fourWideOnTheLeft(page);
     await page.locator('#toolrail-rail [data-tool="settings"]').click();
     await page.locator('#toolrail-settings-wide').check();
@@ -868,6 +876,7 @@ test.describe('owner decisions of 2026-11-16 (#95)', () => {
   test('with one toolbar, a narrow canvas adds nothing to the default path', async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 800 });
     await openNewPost(page);
+    await openSettingsSidebar(page);
     await page.locator('#toolrail-rail [data-tool="settings"]').click();
     await page.locator('#toolrail-settings-wide').check();
     await expect(page.locator('#toolrail-region')).toHaveAttribute('data-wide', 'true');
