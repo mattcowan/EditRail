@@ -13,6 +13,8 @@ const {
   openNewPost,
   clickBelowContent,
   blockNames,
+  getPref,
+  waitForSavedPref,
 } = require('./helpers');
 
 test.use({ storageState: AUTH });
@@ -195,13 +197,20 @@ test.describe('rail position', () => {
         new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 })
       );
 
+      const stored = () => window.wp.data.select('core/preferences').get('toolrail', 'toolrail-position');
+      const storedBefore = stored();
+
       fire(grip, 'mousedown', g.left + 6, g.top + 6);
       fire(document, 'mousemove', 500, 400);
       const midDrag = window.toolrail.getDock();
+      const storedMid = stored();
 
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
       return {
         midDrag,
+        // The tear-off and the Escape write nothing; only a release saves (#129).
+        storedMidUnchanged: storedMid === storedBefore,
+        storedAfterUnchanged: stored() === storedBefore,
         afterEscape: window.toolrail.getDock(),
         previewCleanedUp: !document.getElementById('toolrail-snap-preview'),
         bodyClean: !document.body.classList.contains('toolrail-dragging'),
@@ -209,9 +218,71 @@ test.describe('rail position', () => {
     });
 
     expect(result.midDrag).toBe('float');
+    expect(result.storedMidUnchanged).toBe(true);
+    expect(result.storedAfterUnchanged).toBe(true);
     expect(result.afterEscape).toBe('left');
     expect(result.previewCleanedUp).toBe(true);
     expect(result.bodyClean).toBe(true);
+  });
+
+  test('Escape during a drag keeps the stored float position in a narrow window (#129)', async ({ page }) => {
+    const wide = { width: 1600, height: 900 };
+    await page.setViewportSize(wide);
+    await openNewPost(page);
+
+    // Float the toolbar near the right side with a grip drag that ends
+    // with a release. The release saves the new position.
+    const placed = await page.evaluate(() => {
+      const grip = document.querySelector('#toolrail-region .toolrail-grip');
+      const g = grip.getBoundingClientRect();
+      const body = document.querySelector('.interface-interface-skeleton__body').getBoundingClientRect();
+      const fire = (el, type, x, y) => el.dispatchEvent(
+        new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 })
+      );
+      const x = Math.round(body.left + body.width * 0.6);
+      const y = Math.round(body.top + 200);
+      fire(grip, 'mousedown', g.left + 6, g.top + 6);
+      fire(document, 'mousemove', x, y);
+      fire(document, 'mouseup', x, y);
+      return window.toolrail.getPosition();
+    });
+    expect(placed.dock).toBe('float');
+    await waitForSavedPref(page, 'toolrail-position', (v) => {
+      try {
+        const p = JSON.parse(v);
+        return p.dock === 'float' && p.x === placed.x && p.y === placed.y;
+      } catch (e) {
+        return false;
+      }
+    });
+    const stored = await getPref(page, 'toolrail-position');
+
+    // A narrower window clamps the painted position.
+    await page.setViewportSize({ width: 900, height: wide.height });
+    await expect.poll(() => page.evaluate(() => window.toolrail.getPosition().x)).toBeLessThan(placed.x);
+
+    const result = await page.evaluate(() => {
+      const grip = document.querySelector('#toolrail-region .toolrail-grip');
+      const g = grip.getBoundingClientRect();
+      const fire = (el, type, x, y) => el.dispatchEvent(
+        new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 })
+      );
+      const before = window.toolrail.getPosition();
+      fire(grip, 'mousedown', g.left + 6, g.top + 6);
+      fire(document, 'mousemove', 300, 300);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      return { before, after: window.toolrail.getPosition() };
+    });
+
+    // Escape puts the toolbar back where it was and writes nothing.
+    expect(result.after).toEqual(result.before);
+    expect(await getPref(page, 'toolrail-position')).toBe(stored);
+
+    // In a wide window, the toolbar is at the position the author chose.
+    await page.setViewportSize(wide);
+    await page.reload();
+    await expect(page.locator('#toolrail-rail')).toBeVisible({ timeout: 20000 });
+    expect(await page.evaluate(() => window.toolrail.getPosition())).toEqual(placed);
   });
 
   test('a LEFT-docked surface renders in front of the Document Overview panel', async ({ page }) => {

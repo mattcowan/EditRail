@@ -261,7 +261,9 @@
    * @param {Object} tb   The toolbar to move.
    * @param {string} dock One of DOCKS.
    * @param {Object} opts {x, y} for a float, {reopenSettings} to keep the
-   *                      settings dialog open across the move.
+   *                      settings dialog open across the move, {save: false}
+   *                      to move the toolbar without a write to the stored
+   *                      position (a grip drag saves only on release, #129).
    * @return {boolean} Whether the dock was applied.
    */
   function setDock(tb, dock, opts) {
@@ -293,7 +295,9 @@
         position.y = options.y;
       }
     }
-    savePosition(tb);
+    if (options.save !== false) {
+      savePosition(tb);
+    }
 
     closeFlyout(false);
     // The three dialogs hang in the FIRST toolbar's region, so only its
@@ -517,9 +521,12 @@
       T.drag.torn = true;
       var parent = skeletonBody();
       var parentRect = parent ? parent.getBoundingClientRect() : { left: 0, top: 0 };
+      // No save: the release saves, and Escape must find the stored
+      // position as it was before the drag (#129).
       setDock(tb, 'float', {
         x: e.clientX - parentRect.left - T.drag.grabX,
-        y: e.clientY - parentRect.top - T.drag.grabY
+        y: e.clientY - parentRect.top - T.drag.grabY,
+        save: false
       });
     }
 
@@ -572,7 +579,12 @@
     }
   }
 
-  /** Escape abandons a drag and puts the rail back where it started. */
+  /**
+   * Escape abandons a drag and puts the rail back where it started. It
+   * saves nothing (#129). The start values are the PAINTED offsets, which
+   * applyFloatPosition() clamps into a narrow window. A save here would
+   * write that clamp over the place the author chose.
+   */
   function onDragKey(e) {
     if (e.key !== 'Escape' || !T.drag) {
       return;
@@ -584,7 +596,7 @@
     var startX = T.drag.startX;
     var startY = T.drag.startY;
     finishDrag();
-    setDock(tb, startDock, { x: startX, y: startY });
+    setDock(tb, startDock, { x: startX, y: startY, save: false });
   }
 
   // Keep a floating rail inside the editor when the window resizes, and

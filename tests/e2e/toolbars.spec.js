@@ -255,6 +255,49 @@ test.describe('multiple toolbars (#95)', () => {
     expect(await page.evaluate(() => window.toolrail.getDock())).toBe('right');
   });
 
+  test('Escape during a drag keeps an extra toolbar\'s stored float position (#129)', async ({ page }) => {
+    const wide = { width: 1600, height: 900 };
+    await page.setViewportSize(wide);
+    await openNewPost(page);
+    await seedByDispatch(page, [record('t1', 'Animation', { dock: 'float', x: 900, y: 200 })]);
+    await expect(page.locator('#toolrail-region-t1')).toHaveAttribute('data-dock', 'float');
+    expect(await page.evaluate(() => window.toolrail.getPosition('t1'))).toEqual({ dock: 'float', x: 900, y: 200 });
+    await waitForSavedPref(page, 'toolrail-toolbars', (v) => {
+      try {
+        const rec = JSON.parse(v).toolbars[0];
+        return rec.id === 't1' && rec.x === 900;
+      } catch (e) {
+        return false;
+      }
+    });
+    const stored = await getPref(page, 'toolrail-toolbars');
+
+    // A narrower window clamps the painted position.
+    await page.setViewportSize({ width: 900, height: wide.height });
+    await expect.poll(() => page.evaluate(() => window.toolrail.getPosition('t1').x)).toBeLessThan(900);
+
+    const result = await page.evaluate(() => {
+      const grip = document.querySelector('#toolrail-region-t1 .toolrail-grip');
+      const g = grip.getBoundingClientRect();
+      const fire = (el, type, x, y) => el.dispatchEvent(
+        new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 })
+      );
+      const before = window.toolrail.getPosition('t1');
+      fire(grip, 'mousedown', g.left + 6, g.top + 6);
+      fire(document, 'mousemove', 300, 300);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      return { before, after: window.toolrail.getPosition('t1') };
+    });
+
+    expect(result.after).toEqual(result.before);
+    expect(await getPref(page, 'toolrail-toolbars')).toBe(stored);
+
+    await page.setViewportSize(wide);
+    await page.reload();
+    await expect(page.locator('#toolrail-rail-t1')).toBeVisible({ timeout: 20000 });
+    expect(await page.evaluate(() => window.toolrail.getPosition('t1'))).toEqual({ dock: 'float', x: 900, y: 200 });
+  });
+
   test('only one tool is armed across all toolbars', async ({ page }) => {
     await openNewPost(page);
     await seedByDispatch(page, [record('t1', 'Animation', { slots: ['core/heading'] })]);
