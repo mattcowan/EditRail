@@ -517,6 +517,37 @@ function canvas(page) {
 }
 
 /**
+ * Open core's settings sidebar when it is closed, and wait until it shows
+ * at its full width. A closed sidebar opens on the Post tab. An open
+ * sidebar stays on the tab it shows. WordPress keeps the open state in the
+ * account (`isComplementaryAreaVisible` in the `core` preferences), so a
+ * test that measures the sidebar or the canvas width cannot trust the
+ * state that an earlier test left (#130). A new account has the sidebar
+ * open, so this changes nothing on CI's fresh accounts.
+ *
+ * Needs WordPress 6.6 or later: it reads and enables the `core` scope only.
+ * WordPress 6.5 used `core/edit-post` (see sidebarStoreOpen() in
+ * assets/editor-rail-core.js).
+ *
+ * @param {import('@playwright/test').Page} page A page of the test's context.
+ * @return {Promise<void>}
+ */
+async function openSettingsSidebar(page) {
+  await page.evaluate(() => {
+    if (!window.wp.data.select('core/interface').getActiveComplementaryArea('core')) {
+      window.wp.data.dispatch('core/interface').enableComplementaryArea('core', 'edit-post/document');
+    }
+  });
+  await expect(page.locator('.interface-complementary-area')).toBeVisible();
+  // Core animates the sidebar open; measure only at its full width.
+  await expect.poll(() => page.evaluate(() => {
+    const side = document.querySelector('.interface-interface-skeleton__sidebar');
+    const area = document.querySelector('.interface-complementary-area');
+    return !!side && !!area && Math.round(side.getBoundingClientRect().width) === area.offsetWidth;
+  })).toBe(true);
+}
+
+/**
  * Click the canvas in the EMPTY space below everything already laid out
  * (title and blocks), measured live — never at a fixed pixel. Fixed
  * coordinates encode one theme's layout: y=400 was empty space under
@@ -660,6 +691,7 @@ module.exports = {
   AUTH,
   openNewPost,
   canvas,
+  openSettingsSidebar,
   clickBelowContent,
   waitForPatternCatalog,
   waitForSavedPref,
