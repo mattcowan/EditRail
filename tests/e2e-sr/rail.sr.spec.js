@@ -394,7 +394,9 @@ test.describe('EditRail with NVDA', () => {
     expect(log.countAfterSecond, 'Ctrl+Enter adds a box that does not touch it').toBe(2);
     expect(log.countAfterRemove, 'Ctrl+Enter on a selected box removes it').toBe(1);
     expect(h.spoke(spoken, /2 blocks selected/i), 'the second toggle is heard').toBe(true);
-    expect(h.spoke(spoken, /1 block selected/i), 'the removal is heard').toBe(true);
+    // The removal's own phrase: the first toggle also says "1 block
+    // selected", so a match anywhere in the log would pass on silence.
+    expect(log.removeToggle, 'the removal is heard').toMatch(/1 block selected/i);
   });
 
   test('help panel: open, read, close', async ({ page, nvda }) => {

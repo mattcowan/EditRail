@@ -2835,12 +2835,13 @@
     // A button in the controls strip cannot replace it: a plain pick on
     // an unselected box resets the selection to that box
     // (selectOverviewBox), so the strip of a box that is not a member
-    // never shows while a selection exists. Ctrl+Shift+Enter is left to
-    // the button: it clicks on Enter with shiftKey set, which is the
-    // range click. Space keeps every modifier it had before #119, so
-    // Ctrl+Shift+Space and Ctrl+Alt+Space (AltGr) still toggle here.
-    var isSpace = e.key === ' ' || e.key === 'Spacebar';
-    var isToggleKey = isSpace || (e.key === 'Enter' && !e.shiftKey);
+    // never shows while a selection exists. Enter takes the same
+    // modifiers as Space, which kept every modifier it had before #119:
+    // Ctrl+Shift and Ctrl+Alt (AltGr) toggle too. The button gives no
+    // range click for Ctrl+Shift+Enter: Chromium and Firefox fire no
+    // click for a modified Enter (PR #137 review, checked in both).
+    // Shift+Arrow is the keyboard range.
+    var isToggleKey = e.key === ' ' || e.key === 'Spacebar' || e.key === 'Enter';
     if ((e.ctrlKey || e.metaKey) && isToggleKey) {
       // preventDefault on KEYDOWN: buttons click on Space keyup and on
       // Enter keydown, and the toggle must not also flip the disclosure.

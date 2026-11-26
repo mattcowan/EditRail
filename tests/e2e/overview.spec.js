@@ -813,12 +813,18 @@ test.describe('section overview (R6)', () => {
     await expect.poll(selectedIds).toEqual([ids[0]]);
     expect(await focusedBox()).toEqual({ action: 'pick', box: ids[2] });
 
-    // Shift is left out for Enter only (Shift+Enter is the range click).
     // Ctrl+Shift+Space toggles one box, as it did before #119: a range
     // from the anchor would also take the boxes between.
     await overviewBoxButton(page, ids[4], 'pick').focus();
     await page.keyboard.press('Control+Shift+ ');
     await expect.poll(selectedIds).toEqual([ids[0], ids[4]]);
+
+    // Ctrl+Shift+Enter toggles one box too. Before the PR #137 review it
+    // did nothing: the browsers fire no click for a modified Enter.
+    await overviewBoxButton(page, ids[2], 'pick').focus();
+    await page.keyboard.press('Control+Shift+Enter');
+    await expect.poll(selectedIds).toEqual([ids[0], ids[2], ids[4]]);
+    expect(await focusedBox()).toEqual({ action: 'pick', box: ids[2] });
   });
 
   test('Escape exits the overview in one press, even with a selection open (owner decision 2026-09-01)', async ({ page }) => {
