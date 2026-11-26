@@ -818,9 +818,11 @@ test.describe('section overview (R6)', () => {
     await overviewBoxButton(page, ids[4], 'pick').focus();
     await page.keyboard.press('Control+Shift+ ');
     await expect.poll(selectedIds).toEqual([ids[0], ids[4]]);
+    expect(await focusedBox()).toEqual({ action: 'pick', box: ids[4] });
 
     // Ctrl+Shift+Enter toggles one box too. Before the PR #137 review it
-    // did nothing: the browsers fire no click for a modified Enter.
+    // did nothing: Chromium and Firefox fire no click for a modified
+    // Enter.
     await overviewBoxButton(page, ids[2], 'pick').focus();
     await page.keyboard.press('Control+Shift+Enter');
     await expect.poll(selectedIds).toEqual([ids[0], ids[2], ids[4]]);
