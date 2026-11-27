@@ -20,6 +20,26 @@ const {
 
 test.use({ storageState: AUTH });
 
+/**
+ * Wait until the rail has bound its canvas handlers to the canvas document
+ * that is in the iframe now (#121). Call it after a tool is armed.
+ *
+ * A canvas body is not enough: the editor replaces the iframe's document
+ * after load, and the rail binds the new one only from its mount observer
+ * (bindCanvas, assets/editor-rail-tools.js). markCanvasArmed() puts the
+ * `toolrail-armed` class on the BOUND document, so the class on the current
+ * document shows that a dispatch on its body reaches the rail.
+ *
+ * @param {import('@playwright/test').Page} page A page with a tool armed.
+ * @return {Promise<void>}
+ */
+async function waitForArmedCanvas(page) {
+  await expect.poll(() => page.evaluate(() => {
+    const doc = document.querySelector('iframe[name="editor-canvas"]').contentDocument;
+    return !!(doc && doc.documentElement && doc.documentElement.classList.contains('toolrail-armed'));
+  }), { message: 'the rail did not bind its handlers to the current canvas document', timeout: 10000 }).toBe(true);
+}
+
 test.describe('armed-tool insertion', () => {
   test('arm Text, click canvas: paragraph inserted, tool returns to Select', async ({ page }) => {
     await openNewPost(page);
@@ -128,6 +148,9 @@ test.describe('regressions', () => {
         .resetBlocks([createBlock('core/paragraph', { content: 'ALPHA' })]);
     });
     await expect.poll(async () => (await blockNames(page)).length).toBe(1);
+    // openNewPost waits for the rail, which can be up before the canvas
+    // iframe has a body (#121). The dispatches below need that body.
+    await expect(canvas(page).locator('.is-root-container')).toBeVisible({ timeout: 10000 });
 
     // Paragraph is the DEFAULT block type, so every block this inserts is
     // an unmodified default paragraph — indistinguishable, by shape alone,
@@ -136,6 +159,7 @@ test.describe('regressions', () => {
     // first click's delayed pass used to run against a knownIds snapshot
     // that predated the second block and delete it.
     await page.locator('#toolrail-rail [data-tool="pin:core/paragraph"]').click();
+    await waitForArmedCanvas(page);
     await page.evaluate(async () => {
       const doc = document.querySelector('iframe[name="editor-canvas"]').contentDocument;
       const fire = (shift) => {
@@ -175,6 +199,9 @@ test.describe('regressions', () => {
         .resetBlocks([createBlock('core/paragraph', { content: 'ALPHA' })]);
     });
     await expect.poll(async () => (await blockNames(page)).length).toBe(1);
+    // openNewPost waits for the rail, which can be up before the canvas
+    // iframe has a body (#121). The dispatches below need that body.
+    await expect(canvas(page).locator('.is-root-container')).toBeVisible({ timeout: 10000 });
 
     // Arm a tool, insert, then start a NEW gesture and create an unmodified
     // default paragraph inside the 80ms backstop window. Under Select that
@@ -186,6 +213,7 @@ test.describe('regressions', () => {
     // for a stray), so counting paragraphs is ambiguous, and whatever else
     // the editor does to the document is irrelevant to the question.
     await page.locator('#toolrail-rail [data-tool="pin:core/heading"]').click();
+    await waitForArmedCanvas(page);
     const survivorId = await page.evaluate(async () => {
       const doc = document.querySelector('iframe[name="editor-canvas"]').contentDocument;
       const opts = {

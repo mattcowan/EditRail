@@ -80,6 +80,9 @@ The plugin folder is now editrail. After a zip upgrade, delete the old toolrail 
 * Section overview: while the overview is open and you do nothing, it does no work. Before, it rewrote its zoom percentage about nine times each second.
 * Section overview: after you move a block, each outline box ends exactly on its block. Before, the boxes could stay a few pixels off, and a column of short blocks could look out of order.
 * When you drag a block from the content onto the toolbar, the cursor goes to the name field of "Add to toolbar". When you drag the settings sidebar edge, Escape puts the edge back. Both also work when the cursor was in the content first.
+* On a site in another language, the toolbar, the Section overview, the dialogs and the screen reader messages can use the translations of a WordPress.org language pack. Before, they stayed in English.
+* When you press Escape while you drag the toolbar, or click its grip without a move, the toolbar keeps the place you saved. Before, if the window was narrow, these saved the narrow-window place, and the toolbar did not go back when the window was wide again.
+* Section overview: when you move the toolbar to a different edge while the overview is open, the overview stays on the content. Before, it could cover a strip next to the content and leave a strip of the content uncovered.
 * Section overview: Ctrl+Enter (Cmd+Enter on a Mac) adds the focused outline to the selection or removes it, the same as Ctrl+Space. Use it when the operating system uses Ctrl+Space for a different task.
 
 = 1.0.5 =

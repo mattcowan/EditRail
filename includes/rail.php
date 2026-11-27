@@ -119,6 +119,12 @@ function toolrail_register_rail_assets() {
             toolrail_asset_version($script['file']),
             true
         );
+        // Language packs from WordPress.org ship each file's JavaScript
+        // strings as a JSON file, and WordPress loads that file only for a
+        // handle with this call (#120). Every rail file holds strings in the
+        // 'editrail' text domain, so every rail handle gets the call. No
+        // path: WordPress then reads the language pack folder.
+        wp_set_script_translations($handle, 'editrail');
     }
 
     wp_register_style(
