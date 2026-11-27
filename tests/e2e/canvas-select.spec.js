@@ -9,7 +9,7 @@
  *
  * Runs on post-new.php and NEVER saves a post; helpers.js has the rule.
  */
-const { test, expect, AUTH, openNewPost, canvas, liveText } = require('./helpers');
+const { test, expect, AUTH, openNewPost, canvas, openSettingsSidebar, liveText } = require('./helpers');
 
 test.use({ storageState: AUTH });
 
@@ -27,17 +27,10 @@ async function seedCanvas(page) {
   await expect(canvas(page).locator('.is-root-container')).toBeVisible({ timeout: 20000 });
   // The boxes and the pointer park below assume the settings sidebar is
   // open, which is WordPress's default. An account where a narrow window
-  // closed it (core saves that) would move the canvas.
-  const reopened = await page.evaluate(() => {
-    if (window.wp.data.select('core/interface').getActiveComplementaryArea('core')) {
-      return false;
-    }
-    window.wp.data.dispatch('core/interface').enableComplementaryArea('core', 'edit-post/document');
-    return true;
-  });
-  if (reopened) {
-    await expect(page.locator('.interface-complementary-area')).toBeVisible();
-  }
+  // closed it (core saves that) would move the canvas. The helper also
+  // waits for core's open animation, so the boxes are read at the final
+  // canvas width (#130).
+  await openSettingsSidebar(page);
   const ids = await page.evaluate(() => {
     const { createBlock } = window.wp.blocks;
     const pad = { spacing: { padding: { top: '40px', bottom: '40px', left: '40px', right: '40px' } } };

@@ -263,7 +263,9 @@
    * @param {Object} tb   The toolbar to move.
    * @param {string} dock One of DOCKS.
    * @param {Object} opts {x, y} for a float, {reopenSettings} to keep the
-   *                      settings dialog open across the move.
+   *                      settings dialog open across the move, {save: false}
+   *                      to move the toolbar without a write to the stored
+   *                      position (a grip drag saves only on release, #129).
    * @return {boolean} Whether the dock was applied.
    */
   function setDock(tb, dock, opts) {
@@ -295,7 +297,9 @@
         position.y = options.y;
       }
     }
-    savePosition(tb);
+    if (options.save !== false) {
+      savePosition(tb);
+    }
 
     closeFlyout(false);
     // The three dialogs hang in the FIRST toolbar's region, so only its
@@ -488,7 +492,8 @@
       grabX: e.clientX - rect.left,
       grabY: e.clientY - rect.top,
       candidate: position.dock,
-      torn: position.dock === 'float'
+      torn: position.dock === 'float',
+      moved: false
     };
 
     syncLayers();
@@ -512,6 +517,7 @@
     }
     e.preventDefault();
     var tb = T.drag.toolbar;
+    T.drag.moved = true;
 
     // Tear a docked rail off on first movement so it follows the pointer,
     // the way a docked palette in a graphics editor does.
@@ -519,9 +525,12 @@
       T.drag.torn = true;
       var parent = skeletonBody();
       var parentRect = parent ? parent.getBoundingClientRect() : { left: 0, top: 0 };
+      // No save: the release saves, and Escape must find the stored
+      // position as it was before the drag (#129).
       setDock(tb, 'float', {
         x: e.clientX - parentRect.left - T.drag.grabX,
-        y: e.clientY - parentRect.top - T.drag.grabY
+        y: e.clientY - parentRect.top - T.drag.grabY,
+        save: false
       });
     }
 
@@ -554,7 +563,11 @@
 
   /**
    * Release the rail into the dock the snap preview was showing, or leave
-   * it floating at the position it was dragged to.
+   * it floating at the position it was dragged to. A release with no
+   * movement (a click on the grip) changes nothing and saves nothing: the
+   * offsets in memory can hold applyFloatPosition()'s clamp for a narrow
+   * window, and a save would write that clamp over the place the author
+   * chose (#129).
    */
   function onDragEnd() {
     if (!T.drag) {
@@ -562,9 +575,13 @@
     }
     var tb = T.drag.toolbar;
     var candidate = T.drag.candidate;
+    var moved = T.drag.moved;
     var x = tb.position.x;
     var y = tb.position.y;
     finishDrag();
+    if (!moved) {
+      return;
+    }
     setDock(tb, candidate === 'float' ? 'float' : candidate, { x: x, y: y });
     // A drop on an edge can leave the canvas too narrow (owner decision
     // 2026-11-16). The drag says nothing else.
@@ -574,7 +591,17 @@
     }
   }
 
-  /** Escape abandons a drag and puts the rail back where it started. */
+  /**
+   * Escape abandons a drag and puts the rail back where it started. It
+   * saves nothing (#129). The start values are the PAINTED offsets, which
+   * applyFloatPosition() clamps into a narrow window. A save here would
+   * write that clamp over the place the author chose.
+   *
+   * The offsets go back first, for every start dock: setDock() applies
+   * {x, y} only for a float, and a drag that started docked has written
+   * the pointer's place into them. A later "Float" with no offsets would
+   * otherwise use the abandoned place.
+   */
   function onDragKey(e) {
     if (e.key !== 'Escape' || !T.drag) {
       return;
@@ -586,7 +613,9 @@
     var startX = T.drag.startX;
     var startY = T.drag.startY;
     finishDrag();
-    setDock(tb, startDock, { x: startX, y: startY });
+    tb.position.x = startX;
+    tb.position.y = startY;
+    setDock(tb, startDock, { x: startX, y: startY, save: false });
   }
 
   // Keep a floating rail inside the editor when the window resizes, and
