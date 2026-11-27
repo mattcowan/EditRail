@@ -536,8 +536,9 @@
    * toolbar shows; the settings, help and add-to-toolbar dialogs are one
    * surface each, opened from the main toolbar's buttons and hung in its
    * region; the Section overview is a mode of the canvas; and the
-   * appearance and the saved sets are stored preferences with no variable
-   * here.
+   * saved sets are stored preferences with no variable here. The
+   * appearance is the first toolbar's stored preference, and an extra
+   * toolbar can have its own (#96).
    *
    * @param {string} id       The toolbar's name in code.
    * @param {string} regionId The id of its region node.
@@ -559,6 +560,12 @@
       slots: [],
       wide: false,
       hidden: false,
+      // An extra toolbar's own colors (#96): a loadAppearance()-shaped
+      // object, or null when its record has none. A null toolbar shows
+      // the first toolbar's colors and follows them when they change, so
+      // a record from before #96 looks the same as it did. The first
+      // toolbar does not use this: its colors are in APPEARANCE_KEY.
+      appearance: null,
       // The ids of the toolbar's two nodes: the positioned region that
       // hangs in the editor's skeleton, and the role="toolbar" rail
       // inside it.
@@ -784,7 +791,14 @@
    * not deleted: nothing is written here, and saveToolbars() writes the
    * left-out records back as they were.
    *
-   * @return {Object[]} {id, name, dock, x, y, slots, wide, hidden} each.
+   * A record's colors (#96) are read with the same rules as the first
+   * toolbar's (normalizeAppearance), but only when the value is an object
+   * with a mode this version knows. Any other value (none, an array, a
+   * mode from a later version) gets null: the toolbar shows the first
+   * toolbar's colors, and saveToolbars() keeps the stored value as it is.
+   *
+   * @return {Object[]} {id, name, dock, x, y, slots, wide, hidden,
+   *                    appearance} each.
    */
   function loadToolbarRecords() {
     var store = readToolbarStore();
@@ -802,7 +816,11 @@
         y: typeof rec.y === 'number' && isFinite(rec.y) ? rec.y : 24,
         slots: T.normalizeSlots(rec.slots),
         wide: rec.wide === true,
-        hidden: rec.hidden === true
+        hidden: rec.hidden === true,
+        appearance: rec.appearance && typeof rec.appearance === 'object'
+          && !Array.isArray(rec.appearance)
+          && APPEARANCE_MODES.indexOf(rec.appearance.mode) !== -1
+          ? normalizeAppearance(rec.appearance) : null
       });
     });
     return out;
@@ -853,6 +871,13 @@
       rec.slots = tb.slots.slice();
       rec.wide = tb.wide;
       rec.hidden = tb.hidden;
+      // Only a toolbar with colors of its own writes them. A null toolbar
+      // keeps what its record has: nothing (it follows the first
+      // toolbar), or a value this version could not read, which a later
+      // version may still need.
+      if (tb.appearance) {
+        rec.appearance = copyAppearance(tb.appearance);
+      }
       return rec;
     });
     // A left-out record with the id of a toolbar the author just deleted
@@ -883,7 +908,8 @@
         y: tb.stored.y,
         slots: tb.slots,
         wide: tb.wide,
-        hidden: tb.hidden
+        hidden: tb.hidden,
+        appearance: tb.appearance
       };
     }));
   }
@@ -1013,6 +1039,9 @@
     // Offsets alone changed: no rebuild, but the layout moved, so
     // listeners still hear of it (PR #126 review, CodeRabbit).
     var moved = false;
+    // Colors alone changed: repainted in place, but an open Toolbar
+    // settings shows the old ones.
+    var recoloredAny = false;
     var next = [mainToolbar];
     records.forEach(function (rec) {
       var tb = toolbarById(rec.id);
@@ -1033,10 +1062,18 @@
       } else if (!dragging && (tb.stored.x !== rec.x || tb.stored.y !== rec.y)) {
         moved = true;
       }
+      // Colors alone do not rebuild the region: they are repainted in
+      // place (#96). A rebuilt or new region paints them when it is built.
+      var recolored = JSON.stringify(tb.appearance) !== JSON.stringify(rec.appearance);
       tb.name = rec.name;
       tb.slots = rec.slots;
       tb.wide = rec.wide;
       tb.hidden = rec.hidden;
+      tb.appearance = rec.appearance;
+      if (recolored) {
+        recoloredAny = true;
+        applyToolbarAppearance(tb);
+      }
       tb.stored = { x: rec.x, y: rec.y };
       if (!dragging) {
         tb.position.dock = rec.dock;
@@ -1086,10 +1123,10 @@
     if (changed || reordered || moved) {
       announceToolbarsChange('', 'synced');
     }
+    if ((changed || reordered || recoloredAny) && T.settingsOpen) {
+      T.refreshSettings();
+    }
     if (changed || reordered) {
-      if (T.settingsOpen) {
-        T.refreshSettings();
-      }
       T.placeOpenDialogs();
     }
     return changed || reordered;
@@ -1131,6 +1168,9 @@
     tb.position.x = mainToolbar.position.x + 24 * T.toolbars.length;
     tb.position.y = mainToolbar.position.y + 24 * T.toolbars.length;
     tb.stored = { x: tb.position.x, y: tb.position.y };
+    // A new toolbar starts with the first toolbar's colors, as its own
+    // copy (#96): a later change to the first toolbar does not change it.
+    tb.appearance = copyAppearance(loadAppearance());
     T.toolbars.push(tb);
     saveToolbars();
     T.mount(tb);
@@ -2176,7 +2216,11 @@
   // Gray are complete hand-tuned sets, and Custom derives every token
   // from an author-chosen background + foreground pair by relative
   // luminance. Applied as inline properties on the region, which the
-  // flyouts and both dialogs inherit (they are its children). The drag
+  // flyouts and both dialogs inherit (they are its children). Each
+  // toolbar has its own appearance (#96): the first toolbar's is
+  // APPEARANCE_KEY, and an extra toolbar's is in its record, or the first
+  // toolbar's when it has none. The dialogs hang in the first toolbar's
+  // region, so they show its colors. The drag
   // snap-preview and the canvas-side armed cursor draw on the EDITOR,
   // not on the rail, and deliberately stay theme-blue.
   // -------------------------------------------------------------------
@@ -2406,35 +2450,57 @@
   }
 
   /**
-   * Read the stored appearance. The custom pair is kept even while a
-   * preset is selected, so switching back to Custom restores the author's
-   * own colors; an unknown mode or an unparseable color falls back to the
-   * dark default.
+   * An appearance from a stored value, each field validated before it is
+   * trusted. The custom pair is kept even while a preset is selected, so
+   * switching back to Custom restores the author's own colors; an unknown
+   * mode or an unparseable color falls back to the dark default. One rule
+   * for the first toolbar's key and for an extra toolbar's record (#96).
+   *
+   * @param {*} parsed A parsed stored value.
+   * @return {{mode: string, bg: string, fg: string}} The appearance.
+   */
+  function normalizeAppearance(parsed) {
+    var out = { mode: 'dark', bg: '#1e1e1e', fg: '#e0e0e0' };
+    if (parsed && typeof parsed === 'object') {
+      if (APPEARANCE_MODES.indexOf(parsed.mode) !== -1) {
+        out.mode = parsed.mode;
+      }
+      // The pair is kept even while a preset is active, so switching
+      // back to Custom restores the author's colors.
+      if (hexToRgb(parsed.bg)) {
+        out.bg = parsed.bg;
+      }
+      if (hexToRgb(parsed.fg)) {
+        out.fg = parsed.fg;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * @param {Object} appearance A loadAppearance()-shaped object.
+   * @return {Object} A new object with the same three fields, in the
+   *                  order normalizeAppearance() gives them, so two
+   *                  copies compare equal as JSON.
+   */
+  function copyAppearance(appearance) {
+    return { mode: appearance.mode, bg: appearance.bg, fg: appearance.fg };
+  }
+
+  /**
+   * Read the first toolbar's stored appearance (APPEARANCE_KEY). It is
+   * also the appearance of every extra toolbar that has none of its own.
    *
    * @return {{mode: string, bg: string, fg: string}} The appearance.
    */
   function loadAppearance() {
-    var out = { mode: 'dark', bg: '#1e1e1e', fg: '#e0e0e0' };
     try {
       var raw = readKey(APPEARANCE_KEY);
-      var parsed = raw ? JSON.parse(raw) : null;
-      if (parsed && typeof parsed === 'object') {
-        if (APPEARANCE_MODES.indexOf(parsed.mode) !== -1) {
-          out.mode = parsed.mode;
-        }
-        // The pair is kept even while a preset is active, so switching
-        // back to Custom restores the author's colors.
-        if (hexToRgb(parsed.bg)) {
-          out.bg = parsed.bg;
-        }
-        if (hexToRgb(parsed.fg)) {
-          out.fg = parsed.fg;
-        }
-      }
+      return normalizeAppearance(raw ? JSON.parse(raw) : null);
     } catch (e) {
       /* Unparseable — the dark default is correct. */
+      return normalizeAppearance(null);
     }
-    return out;
   }
 
   /**
@@ -2467,17 +2533,70 @@
   }
 
   /**
-   * Paint the stored appearance onto the region as inline custom
-   * properties. Dark (or an unresolvable custom pair) clears them, which
-   * hands every token back to the stylesheet defaults.
+   * A toolbar's appearance (#96): an extra toolbar's own, or the first
+   * toolbar's when it has none (or for the first toolbar itself).
    *
-   * @param {HTMLElement} [region] Defaults to every mounted region: the
-   *                               appearance is one for all toolbars
-   *                               (#95; colors for each toolbar are a
-   *                               different issue).
-   * @param {Object}      [tokens] Override token set — used by the color
-   *                               inputs to preview a pair live without
-   *                               persisting each intermediate value.
+   * @param {Object} tb The toolbar.
+   * @return {{mode: string, bg: string, fg: string}} A copy; a change to
+   *         it changes nothing until setToolbarAppearance().
+   */
+  function toolbarAppearance(tb) {
+    return copyAppearance(tb && tb !== mainToolbar && tb.appearance ? tb.appearance : loadAppearance());
+  }
+
+  /**
+   * Store a toolbar's appearance and paint it (#96). The first toolbar's
+   * goes in APPEARANCE_KEY, as before #96, and every extra toolbar with no
+   * colors of its own is painted with it too. An extra toolbar's goes in
+   * its record, and from then on it no longer follows the first toolbar.
+   *
+   * @param {Object} tb         The toolbar.
+   * @param {Object} appearance A loadAppearance()-shaped object.
+   * @return {void}
+   */
+  function setToolbarAppearance(tb, appearance) {
+    var clean = normalizeAppearance(appearance);
+    if (tb === mainToolbar) {
+      saveAppearance(clean);
+    } else {
+      tb.appearance = clean;
+      saveToolbars();
+    }
+    applyToolbarAppearance(tb);
+  }
+
+  /**
+   * Paint a toolbar's appearance onto its region, and onto the regions of
+   * the toolbars that show its colors: for the first toolbar, each extra
+   * toolbar with no colors of its own. A toolbar with no region (hidden,
+   * or not mounted yet) is skipped; its next build paints it.
+   *
+   * @param {Object} tb       The toolbar.
+   * @param {Object} [tokens] Override token set: the color inputs preview
+   *                          a pair live with it, without storing each
+   *                          value on the way.
+   * @return {void}
+   */
+  function applyToolbarAppearance(tb, tokens) {
+    T.toolbars.forEach(function (other) {
+      var follows = other === tb || (tb === mainToolbar && !other.appearance);
+      var region = follows ? document.getElementById(other.regionId) : null;
+      if (region) {
+        applyAppearance(region, tokens);
+      }
+    });
+  }
+
+  /**
+   * Paint an appearance onto a region as inline custom properties. Dark
+   * (or an unresolvable custom pair) clears them, which hands every token
+   * back to the stylesheet defaults.
+   *
+   * @param {HTMLElement} [region] Defaults to every mounted region, each
+   *                               with its own toolbar's colors.
+   * @param {Object}      [tokens] Override token set. Without it, the
+   *                               colors of the region's own toolbar
+   *                               (its data-toolbar value, #96).
    */
   function applyAppearance(region, tokens) {
     if (!region) {
@@ -2490,7 +2609,7 @@
       return;
     }
     if (tokens === undefined) {
-      tokens = appearanceTokens(loadAppearance());
+      tokens = appearanceTokens(toolbarAppearance(toolbarById(region.dataset.toolbar)));
     }
     APPEARANCE_TOKENS.forEach(function (name) {
       var prop = '--toolrail-' + name;
@@ -2584,6 +2703,9 @@
   T.loadAppearance = loadAppearance;
   T.saveAppearance = saveAppearance;
   T.applyAppearance = applyAppearance;
+  T.toolbarAppearance = toolbarAppearance;
+  T.setToolbarAppearance = setToolbarAppearance;
+  T.applyToolbarAppearance = applyToolbarAppearance;
 
   // This file ran to its end. The next file checks this number.
   T.loaded = 1;

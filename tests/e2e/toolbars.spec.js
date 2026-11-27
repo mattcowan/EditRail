@@ -3,8 +3,8 @@
  *
  * The first toolbar keeps its old keys, ids and behavior. Each extra
  * toolbar is a record in `toolrail-toolbars`, with its own name, pins,
- * position and wide mode, and its own region (`#toolrail-region-<id>`)
- * and rail (`#toolrail-rail-<id>`).
+ * position, wide mode and colors (#96), and its own region
+ * (`#toolrail-region-<id>`) and rail (`#toolrail-rail-<id>`).
  *
  * Runs on post-new.php and NEVER saves a post; helpers.js has the rule.
  */
@@ -20,6 +20,7 @@ const {
   getPref,
   liveText,
   blockNames,
+  setColor,
 } = require('./helpers');
 const { setRailScope, BASELINE } = require('./prefs-account');
 
@@ -1430,5 +1431,157 @@ test.describe('an armed click in an iframe-less editor (PR #126 review)', () => 
     } finally {
       await setMode('visual');
     }
+  });
+});
+
+/** The inline --toolrail-* tokens of each region, by region id. */
+async function regionTokens(page, ids) {
+  return page.evaluate((list) => list.map((id) => {
+    const style = document.getElementById(id).style;
+    const out = {};
+    for (let i = 0; i < style.length; i++) {
+      if (style[i].indexOf('--toolrail-') === 0) {
+        out[style[i]] = style.getPropertyValue(style[i]).trim();
+      }
+    }
+    return out;
+  }), ids);
+}
+
+/** The stored record of one extra toolbar, or null. */
+async function storedRecord(page, id) {
+  const raw = await getPref(page, 'toolrail-toolbars');
+  const list = raw ? JSON.parse(raw).toolbars : [];
+  return list.find((rec) => rec && rec.id === id) || null;
+}
+
+/** WCAG contrast ratio of two #rrggbb colors. */
+function contrast(a, b) {
+  const lum = (hex) => {
+    const [r, g, bl] = [1, 3, 5].map((i) => {
+      const v = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const l1 = lum(a);
+  const l2 = lum(b);
+  return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+}
+
+test.describe('colors for each toolbar (#96)', () => {
+  test('a record with no colors shows the first toolbar\'s, the old key applies to the first toolbar', async ({ page }) => {
+    // The appearance of a version before #96, and a toolbar record of
+    // #95 with no colors.
+    await seedByServer(page, {
+      'toolrail-appearance': JSON.stringify({ mode: 'gray', bg: '#1e1e1e', fg: '#e0e0e0' }),
+      'toolrail-toolbars': JSON.stringify({ version: 1, toolbars: [record('t1', 'Animation')] }),
+    });
+    const [main, t1] = await regionTokens(page, ['toolrail-region', 'toolrail-region-t1']);
+    expect(main['--toolrail-bg']).toBe('#dcdcde');
+    expect(t1).toEqual(main);
+    // Nothing is written for a toolbar that follows the first one.
+    expect((await storedRecord(page, 't1')).appearance).toBeUndefined();
+  });
+
+  test('the Appearance control changes only the chosen toolbar, and its legend names it', async ({ page }) => {
+    await openNewPost(page);
+    await seedByDispatch(page, [record('t1', 'Animation')]);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('#toolrail-settings-toolbar').selectOption('t1');
+    await expect(page.locator('.toolrail-settings-appearance legend')).toHaveText('Appearance: Animation');
+    await page.locator('input[data-appearance="light"]').check();
+
+    await expect.poll(async () => (await regionTokens(page, ['toolrail-region-t1']))[0]['--toolrail-bg']).toBe('#ffffff');
+    // The first toolbar stays dark: the stylesheet's defaults, no inline tokens.
+    expect((await regionTokens(page, ['toolrail-region']))[0]).toEqual({});
+    expect((await storedRecord(page, 't1')).appearance).toEqual({ mode: 'light', bg: '#1e1e1e', fg: '#e0e0e0' });
+    expect(await getPref(page, 'toolrail-appearance')).toBeFalsy();
+    await expect(page.locator('input[data-appearance="light"]')).toBeChecked();
+
+    // Back on the first toolbar, the control shows the first toolbar's
+    // colors, and a change there leaves the extra toolbar as it is.
+    await page.locator('#toolrail-settings-toolbar').selectOption('main');
+    await expect(page.locator('.toolrail-settings-appearance legend')).toHaveText('Appearance: Main toolbar');
+    await expect(page.locator('input[data-appearance="dark"]')).toBeChecked();
+    await page.locator('input[data-appearance="gray"]').check();
+    await expect.poll(async () => (await regionTokens(page, ['toolrail-region']))[0]['--toolrail-bg']).toBe('#dcdcde');
+    expect((await regionTokens(page, ['toolrail-region-t1']))[0]['--toolrail-bg']).toBe('#ffffff');
+  });
+
+  test('a new toolbar starts with the first toolbar\'s colors, as its own copy', async ({ page }) => {
+    await openNewPost(page);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('input[data-appearance="light"]').check();
+    await page.locator('.toolrail-settings-addtoolbar').click();
+    await expect(page.locator('#toolrail-region-t1')).toHaveCount(1);
+    const [main, t1] = await regionTokens(page, ['toolrail-region', 'toolrail-region-t1']);
+    expect(t1).toEqual(main);
+    expect((await storedRecord(page, 't1')).appearance.mode).toBe('light');
+
+    // A later change to the first toolbar does not change the new one.
+    await page.locator('#toolrail-settings-toolbar').selectOption('main');
+    await page.locator('input[data-appearance="gray"]').check();
+    await expect.poll(async () => (await regionTokens(page, ['toolrail-region']))[0]['--toolrail-bg']).toBe('#dcdcde');
+    expect((await regionTokens(page, ['toolrail-region-t1']))[0]['--toolrail-bg']).toBe('#ffffff');
+  });
+
+  test('custom colors on an extra toolbar keep the focus ring and pressed markers at 3:1', async ({ page }) => {
+    await openNewPost(page);
+    await seedByDispatch(page, [record('t1', 'Animation')]);
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await page.locator('#toolrail-settings-toolbar').selectOption('t1');
+    await page.locator('input[data-appearance="custom"]').check();
+    // A low-contrast pair: the ring and the pressed edge must still clear 3:1.
+    await setColor(page, 'toolrail-settings-appearance-bg', '#777777');
+    await setColor(page, 'toolrail-settings-appearance-fg', '#999999');
+    await expect(page.locator('#toolrail-settings-appearance-status')).toContainText('below the 4.5:1 minimum');
+
+    const [main, t1] = await regionTokens(page, ['toolrail-region', 'toolrail-region-t1']);
+    expect(t1['--toolrail-bg']).toBe('#777777');
+    expect(contrast(t1['--toolrail-focus-ring'], t1['--toolrail-bg'])).toBeGreaterThanOrEqual(3);
+    expect(contrast(t1['--toolrail-pressed-edge'], t1['--toolrail-bg'])).toBeGreaterThanOrEqual(3);
+    expect(main).toEqual({});
+    expect((await storedRecord(page, 't1')).appearance).toEqual({ mode: 'custom', bg: '#777777', fg: '#999999' });
+  });
+
+  test('a stored color change from outside repaints the toolbar in place, and a reload keeps it', async ({ page }) => {
+    await openNewPost(page);
+    await seedByDispatch(page, [record('t1', 'Animation')]);
+    await expect(page.locator('#toolrail-region-t1')).toHaveCount(1);
+    const before = await page.locator('#toolrail-region-t1').elementHandle();
+    await seedByDispatch(page, [record('t1', 'Animation', { appearance: { mode: 'gray', bg: '#000000', fg: '#ffffff' } })]);
+    await expect.poll(async () => (await regionTokens(page, ['toolrail-region-t1']))[0]['--toolrail-bg']).toBe('#dcdcde');
+    // The same node: colors alone do not rebuild the region.
+    expect(await before.evaluate((el) => el.isConnected)).toBe(true);
+    expect((await regionTokens(page, ['toolrail-region']))[0]).toEqual({});
+
+    await waitForSavedPref(page, 'toolrail-toolbars', (v) => !!v && v.indexOf('gray') !== -1);
+    await page.reload();
+    await expect(page.locator('#toolrail-region-t1')).toHaveCount(1, { timeout: 20000 });
+    expect((await regionTokens(page, ['toolrail-region-t1']))[0]['--toolrail-bg']).toBe('#dcdcde');
+  });
+
+  test('stored colors this version cannot read are kept through a save', async ({ page }) => {
+    await openNewPost(page);
+    // A mode from a later version, and a value that is not a record.
+    const later = { mode: 'high-contrast', bg: '#000000', fg: '#ffffff' };
+    await seedByDispatch(page, [
+      record('t1', 'Animation', { appearance: later }),
+      record('t2', 'Layout', { appearance: [] }),
+    ]);
+    await expect(page.locator('#toolrail-region-t2')).toHaveCount(1);
+
+    // A pin on each toolbar makes the rail write the toolbar list.
+    await page.evaluate(() => {
+      window.toolrail.pinBlock('core/heading', 't1');
+      window.toolrail.pinBlock('core/heading', 't2');
+    });
+    await expect.poll(async () => (await storedRecord(page, 't2')).slots).toContain('core/heading');
+    await expect.poll(async () => (await storedRecord(page, 't1')).slots).toContain('core/heading');
+
+    // Neither value became this version's dark default.
+    expect((await storedRecord(page, 't1')).appearance).toEqual(later);
+    expect((await storedRecord(page, 't2')).appearance).toEqual([]);
   });
 });

@@ -73,9 +73,9 @@
   var hexToRgb = T.hexToRgb;
   var contrastRatio = T.contrastRatio;
   var deriveAppearanceTokens = T.deriveAppearanceTokens;
-  var loadAppearance = T.loadAppearance;
-  var saveAppearance = T.saveAppearance;
-  var applyAppearance = T.applyAppearance;
+  var toolbarAppearance = T.toolbarAppearance;
+  var setToolbarAppearance = T.setToolbarAppearance;
+  var applyToolbarAppearance = T.applyToolbarAppearance;
 
   // From editor-rail-registry.js.
   var attrValue = T.attrValue;
@@ -888,8 +888,17 @@
    * color inputs enable only under Custom); the color inputs apply live
    * on `input` and persist + report on `change` WITHOUT a rebuild —
    * refreshing mid-interaction would dismiss the native color picker.
+   *
+   * It acts on the chosen toolbar (#96), the same as the position and
+   * tool names controls. With more than one toolbar, the legend names
+   * that toolbar, so a screen reader says which toolbar it changes.
+   *
+   * @param {Function} scoped Adds the chosen toolbar's name to a heading
+   *                          when there is more than one toolbar.
+   * @return {HTMLElement} The fieldset.
    */
-  function buildAppearanceControl() {
+  function buildAppearanceControl(scoped) {
+    var tb = settingsToolbar();
     // Its OWN class, not .toolrail-settings-position — the dock radios
     // are counted and queried through that class, so sharing it would
     // sweep these radios into the position picker's selectors.
@@ -898,10 +907,10 @@
 
     var legend = document.createElement('legend');
     legend.className = 'toolrail-settings-label';
-    legend.textContent = __('Appearance', 'editrail');
+    legend.textContent = scoped(__('Appearance', 'editrail'));
     fieldset.appendChild(legend);
 
-    var current = loadAppearance();
+    var current = toolbarAppearance(tb);
 
     APPEARANCE_MODES.forEach(function (mode) {
       var row = settingsRow('label', 'toolrail-settings-positionrow');
@@ -915,10 +924,9 @@
         if (!input.checked) {
           return;
         }
-        var appearance = loadAppearance();
+        var appearance = toolbarAppearance(tb);
         appearance.mode = mode;
-        saveAppearance(appearance);
-        applyAppearance();
+        setToolbarAppearance(tb, appearance);
         if (mode === 'custom') {
           appearanceStatus = pairContrastMessage(appearance);
         }
@@ -970,12 +978,11 @@
       // Live preview while the native picker is open — not persisted;
       // the change event persists the settled pair.
       inputs[key].addEventListener('input', function () {
-        applyAppearance(null, deriveAppearanceTokens(inputs.bg.value, inputs.fg.value));
+        applyToolbarAppearance(tb, deriveAppearanceTokens(inputs.bg.value, inputs.fg.value));
       });
       inputs[key].addEventListener('change', function () {
         var appearance = { mode: 'custom', bg: inputs.bg.value, fg: inputs.fg.value };
-        saveAppearance(appearance);
-        applyAppearance();
+        setToolbarAppearance(tb, appearance);
         // Update the status text in place (a dialog rebuild here would
         // close the native picker and drop focus); speak() owns the
         // announcement.
@@ -2191,7 +2198,7 @@
     node.appendChild(settingsDivider());
     node.appendChild(buildWideControl(scoped));
     node.appendChild(settingsDivider());
-    node.appendChild(buildAppearanceControl());
+    node.appendChild(buildAppearanceControl(scoped));
     node.appendChild(settingsDivider());
     node.appendChild(buildSidebarWidthControl());
 
@@ -2772,7 +2779,7 @@
           __('Drag the toolbar by its grip and release near an edge to dock it there, or let go anywhere to float it over the editor.', 'editrail'),
           __('The keyboard path: pick a position under "Toolbar position" in Toolbar settings.', 'editrail'),
           // More than one toolbar (#95).
-          __('To add a toolbar, use "Add a toolbar" in Toolbar settings. Each toolbar has its own name, pinned tools and position. To change a toolbar, choose it under "Toolbar" at the top of Toolbar settings. The Toolbars button on the main toolbar shows or hides each added toolbar.', 'editrail')
+          __('To add a toolbar, use "Add a toolbar" in Toolbar settings. Each toolbar has its own name, pinned tools, position and colors. A new toolbar starts with the colors of the main toolbar. To change a toolbar, choose it under "Toolbar" at the top of Toolbar settings. The Toolbars button on the main toolbar shows or hides each added toolbar.', 'editrail')
         ]
       },
       {
