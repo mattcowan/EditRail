@@ -751,6 +751,84 @@ test.describe('section overview (R6)', () => {
     await expect.poll(async () => ovAnnouncement(page)).toContain('1 block selected.');
   });
 
+  test('Ctrl+Enter toggles the focused box the same as Ctrl+Space, for a system that takes Ctrl+Space (issue #119)', async ({ page }) => {
+    await openNewPost(page);
+    await seedOverviewParagraphs(page);
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    const ids = await page.evaluate(() =>
+      window.wp.data.select('core/block-editor').getBlockOrder('')
+    );
+    const focusedBox = () => page.evaluate(() => {
+      const el = document.activeElement;
+      const box = el && el.closest ? el.closest('.toolrail-ov-box') : null;
+      return {
+        action: el && el.dataset ? el.dataset.ovAction : null,
+        box: box ? box.dataset.clientid : null,
+      };
+    });
+
+    // Build a selection with a gap by keyboard alone: Ctrl+Enter on the
+    // first box, Tab to the third, Ctrl+Enter again.
+    await overviewBoxButton(page, ids[0], 'pick').focus();
+    await page.keyboard.press('Control+Enter');
+    await expect(ovSelectedBoxes(page)).toHaveCount(1);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('1 block selected.');
+    // Focus stays on the same pick button: the keydown is prevented, so
+    // the button's own Enter click (the plain pick) does not run.
+    expect(await focusedBox()).toEqual({ action: 'pick', box: ids[0] });
+
+    await overviewBoxButton(page, ids[2], 'pick').focus();
+    await page.keyboard.press('Control+Enter');
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('2 blocks selected.');
+    expect(await focusedBox()).toEqual({ action: 'pick', box: ids[2] });
+    const selected = await ovSelectedBoxes(page).evaluateAll((boxes) =>
+      boxes.map((b) => b.dataset.clientid)
+    );
+    expect(selected).toEqual([ids[0], ids[2]]);
+
+    // The same key removes a selected box.
+    await page.keyboard.press('Control+Enter');
+    await expect(ovSelectedBoxes(page)).toHaveCount(1);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('1 block selected.');
+    expect(await focusedBox()).toEqual({ action: 'pick', box: ids[2] });
+
+    // Ctrl+Space still works beside it.
+    await page.keyboard.press('Control+ ');
+    await expect(ovSelectedBoxes(page)).toHaveCount(2);
+    await expect.poll(async () => ovAnnouncement(page)).toContain('2 blocks selected.');
+
+    const selectedIds = () => ovSelectedBoxes(page).evaluateAll((boxes) =>
+      boxes.map((b) => b.dataset.clientid)
+    );
+
+    // A held key is one toggle. Playwright sends repeat: true on the
+    // second and third keydown of a key that is already down.
+    await page.keyboard.down('Control');
+    await page.keyboard.down('Enter');
+    await page.keyboard.down('Enter');
+    await page.keyboard.down('Enter');
+    await page.keyboard.up('Enter');
+    await page.keyboard.up('Control');
+    await expect.poll(selectedIds).toEqual([ids[0]]);
+    expect(await focusedBox()).toEqual({ action: 'pick', box: ids[2] });
+
+    // Ctrl+Shift+Space toggles one box, as it did before #119: a range
+    // from the anchor would also take the boxes between.
+    await overviewBoxButton(page, ids[4], 'pick').focus();
+    await page.keyboard.press('Control+Shift+ ');
+    await expect.poll(selectedIds).toEqual([ids[0], ids[4]]);
+    expect(await focusedBox()).toEqual({ action: 'pick', box: ids[4] });
+
+    // Ctrl+Shift+Enter toggles one box too. Before the PR #137 review it
+    // did nothing: Chromium and Firefox fire no click for a modified
+    // Enter.
+    await overviewBoxButton(page, ids[2], 'pick').focus();
+    await page.keyboard.press('Control+Shift+Enter');
+    await expect.poll(selectedIds).toEqual([ids[0], ids[2], ids[4]]);
+    expect(await focusedBox()).toEqual({ action: 'pick', box: ids[2] });
+  });
+
   test('Escape exits the overview in one press, even with a selection open (owner decision 2026-09-01)', async ({ page }) => {
     await openNewPost(page);
     await seedOverviewParagraphs(page);
