@@ -2769,7 +2769,7 @@
         title: __('Section overview', 'editrail'),
         body: [
           __('The Section overview tool zooms the canvas out and outlines every top-level block. Click an outline to show its reorder controls — arrows to move it, "Reorder inside" to step into a section — or simply drag an outline to a new spot. Zoom with the +/− buttons and pan long documents with the mouse wheel.', 'editrail'),
-          __('Select several outlines at once: Shift+click for a range, Ctrl+click (Cmd on Mac) to add or remove one, Alt+click to remove one, or drag a rectangle from empty space. Shift+Arrow extends the selection from the focused outline and Ctrl+Space toggles it. The arrows or a drag then move the whole group; a locked block shows a padlock and stays where it is.', 'editrail'),
+          __('Select several outlines at once: Shift+click for a range, Ctrl+click (Cmd on Mac) to add or remove one, Alt+click to remove one, or drag a rectangle from empty space. Shift+Arrow extends the selection from the focused outline. Ctrl+Space or Ctrl+Enter (Cmd on Mac) adds the focused outline to the selection or removes it; use Ctrl+Enter if the operating system uses Ctrl+Space. The arrows or a drag then move the whole group; a locked block shows a padlock and stays where it is.', 'editrail'),
           __('Escape closes the overview, the same as the Done button. While you drag an outline or draw a selection rectangle, Escape cancels that first and keeps the overview open. To leave a level without closing, use "Up one level" or the breadcrumb. Closing centers and selects the block you last picked, moved or stepped into; if you touched nothing, it returns you to where you were scrolled.', 'editrail')
         ]
       },

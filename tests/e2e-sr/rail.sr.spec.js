@@ -350,6 +350,55 @@ test.describe('EditRail with NVDA', () => {
     expect(h.spoke(spoken, /./)).toBe(true);
   });
 
+  test('section overview (#119): Ctrl+Enter adds and removes a box, and each change is announced', async ({ page, nvda }) => {
+    await open(page);
+    await page.evaluate(() => wp.data.dispatch('core/block-editor').resetBlocks(
+      ['P-A', 'P-B', 'P-C', 'P-D'].map((content) => wp.blocks.createBlock('core/paragraph', { content }))
+    ));
+    await page.waitForTimeout(800);
+    await page.locator(`${RAIL} [data-tool="overview"]`).click();
+    await page.waitForSelector(`${OVERVIEW} .toolrail-ov-box`, { timeout: 8000 });
+    const focusTitles = await h.focusBrowser(page, nvda);
+    const log = {};
+    const picks = page.locator(`${OVERVIEW} .toolrail-ov-box [data-ov-action="pick"]`);
+    const selectedCount = () => page.locator(`${OVERVIEW} .toolrail-ov-box.is-selected`).count();
+
+    await picks.nth(0).focus();
+    await h.delay(300);
+    log.focusFirst = await reportFocus(nvda);
+    // Focus mode, so Ctrl+Enter reaches the button and not NVDA's caret.
+    log.modeToggle = await h.ensureFocusMode(nvda, async () => {
+      await nvda.press('Control+Enter'); await h.delay(600);
+      return (await selectedCount()) > 0;
+    });
+    if (!(await selectedCount())) {
+      await picks.nth(0).focus(); await h.delay(300);
+      log.firstToggle = await press(nvda, 'Control+Enter', 1200);
+    } else {
+      log.firstToggle = await nvda.lastSpokenPhrase();
+    }
+    log.countAfterFirst = await selectedCount();
+    log.focusAfterFirst = await h.describeFocus(page);
+
+    // A box that does not touch the first one.
+    await picks.nth(2).focus();
+    await h.delay(300);
+    log.secondToggle = await press(nvda, 'Control+Enter', 1200);
+    log.countAfterSecond = await selectedCount();
+    log.removeToggle = await press(nvda, 'Control+Enter', 1200);
+    log.countAfterRemove = await selectedCount();
+    log.liveRegion = await page.evaluate(() => (document.getElementById('a11y-speak-polite') || {}).textContent || '');
+    const spoken = await h.saveSpeechLog(nvda, 'overview-ctrl-enter', { focusTitles, ...log });
+
+    expect(log.countAfterFirst, 'Ctrl+Enter selects the first box').toBe(1);
+    expect(log.countAfterSecond, 'Ctrl+Enter adds a box that does not touch it').toBe(2);
+    expect(log.countAfterRemove, 'Ctrl+Enter on a selected box removes it').toBe(1);
+    expect(h.spoke(spoken, /2 blocks selected/i), 'the second toggle is heard').toBe(true);
+    // The removal's own phrase: the first toggle also says "1 block
+    // selected", so a match anywhere in the log would pass on silence.
+    expect(log.removeToggle, 'the removal is heard').toMatch(/1 block selected/i);
+  });
+
   test('help panel: open, read, close', async ({ page, nvda }) => {
     await open(page);
     const focusTitles = await h.focusBrowser(page, nvda);
