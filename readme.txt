@@ -82,6 +82,7 @@ The plugin folder is now editrail. After a zip upgrade, delete the old toolrail 
 * When you drag a block from the content onto the toolbar, the cursor goes to the name field of "Add to toolbar". When you drag the settings sidebar edge, Escape puts the edge back. Both also work when the cursor was in the content first.
 * On a site in another language, the toolbar, the Section overview, the dialogs and the screen reader messages can use the translations of a WordPress.org language pack. Before, they stayed in English.
 * When you press Escape while you drag the toolbar, or click its grip without a move, the toolbar keeps the place you saved. Before, if the window was narrow, these saved the narrow-window place, and the toolbar did not go back when the window was wide again.
+* Section overview: when you move the toolbar to a different edge while the overview is open, the overview stays on the content. Before, it could cover a strip next to the content and leave a strip of the content uncovered.
 
 = 1.0.5 =
 * Optional, off by default: make the editor's settings sidebar wider. Turn on "Let me make the settings sidebar wider" in Toolbar settings. Then type a width there, use the Narrower and Wider buttons, drag the sidebar's inner edge, or Tab to the edge and use the Left and Right arrow keys. Screen readers announce the width. A double-click on the edge, or "Reset to default width" in Toolbar settings, returns it to 280 pixels. The width is saved to your user account, and the canvas and the toolbar take the space that is left.

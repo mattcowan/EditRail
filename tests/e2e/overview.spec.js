@@ -2665,3 +2665,108 @@ test.describe('NVDA findings 2026-09-11 (1.0.2)', () => {
     await expect(overlay).toHaveCount(0);
   });
 });
+
+test.describe('overview follows a dock change (#118)', () => {
+  /** The overlay's rect against the content region's rect, and the
+      first box's offset inside the overlay. The overlay starts below any
+      editor chrome above the canvas, so the top is not compared; the
+      left, the right and the bottom are. */
+  function overviewAlignment(page) {
+    return page.evaluate(() => {
+      const overlay = document.getElementById('toolrail-overview');
+      const content = document.querySelector('.interface-interface-skeleton__content');
+      const box = overlay && overlay.querySelector('.toolrail-ov-box');
+      if (!overlay || !content || !box) {
+        return null;
+      }
+      const o = overlay.getBoundingClientRect();
+      const c = content.getBoundingClientRect();
+      const b = box.getBoundingClientRect();
+      return {
+        left: Math.round(o.left - c.left),
+        right: Math.round(o.right - c.right),
+        bottom: Math.round(o.bottom - c.bottom),
+        boxLeft: Math.round(b.left - o.left),
+        dock: window.toolrail.getDock(),
+      };
+    });
+  }
+
+  /** Wait until the overlay lines up with the canvas region at dock. */
+  async function expectAligned(page, dock, boxLeft) {
+    await expect.poll(() => overviewAlignment(page)).toEqual({
+      left: 0,
+      right: 0,
+      bottom: 0,
+      boxLeft,
+      dock,
+    });
+  }
+
+  test('the overlay and its boxes stay on the canvas region after every dock change', async ({ page }) => {
+    await openNewPost(page);
+    await page.evaluate(() => window.toolrail.setDock('left'));
+    await seedOverviewBlocks(page);
+
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    // The control: the overview opens aligned. The box offset is read
+    // here and must not change, because a side dock keeps the canvas
+    // width.
+    await expect.poll(async () => (await overviewAlignment(page)) !== null).toBe(true);
+    const start = await overviewAlignment(page);
+    expect(start).toMatchObject({ left: 0, right: 0, bottom: 0, dock: 'left' });
+
+    // The extension API, left to right. Before #118 the overlay stayed
+    // 53 px to the right of the canvas region here.
+    await page.evaluate(() => window.toolrail.setDock('right'));
+    await expectAligned(page, 'right', start.boxLeft);
+
+    // The Toolbar settings radio group, right to left. The settings
+    // button stays usable while the overview is open.
+    await page.locator('#toolrail-rail [data-tool="settings"]').click();
+    await expect(page.locator('.toolrail-settings')).toBeVisible();
+    await page.locator('.toolrail-settings-position input[data-dock="left"]').check();
+    await expectAligned(page, 'left', start.boxLeft);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.toolrail-settings')).toHaveCount(0);
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+
+    // A drag of the grip to the right edge. The drop goes through
+    // setDock, the same as the two paths above.
+    const dropped = await page.evaluate(() => {
+      const grip = document.querySelector('.toolrail-grip');
+      const g = grip.getBoundingClientRect();
+      const body = document.querySelector('.interface-interface-skeleton__body').getBoundingClientRect();
+      const x = Math.round(body.right) - 10;
+      const y = Math.round(body.top + body.height / 2);
+      const fire = (el, type, cx, cy) => el.dispatchEvent(
+        new MouseEvent(type, { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0 })
+      );
+      fire(grip, 'mousedown', g.left + 6, g.top + 6);
+      fire(document, 'mousemove', 400, 400);
+      fire(document, 'mousemove', x, y);
+      fire(document, 'mouseup', x, y);
+      return window.toolrail.getDock();
+    });
+    expect(dropped).toBe('right');
+    await expectAligned(page, 'right', start.boxLeft);
+
+    // A top and a bottom dock change the canvas height, not its width.
+    for (const dock of ['top', 'bottom']) {
+      await page.evaluate((d) => window.toolrail.setDock(d), dock);
+      await expect.poll(() => overviewAlignment(page)).toMatchObject({ left: 0, right: 0, bottom: 0, dock });
+    }
+
+    // The overview still opens aligned after the dock changes. "Done"
+    // closes it: focus is on the rail's settings button since the
+    // settings dialog closed, and Escape exits only from inside the
+    // overlay (onOverviewKeydown).
+    await page.locator('#toolrail-overview [data-ov-action="close"]').click();
+    await expect(page.locator('#toolrail-overview')).toHaveCount(0);
+    await page.evaluate(() => window.toolrail.setDock('left'));
+    await page.locator('#toolrail-rail [data-tool="overview"]').click();
+    await expect(page.locator('#toolrail-overview')).toBeVisible();
+    await expectAligned(page, 'left', start.boxLeft);
+  });
+});
