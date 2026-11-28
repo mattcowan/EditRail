@@ -525,15 +525,20 @@ test.describe('EditRail with NVDA', () => {
     log.reportAtOpen = await reportFocus(nvda);
     // Focus mode, so ArrowDown changes the select and does not move
     // NVDA's browse cursor.
+    // The probe keeps its own speech: when its ArrowDown is the one that
+    // changes the select, that speech is what the change sounded like.
+    let probeSpeech = '';
     log.modeToggle = await h.ensureFocusMode(nvda, async () => {
+      const before = (await nvda.spokenPhraseLog()).length;
       await nvda.press('ArrowDown'); await h.delay(600);
+      probeSpeech = await spokenSince(nvda, before);
       return (await page.locator(SELECT).inputValue()) === 't1';
     });
     if ((await page.locator(SELECT).inputValue()) !== 't1') {
       await page.locator(SELECT).focus(); await h.delay(300);
       log.arrowDown = await press(nvda, 'ArrowDown', 900);
     } else {
-      log.arrowDown = await nvda.lastSpokenPhrase();
+      log.arrowDown = probeSpeech;
     }
     log.valueAfterArrow = await page.locator(SELECT).inputValue();
     log.tab = await press(nvda, 'Tab', 900);
@@ -547,7 +552,9 @@ test.describe('EditRail with NVDA', () => {
     expect(log.focusAtOpen && log.focusAtOpen.id, 'focus starts on the Toolbar select').toBe('toolrail-adddialog-toolbar');
     expect(log.reportAtOpen, 'the select is heard with its label and value').toMatch(/Toolbar.*Main toolbar|Main toolbar.*Toolbar/i);
     expect(log.valueAfterArrow).toBe('t1');
-    expect(h.spoke(spoken, /Animation/), 'the new choice is heard').toBe(true);
+    // Only the ArrowDown's own speech: the full log also holds the pin
+    // message, which names "Animation" even when the change was silent.
+    expect(log.arrowDown, 'the new choice is heard when the select changes').toMatch(/Animation/);
     expect(log.focusAfterTab && (log.focusAfterTab.className || log.focusAfterTab.text || ''), 'Tab goes to the pin button').toMatch(/pintype|Pin the Paragraph/i);
     expect(log.dialogOpenAfterPin).toBe(0);
     expect(log.pinnedOnT1, 'the pin goes to the chosen toolbar').toBe(1);
