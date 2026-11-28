@@ -65,6 +65,8 @@
   var attrValue = T.attrValue;
   var toolSelector = T.toolSelector;
   var isPinnedOn = T.isPinnedOn;
+  var toolbarById = T.toolbarById;
+  var toolbarLabel = T.toolbarLabel;
   var pinBlock = T.pinBlock;
   var isSetsButtonShown = T.isSetsButtonShown;
   var setsMenuTool = T.setsMenuTool;
@@ -1613,6 +1615,10 @@
     return document.querySelector('.toolrail-adddialog');
   }
 
+  // The open "Add to toolbar" dialog's toolbars-changed listener, or null
+  // (#128). closeAddDialog() removes it.
+  var addDialogToolbarsListener = null;
+
   /**
    * @param {string} refocusClientId Canvas block to hand focus back to
    *                                 (the keyboard path came from its
@@ -1628,6 +1634,10 @@
     document.removeEventListener('mousedown', onAddDialogMousedown, true);
     document.removeEventListener('keydown', onAddDialogKeydown, true);
     document.removeEventListener('focusin', onAddDialogFocusin, true);
+    if (addDialogToolbarsListener) {
+      window.removeEventListener('toolrail:toolbars-changed', addDialogToolbarsListener);
+      addDialogToolbarsListener = null;
+    }
     if (refocusClientId) {
       var doc = canvasDoc();
       var el = doc ? doc.querySelector('[data-block="' + attrValue(refocusClientId) + '"]') : null;
@@ -1783,9 +1793,26 @@
   }
 
   /**
+   * The toolbars an author can pin to from the dialog: the first toolbar
+   * and each SHOWN extra toolbar, in order. A hidden toolbar has no
+   * region, so it gets no pin from here (#128).
+   *
+   * @return {Object[]} The toolbars.
+   */
+  function pinnableToolbars() {
+    return T.toolbars.filter(function (tb) {
+      return !tb.hidden;
+    });
+  }
+
+  /**
    * The pins go to the toolbar whose region the block was dropped on, and
-   * to the first toolbar from the block menu. The dialog hangs in the
-   * first toolbar's region either way, like the other two dialogs (#95).
+   * to the first toolbar from the block menu. While more than one toolbar
+   * is shown, a "Toolbar" select at the top of the dialog changes that
+   * choice, so the block menu has a keyboard path to an extra toolbar
+   * (#128). With one toolbar shown, the dialog is as it was. The dialog
+   * hangs in the first toolbar's region either way, like the other two
+   * dialogs (#95).
    *
    * @param {string[]}    clientIds The canvas block(s) to add.
    * @param {HTMLElement} wrapper   The rail region the block was dropped
@@ -1793,12 +1820,16 @@
    * @return {boolean} Whether the dialog opened.
    */
   function openAddToToolbar(clientIds, wrapper) {
+    var choices = pinnableToolbars();
     var target = mainToolbar;
-    T.toolbars.forEach(function (tb) {
+    choices.forEach(function (tb) {
       if (wrapper && wrapper.id === tb.regionId) {
         target = tb;
       }
     });
+    // Only while more than one toolbar is shown. With one, the dialog and
+    // its messages are the same as before #128.
+    var choose = choices.length > 1;
     wrapper = document.getElementById(mainToolbar.regionId) || wrapper;
     var sel = wp.data.select('core/block-editor');
     var ids = Array.isArray(clientIds) ? clientIds.filter(function (id) { return !!sel.getBlock(id); }) : [];
@@ -1835,12 +1866,82 @@
     var status = settingsRow('p', 'toolrail-settings-status');
     status.id = 'toolrail-adddialog-status';
 
+    /**
+     * The toolbar to pin to, checked again at the moment of the pin: a
+     * stored change can delete or hide the chosen toolbar while the
+     * dialog is open, and a pin on a deleted object is lost in silence.
+     * Then the pin goes to the first toolbar, and the message says which
+     * (PR #126 review, CodeRabbit).
+     *
+     * @return {{tb: Object, named: boolean}} The toolbar, and whether the
+     *         message names it even when it is the first toolbar.
+     */
+    function pinTarget() {
+      if (T.toolbars.indexOf(target) === -1 || target.hidden) {
+        return { tb: mainToolbar, named: true };
+      }
+      return { tb: target, named: choose };
+    }
+
+    /**
+     * Fill the toolbar select: one option for each toolbar in `list`, with
+     * the current target selected.
+     *
+     * @param {Object[]} list The toolbars to offer (pinnableToolbars()).
+     * @return {void}
+     */
+    function fillToolbarOptions(list) {
+      toolbarSelect.textContent = '';
+      list.forEach(function (tb) {
+        var option = document.createElement('option');
+        option.value = tb.id;
+        option.textContent = toolbarLabel(tb);
+        option.selected = tb === target;
+        toolbarSelect.appendChild(option);
+      });
+    }
+
+    // --- Which toolbar (more than one toolbar shown only, #128). It
+    // comes first, so reading order gives the scope before the actions,
+    // the same as the Toolbar section of Toolbar settings. ---
+    var toolbarSelect = null;
+    if (choose) {
+      var tbLabel = settingsRow('label', 'toolrail-settings-label');
+      tbLabel.setAttribute('for', 'toolrail-adddialog-toolbar');
+      tbLabel.textContent = __('Toolbar', 'editrail');
+      node.appendChild(tbLabel);
+      toolbarSelect = document.createElement('select');
+      toolbarSelect.id = 'toolrail-adddialog-toolbar';
+      toolbarSelect.className = 'toolrail-settings-search';
+      fillToolbarOptions(choices);
+      toolbarSelect.addEventListener('change', function () {
+        // An option for a toolbar deleted since the dialog opened finds
+        // nothing; pinTarget() then sends the pin to the first toolbar.
+        target = toolbarById(toolbarSelect.value) || mainToolbar;
+        buildTypeSection();
+        toolbarSignature = choiceSignature(pinnableToolbars());
+      });
+      node.appendChild(toolbarSelect);
+    }
+
     // --- The block type (one block only; several blocks are a pattern
-    // or nothing) ---
-    if (single) {
+    // or nothing). Built again when the toolbar choice changes, because
+    // "already pinned" is true for one toolbar and not for another. ---
+    var typeBox = settingsRow('div', 'toolrail-adddialog-type');
+
+    /**
+     * Fill the block type section for the chosen toolbar.
+     *
+     * @return {void}
+     */
+    function buildTypeSection() {
+      typeBox.textContent = '';
+      if (!single) {
+        return;
+      }
       var typeHead = settingsRow('h3', 'toolrail-settings-subtitle');
       typeHead.textContent = __('Block type', 'editrail');
-      node.appendChild(typeHead);
+      typeBox.appendChild(typeHead);
       var typeNote = settingsRow('p', 'toolrail-settings-empty');
       if (isPinnedOn(target, single.name)) {
         typeNote.textContent = sprintf(
@@ -1848,63 +1949,119 @@
           __('The %s block type is already pinned.', 'editrail'),
           singleTitle
         );
-        node.appendChild(typeNote);
-      } else {
-        typeNote.textContent = __('A plain quick-insert tool for this block type, without this block\'s settings.', 'editrail');
-        node.appendChild(typeNote);
-        var pinRow = settingsRow('div', 'toolrail-settings-helprow');
-        pinRow.appendChild(settingsButton(
-          sprintf(
-            /* translators: %s: block title. */
-            __('Pin the %s block type', 'editrail'),
-            singleTitle
-          ),
-          function () {
-            // A stored change can delete the toolbar while the dialog is
-            // open; a pin on a deleted object is lost in silence. Pin to
-            // the first toolbar then, and the message says which, the
-            // same rule as the pattern save below (PR #126 review,
-            // CodeRabbit).
-            if (T.toolbars.indexOf(target) === -1) {
-              target = mainToolbar;
-            }
-            // The toolbar it falls back to can have the pin already, and
-            // a stored change can add it while the dialog is open: then
-            // nothing was pinned, and the message says so (PR #126
-            // review, CodeRabbit).
-            if (!pinBlock(target, single.name)) {
-              speak(target === mainToolbar
-                ? sprintf(
-                  /* translators: %s: block title. */
-                  __('%s is already pinned on the main toolbar.', 'editrail'),
-                  singleTitle
-                )
-                : sprintf(
-                  /* translators: 1: block title, 2: the toolbar's name. */
-                  __('%1$s is already pinned on the %2$s toolbar.', 'editrail'),
-                  singleTitle, target.name
-                ));
-              closeAddDialog(ids[0]);
-              return;
-            }
-            speak(target === mainToolbar
+        typeBox.appendChild(typeNote);
+        return;
+      }
+      typeNote.textContent = __('A plain quick-insert tool for this block type, without this block\'s settings.', 'editrail');
+      typeBox.appendChild(typeNote);
+      var pinRow = settingsRow('div', 'toolrail-settings-helprow');
+      pinRow.appendChild(settingsButton(
+        sprintf(
+          /* translators: %s: block title. */
+          __('Pin the %s block type', 'editrail'),
+          singleTitle
+        ),
+        function () {
+          var to = pinTarget();
+          // The toolbar it falls back to can have the pin already, and
+          // a stored change can add it while the dialog is open: then
+          // nothing was pinned, and the message says so (PR #126
+          // review, CodeRabbit).
+          if (!pinBlock(to.tb, single.name)) {
+            speak(to.tb === mainToolbar
               ? sprintf(
                 /* translators: %s: block title. */
-                __('%s pinned to the toolbar.', 'editrail'),
+                __('%s is already pinned on the main toolbar.', 'editrail'),
                 singleTitle
               )
               : sprintf(
-                /* translators: 1: block or pattern title, 2: the toolbar's name. */
-                __('%1$s pinned to the %2$s toolbar.', 'editrail'),
-                singleTitle, target.name
+                /* translators: 1: block title, 2: the toolbar's name. */
+                __('%1$s is already pinned on the %2$s toolbar.', 'editrail'),
+                singleTitle, to.tb.name
               ));
             closeAddDialog(ids[0]);
-          },
-          'toolrail-adddialog-pintype'
-        ));
-        node.appendChild(pinRow);
+            return;
+          }
+          var msg;
+          if (to.tb !== mainToolbar) {
+            msg = sprintf(
+              /* translators: 1: block or pattern title, 2: the toolbar's name. */
+              __('%1$s pinned to the %2$s toolbar.', 'editrail'),
+              singleTitle, to.tb.name
+            );
+          } else if (to.named) {
+            msg = sprintf(
+              /* translators: %s: block title. */
+              __('%s pinned to the main toolbar.', 'editrail'),
+              singleTitle
+            );
+          } else {
+            msg = sprintf(
+              /* translators: %s: block title. */
+              __('%s pinned to the toolbar.', 'editrail'),
+              singleTitle
+            );
+          }
+          speak(msg);
+          closeAddDialog(ids[0]);
+        },
+        'toolrail-adddialog-pintype'
+      ));
+      typeBox.appendChild(pinRow);
+    }
+    buildTypeSection();
+    node.appendChild(typeBox);
+
+    /**
+     * Keep the toolbar choice true while the dialog is open (#128 review).
+     * A stored change from another tab can add, rename, hide or delete a
+     * toolbar, and syncToolbars() then fires toolrail:toolbars-changed.
+     * The options are built again from pinnableToolbars(). A chosen
+     * toolbar that is no longer offered gives way to the first toolbar.
+     * The block type section is built again only when what it shows can
+     * have changed, so an unrelated change (a move) does not move focus.
+     * pinTarget() still checks again at the moment of the pin.
+     *
+     * @return {void}
+     */
+    function refreshToolbarChoices() {
+      if (!toolbarSelect || !toolbarSelect.isConnected) {
+        return;
+      }
+      var now = pinnableToolbars();
+      if (now.indexOf(target) === -1) {
+        target = mainToolbar;
+      }
+      var signature = choiceSignature(now);
+      if (signature === toolbarSignature) {
+        return;
+      }
+      toolbarSignature = signature;
+      var focusInType = typeBox.contains(document.activeElement);
+      fillToolbarOptions(now);
+      buildTypeSection();
+      if (focusInType) {
+        // The button that had focus is gone with the old section.
+        (typeBox.querySelector('.toolrail-adddialog-pintype') || toolbarSelect).focus();
       }
     }
+
+    /**
+     * What the toolbar select and the block type section show: the
+     * offered toolbars with their names, the choice, and whether the
+     * block type is pinned on it.
+     *
+     * @param {Object[]} list The offered toolbars.
+     * @return {string} A string that changes when any of these change.
+     */
+    function choiceSignature(list) {
+      return JSON.stringify([
+        list.map(function (tb) { return [tb.id, toolbarLabel(tb)]; }),
+        target.id,
+        single ? isPinnedOn(target, single.name) : null
+      ]);
+    }
+    var toolbarSignature = toolbarSelect ? choiceSignature(choices) : null;
 
     // --- Save as a pattern and pin it ---
     var patHead = settingsRow('h3', 'toolrail-settings-subtitle');
@@ -1942,27 +2099,44 @@
           return;
         }
         saveBtn.disabled = true;
+        if (toolbarSelect) {
+          // The save is async: a change of toolbar while it runs would
+          // pin to a toolbar the author had not chosen at Save.
+          toolbarSelect.disabled = true;
+        }
         status.textContent = __('Saving…', 'editrail');
         savePatternFromBlocks(name, blocks).then(function (pattern) {
-          // The save is async: a toolbar deleted meanwhile has no pins.
-          if (T.toolbars.indexOf(target) === -1) {
-            target = mainToolbar;
-          }
-          pinBlock(target, pattern.id);
-          speak(target === mainToolbar
-            ? sprintf(
+          // The save is async: a toolbar deleted or hidden meanwhile
+          // gets no pin (pinTarget).
+          var to = pinTarget();
+          pinBlock(to.tb, pattern.id);
+          var msg;
+          if (to.tb !== mainToolbar) {
+            msg = sprintf(
+              /* translators: 1: pattern name, 2: the toolbar's name. */
+              __('Saved "%1$s" as a pattern and pinned it to the %2$s toolbar.', 'editrail'),
+              pattern.title, to.tb.name
+            );
+          } else if (to.named) {
+            msg = sprintf(
+              /* translators: %s: pattern name. */
+              __('Saved "%s" as a pattern and pinned it to the main toolbar.', 'editrail'),
+              pattern.title
+            );
+          } else {
+            msg = sprintf(
               /* translators: %s: pattern name. */
               __('Saved "%s" as a pattern and pinned it to the toolbar.', 'editrail'),
               pattern.title
-            )
-            : sprintf(
-              /* translators: 1: pattern name, 2: the toolbar's name. */
-              __('Saved "%1$s" as a pattern and pinned it to the %2$s toolbar.', 'editrail'),
-              pattern.title, target.name
-            ));
+            );
+          }
+          speak(msg);
           closeAddDialog(ids[0]);
         }, function (err) {
           saveBtn.disabled = false;
+          if (toolbarSelect) {
+            toolbarSelect.disabled = false;
+          }
           status.textContent = err && err.message
             ? sprintf(
               /* translators: %s: error message. */
@@ -1991,7 +2165,15 @@
     document.addEventListener('mousedown', onAddDialogMousedown, true);
     document.addEventListener('keydown', onAddDialogKeydown, true);
     document.addEventListener('focusin', onAddDialogFocusin, true);
-    var first = node.querySelector('#toolrail-adddialog-name') || node.querySelector('.toolrail-adddialog-pintype') || close;
+    if (toolbarSelect) {
+      addDialogToolbarsListener = refreshToolbarChoices;
+      window.addEventListener('toolrail:toolbars-changed', addDialogToolbarsListener);
+    }
+    // With a toolbar choice, focus goes to it first: the author hears
+    // which toolbar gets the pin before any action, and the block menu's
+    // keyboard path reaches an extra toolbar with one arrow key (#128).
+    // Without one, focus goes to the pattern name, as before.
+    var first = toolbarSelect || node.querySelector('#toolrail-adddialog-name') || node.querySelector('.toolrail-adddialog-pintype') || close;
     // A drop from the canvas runs this while the canvas holds focus.
     focusFromEvent(first);
     return true;

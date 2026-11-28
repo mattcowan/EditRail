@@ -1300,9 +1300,12 @@ test.describe('PR #126 review fixes (#95)', () => {
     // A stored change deletes the toolbar the block was dropped on.
     await seedByDispatch(page, []);
     await expect(page.locator('#toolrail-region-t1')).toHaveCount(0);
-    await dialog.locator('.toolrail-adddialog-pintype').click();
-    await expect(dialog).toHaveCount(0);
-    await expect.poll(() => liveText(page)).toBe('Quote is already pinned on the main toolbar.');
+    // The dialog follows the stored change (#128 review): the choice
+    // falls back to the main toolbar, which has Quote already, so the
+    // dialog says so before any click and offers no pin button.
+    await expect(dialog.locator('#toolrail-adddialog-toolbar')).toHaveValue('main');
+    await expect(dialog).toContainText('The Quote block type is already pinned.');
+    await expect(dialog.locator('.toolrail-adddialog-pintype')).toHaveCount(0);
     await expect(page.locator('#toolrail-rail [data-tool="pin:core/quote"]')).toHaveCount(1);
   });
 });
@@ -1583,5 +1586,183 @@ test.describe('colors for each toolbar (#96)', () => {
     // Neither value became this version's dark default.
     expect((await storedRecord(page, 't1')).appearance).toEqual(later);
     expect((await storedRecord(page, 't2')).appearance).toEqual([]);
+  });
+});
+
+test.describe('choose the toolbar in "Add to toolbar" (#128)', () => {
+  /** Put one paragraph in the post and open the dialog from its Options menu. */
+  async function openFromBlockMenu(page) {
+    await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      window.wp.data.dispatch('core/block-editor').resetBlocks([createBlock('core/paragraph', { content: 'Pin me' })]);
+    });
+    await canvas(page).locator('[data-type="core/paragraph"]').first().click();
+    await page.keyboard.press('Escape');
+    await page.locator('.block-editor-block-toolbar button[aria-label="Options"]').click();
+    await page.locator('.components-menu-item__button, .components-menu-item__item', { hasText: 'Save as pattern and pin to toolbar' }).first().click();
+    const dialog = page.locator('.toolrail-adddialog');
+    await expect(dialog).toBeVisible();
+    return dialog;
+  }
+
+  /** Stand in for the REST save: this suite never writes site content. */
+  async function stubPatternSave(page) {
+    await page.evaluate(() => {
+      window.wp.data.dispatch('core').saveEntityRecord = async (kind, name, rec) => (
+        { id: 987654, title: { raw: rec.title }, content: { raw: rec.content } }
+      );
+    });
+  }
+
+  /** The text of each option in the dialog's toolbar select. */
+  function optionTexts(dialog) {
+    return dialog.locator('#toolrail-adddialog-toolbar option').allTextContents();
+  }
+
+  test('with one toolbar shown, the dialog has no toolbar choice and its message is as before', async ({ page }) => {
+    await openNewPost(page);
+    await seedByDispatch(page, [record('t1', 'Animation', { hidden: true })]);
+    await expect.poll(() => page.evaluate(() => window.toolrail.getToolbars().length)).toBe(2);
+    await stubPatternSave(page);
+    const dialog = await openFromBlockMenu(page);
+    await expect(dialog.locator('#toolrail-adddialog-toolbar')).toHaveCount(0);
+    await expect(dialog.locator('#toolrail-adddialog-name')).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => liveText(page)).toBe('Saved "Paragraph" as a pattern and pinned it to the toolbar.');
+    await expect(page.locator('#toolrail-rail [data-tool="pin:pattern:user:987654"]')).toHaveCount(1);
+  });
+
+  test('from the block menu, the choice offers each shown toolbar with the main toolbar first, and pins by keyboard', async ({ page }) => {
+    await openNewPost(page);
+    await seedByDispatch(page, [
+      record('t1', 'Animation', { slots: [] }),
+      record('t2', 'Spare', { hidden: true }),
+    ]);
+    await expect(page.locator('#toolrail-region-t1')).toBeVisible();
+    const dialog = await openFromBlockMenu(page);
+
+    const choice = dialog.getByRole('combobox', { name: 'Toolbar' });
+    await expect(choice).toBeFocused();
+    await expect(choice).toHaveValue('main');
+    // A hidden toolbar is not offered.
+    expect(await optionTexts(dialog)).toEqual(['Main toolbar', 'Animation']);
+    // Paragraph is a default pin of the main toolbar.
+    await expect(dialog).toContainText('The Paragraph block type is already pinned.');
+    await expect(dialog.locator('.toolrail-adddialog-pintype')).toHaveCount(0);
+
+    // The block type offer follows the choice.
+    await choice.selectOption('t1');
+    await expect(choice).toBeFocused();
+    await expect(dialog).not.toContainText('already pinned');
+    await page.keyboard.press('Tab');
+    await expect(dialog.locator('.toolrail-adddialog-pintype')).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => liveText(page)).toBe('Paragraph pinned to the Animation toolbar.');
+    await expect(page.locator('#toolrail-region-t1 [data-tool="pin:core/paragraph"]')).toHaveCount(1);
+    await expect(page.locator('#toolrail-region-t2')).toHaveCount(0);
+    expect(await page.evaluate(() => window.toolrail.isPinned('core/paragraph', 't2'))).toBe(false);
+  });
+
+  test('a drop on a toolbar selects that toolbar, and the message names the main toolbar when it is chosen', async ({ page }) => {
+    await openNewPost(page);
+    await seedByDispatch(page, [record('t1', 'Animation')]);
+    await expect(page.locator('#toolrail-region-t1')).toBeVisible();
+    const quoteId = await page.evaluate(() => {
+      const { createBlock } = window.wp.blocks;
+      const q = createBlock('core/quote', {}, [createBlock('core/paragraph', { content: 'Q' })]);
+      window.wp.data.dispatch('core/block-editor').resetBlocks([q]);
+      return q.clientId;
+    });
+    await page.evaluate((id) => {
+      const dt = new DataTransfer();
+      dt.setData('wp-blocks', JSON.stringify({ type: 'block', srcClientIds: [id], srcRootClientId: '' }));
+      const region = document.getElementById('toolrail-region-t1');
+      region.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }));
+      region.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    }, quoteId);
+    const dialog = page.locator('.toolrail-adddialog');
+    const choice = dialog.locator('#toolrail-adddialog-toolbar');
+    await expect(choice).toHaveValue('t1');
+    expect(await optionTexts(dialog)).toEqual(['Main toolbar', 'Animation']);
+    // The Animation toolbar has Quote already.
+    await expect(dialog).toContainText('The Quote block type is already pinned.');
+
+    await choice.selectOption('main');
+    await dialog.locator('.toolrail-adddialog-pintype').click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => liveText(page)).toBe('Quote pinned to the main toolbar.');
+    await expect(page.locator('#toolrail-rail [data-tool="pin:core/quote"]')).toHaveCount(1);
+  });
+
+  test('a pattern saved from the block menu pins to the chosen toolbar, and the message names it', async ({ page }) => {
+    await openNewPost(page);
+    await seedByDispatch(page, [record('t1', 'Animation', { slots: [] })]);
+    await expect(page.locator('#toolrail-region-t1')).toBeVisible();
+    await stubPatternSave(page);
+    const dialog = await openFromBlockMenu(page);
+    await dialog.locator('#toolrail-adddialog-toolbar').selectOption('t1');
+    await dialog.locator('#toolrail-adddialog-name').fill('Fade in');
+    await page.keyboard.press('Enter');
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => liveText(page)).toBe('Saved "Fade in" as a pattern and pinned it to the Animation toolbar.');
+    await expect(page.locator('#toolrail-region-t1 [data-tool="pin:pattern:user:987654"]')).toHaveCount(1);
+    await expect(page.locator('#toolrail-rail [data-tool="pin:pattern:user:987654"]')).toHaveCount(0);
+  });
+
+  test('a choice hidden while the dialog is open sends the pin to the main toolbar, and the message says so', async ({ page }) => {
+    await openNewPost(page);
+    await seedByDispatch(page, [record('t1', 'Animation', { slots: [] })]);
+    await expect(page.locator('#toolrail-region-t1')).toBeVisible();
+    await stubPatternSave(page);
+    const dialog = await openFromBlockMenu(page);
+    await dialog.locator('#toolrail-adddialog-toolbar').selectOption('t1');
+    // A stored change (a different tab) hides the chosen toolbar.
+    await seedByDispatch(page, [record('t1', 'Animation', { slots: [], hidden: true })]);
+    await expect(page.locator('#toolrail-region-t1')).toHaveCount(0);
+    await dialog.locator('.toolrail-adddialog-savepattern').click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => liveText(page)).toBe('Saved "Paragraph" as a pattern and pinned it to the main toolbar.');
+    await expect(page.locator('#toolrail-rail [data-tool="pin:pattern:user:987654"]')).toHaveCount(1);
+    expect(await page.evaluate(() => window.toolrail.isPinned('pattern:user:987654', 't1'))).toBe(false);
+  });
+
+  test('the toolbar choice follows a stored change while the dialog is open', async ({ page }) => {
+    await openNewPost(page);
+    await seedByDispatch(page, [
+      record('t1', 'Animation', { slots: [] }),
+      record('t2', 'Layout', { slots: [] }),
+    ]);
+    await expect(page.locator('#toolrail-region-t2')).toBeVisible();
+    const dialog = await openFromBlockMenu(page);
+    const choice = dialog.locator('#toolrail-adddialog-toolbar');
+    await choice.selectOption('t1');
+    await expect(dialog.locator('.toolrail-adddialog-pintype')).toHaveCount(1);
+
+    // A different tab hides the chosen toolbar and renames the other one.
+    await seedByDispatch(page, [
+      record('t1', 'Animation', { slots: [], hidden: true }),
+      record('t2', 'Motion', { slots: [] }),
+    ]);
+    await expect.poll(() => optionTexts(dialog)).toEqual(['Main toolbar', 'Motion']);
+    await expect(choice).toHaveValue('main');
+    // The block type section now answers for the main toolbar, which has
+    // Paragraph as a default pin.
+    await expect(dialog).toContainText('The Paragraph block type is already pinned.');
+
+    // A toolbar shown again from the other tab is offered again.
+    await seedByDispatch(page, [
+      record('t1', 'Animation', { slots: [] }),
+      record('t2', 'Motion', { slots: [] }),
+    ]);
+    await expect.poll(() => optionTexts(dialog)).toEqual(['Main toolbar', 'Animation', 'Motion']);
+    await expect(choice).toHaveValue('main');
+
+    // The choice still works after the rebuild.
+    await choice.selectOption('t1');
+    await dialog.locator('.toolrail-adddialog-pintype').click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => liveText(page)).toBe('Paragraph pinned to the Animation toolbar.');
   });
 });
